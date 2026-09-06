@@ -19,6 +19,7 @@
 
 #include "processmanager.h"
 #include "compositorprocess.h"
+#include "shellprocess.h"
 #include "application.h"
 #include "applicationlauncher.h"
 #include "applicationruntime.h"
@@ -38,11 +39,13 @@ ProcessManager::ProcessManager(Application *app, QObject *parent)
     : QObject(parent)
     , m_app(app)
     , m_compositorProcess(new CompositorProcess(this))
+    , m_shellProcess(new ShellProcess(this))
 {
 }
 
 ProcessManager::~ProcessManager()
 {
+    m_shellProcess->stop();
     stopProcesses(m_coreProcesses);
     m_compositorProcess->stop();
     QMapIterator<QString, QProcess *> i(m_coreProcesses);
@@ -61,15 +64,17 @@ void ProcessManager::start()
             this, &ProcessManager::startAfterCompositorReady);
     connect(m_compositorProcess, &CompositorProcess::failed, this, [this](const QString &reason) {
         qCritical() << reason;
+        m_shellProcess->stop();
         stopProcesses(m_coreProcesses);
         QCoreApplication::exit(1);
     });
     connect(m_compositorProcess, &CompositorProcess::exited, this, [this](int code) {
+        m_shellProcess->stop();
         stopProcesses(m_coreProcesses);
         QCoreApplication::exit(code);
     });
     m_compositorProcess->start(
-        qEnvironmentVariable("CUTEFISH_DESKTOP_BINARY", QStringLiteral("/usr/bin/cutefish-desktop")),
+        qEnvironmentVariable("CUTEFISH_COMPOSITOR_BINARY", QStringLiteral("/usr/bin/cutefish-compositor")),
         qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0")));
 }
 
@@ -116,6 +121,7 @@ void ProcessManager::logout()
             runtime->quitApplication(appId);
     }
 
+    m_shellProcess->stop();
     stopProcesses(m_coreProcesses);
 
     m_compositorProcess->stop();
@@ -144,6 +150,10 @@ void ProcessManager::startDesktopProcess()
 {
     if (!m_compositorReady || m_desktopStarted) return;
     m_desktopStarted = true;
+
+    m_shellProcess->startForSession(
+        qEnvironmentVariable("CUTEFISH_SHELL_BINARY", QStringLiteral("/usr/bin/cutefish-shell")),
+        qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0")));
 
     // For CutefishOS. An ordinary application, so the runtime starts it.
     if (QFile("/usr/bin/cutefish-welcome").exists() &&
@@ -214,7 +224,7 @@ void ProcessManager::loadAutoStartProcess()
             if (execValue.contains("cutefish-services") ||
                     execValue.contains("cutefish-appruntime") ||
                     execValue.contains("cutefish-shell") ||
-                    execValue.contains("cutefish-desktop") ||
+                    execValue.contains("cutefish-compositor") ||
                     execValue.contains("kwin_wayland"))
                 continue;
 

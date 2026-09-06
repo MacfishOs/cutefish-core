@@ -28,6 +28,7 @@
 class Application;
 class QDBusServiceWatcher;
 class CompositorProcess;
+class ShellProcess;
 class ProcessManager : public QObject
 {
     Q_OBJECT
@@ -50,6 +51,7 @@ private:
 private:
     Application *m_app;
     CompositorProcess *m_compositorProcess = nullptr;
+    ShellProcess *m_shellProcess = nullptr;
     QDBusServiceWatcher *m_servicesWatcher = nullptr;
     bool m_started = false;
     bool m_compositorReady = false;

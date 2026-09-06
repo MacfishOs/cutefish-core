@@ -2,7 +2,7 @@
 Name=Cutefish (Wayland)
 Comment=Cutefish desktop session
 Exec=/usr/bin/cutefish-wayland-session
-TryExec=/usr/bin/cutefish-desktop
+TryExec=/usr/bin/cutefish-compositor
 Type=Application
 DesktopNames=Cutefish;
 X-GDM-SessionRegisters=true

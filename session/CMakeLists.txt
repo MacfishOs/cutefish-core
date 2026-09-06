@@ -7,6 +7,7 @@ set(SOURCES
     process.cpp
     processmanager.cpp
     compositorprocess.cpp
+    shellprocess.cpp
     networkproxymanager.cpp
 
     powermanager/power.cpp

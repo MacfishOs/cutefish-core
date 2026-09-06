@@ -8,3 +8,8 @@ add_executable(session-lifecycle-test lifecycle_test.cpp ../compositorprocess.cp
 target_include_directories(session-lifecycle-test PRIVATE ..)
 target_link_libraries(session-lifecycle-test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME session-lifecycle COMMAND session-lifecycle-test)
+
+add_executable(shell-lifecycle-test shell_lifecycle_test.cpp ../shellprocess.cpp)
+target_include_directories(shell-lifecycle-test PRIVATE ..)
+target_link_libraries(shell-lifecycle-test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME shell-lifecycle COMMAND shell-lifecycle-test)

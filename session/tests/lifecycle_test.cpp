@@ -40,7 +40,7 @@ private slots:
     void missingExecutable() {
         CompositorProcess process;
         QSignalSpy failed(&process, &CompositorProcess::failed);
-        process.start("/does-not-exist/cutefish-desktop", "test-socket");
+        process.start("/does-not-exist/cutefish-compositor", "test-socket");
         QCOMPARE(failed.count(), 1);
     }
 };
