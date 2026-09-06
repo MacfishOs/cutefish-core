@@ -6,6 +6,7 @@ set(SOURCES
     main.cpp
     process.cpp
     processmanager.cpp
+    compositorprocess.cpp
     networkproxymanager.cpp
 
     powermanager/power.cpp
@@ -26,6 +27,6 @@ target_link_libraries(${TARGET}
 )
 
 install(TARGETS ${TARGET} DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS cutefish-kwin-wayland-session cutefish-wayland-session DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS cutefish-wayland-session DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES cutefish-applications.menu DESTINATION /etc/xdg/menus/)
 install(FILES cutefish-wayland.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/wayland-sessions/)

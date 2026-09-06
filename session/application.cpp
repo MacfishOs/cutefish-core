@@ -136,9 +136,6 @@ void Application::initEnvironments()
     if (qEnvironmentVariableIsEmpty("XDG_CONFIG_DIRS"))
         qputenv("XDG_CONFIG_DIRS", "/etc/xdg");
 
-    // KService only indexes the installed desktop files when it finds
-    // <prefix>applications.menu; with an empty database KWin denies every
-    // restricted Wayland interface and the shell never sees a window list.
     if (qEnvironmentVariableIsEmpty("XDG_MENU_PREFIX"))
         qputenv("XDG_MENU_PREFIX", "cutefish-");
 
@@ -157,9 +154,10 @@ void Application::initEnvironments()
     }
 
     // Qt
-    // Fall back to xcb so Qt builds without the Wayland platform plugin
-    // still start under Xwayland instead of aborting.
-    qputenv("QT_QPA_PLATFORM", "wayland;xcb");
+    qputenv("QT_QPA_PLATFORM", "wayland");
+    qputenv("GDK_BACKEND", "wayland");
+    if (qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
+        qputenv("WAYLAND_DISPLAY", "cutefish-0");
     qputenv("QT_QPA_PLATFORMTHEME", "cutefish");
     
     // ref: https://stackoverflow.com/questions/34399993/qml-performance-issue-when-updating-an-item-in-presence-of-many-non-overlapping

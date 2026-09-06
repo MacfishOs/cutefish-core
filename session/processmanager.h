@@ -27,6 +27,7 @@
 
 class Application;
 class QDBusServiceWatcher;
+class CompositorProcess;
 class ProcessManager : public QObject
 {
     Q_OBJECT
@@ -43,14 +44,15 @@ public:
     void loadAutoStartProcess();
 
 private:
-    void startAfterKWinReady();
+    void startAfterCompositorReady();
     void stopProcesses(QMap<QString, QProcess *> &processes);
 
 private:
     Application *m_app;
-    QDBusServiceWatcher *m_kwinWatcher = nullptr;
+    CompositorProcess *m_compositorProcess = nullptr;
     QDBusServiceWatcher *m_servicesWatcher = nullptr;
-    bool m_kwinReady = false;
+    bool m_started = false;
+    bool m_compositorReady = false;
     bool m_desktopStarted = false;
     QMap<QString, QProcess *> m_coreProcesses;
 

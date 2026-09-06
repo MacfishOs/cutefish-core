@@ -18,6 +18,7 @@
  */
 
 #include "processmanager.h"
+#include "compositorprocess.h"
 #include "application.h"
 #include "applicationlauncher.h"
 #include "applicationruntime.h"
@@ -36,11 +37,14 @@
 ProcessManager::ProcessManager(Application *app, QObject *parent)
     : QObject(parent)
     , m_app(app)
+    , m_compositorProcess(new CompositorProcess(this))
 {
 }
 
 ProcessManager::~ProcessManager()
 {
+    stopProcesses(m_coreProcesses);
+    m_compositorProcess->stop();
     QMapIterator<QString, QProcess *> i(m_coreProcesses);
     while (i.hasNext()) {
         i.next();
@@ -51,39 +55,30 @@ ProcessManager::~ProcessManager()
 
 void ProcessManager::start()
 {
-    if (m_kwinReady)
-        return;
-
-    const QString serviceName = QStringLiteral("org.kde.KWinWrapper");
-    m_kwinWatcher = new QDBusServiceWatcher(serviceName,
-                                             QDBusConnection::sessionBus(),
-                                             QDBusServiceWatcher::WatchForRegistration,
-                                             this);
-    connect(m_kwinWatcher, &QDBusServiceWatcher::serviceRegistered,
-            this, [this](const QString &) {
-        startAfterKWinReady();
+    if (m_started) return;
+    m_started = true;
+    connect(m_compositorProcess, &CompositorProcess::ready,
+            this, &ProcessManager::startAfterCompositorReady);
+    connect(m_compositorProcess, &CompositorProcess::failed, this, [this](const QString &reason) {
+        qCritical() << reason;
+        stopProcesses(m_coreProcesses);
+        QCoreApplication::exit(1);
     });
-
-    if (QDBusConnectionInterface *interface = QDBusConnection::sessionBus().interface()) {
-        const QDBusReply<bool> reply = interface->isServiceRegistered(serviceName);
-        if (reply.isValid() && reply.value())
-            startAfterKWinReady();
-    }
+    connect(m_compositorProcess, &CompositorProcess::exited, this, [this](int code) {
+        stopProcesses(m_coreProcesses);
+        QCoreApplication::exit(code);
+    });
+    m_compositorProcess->start(
+        qEnvironmentVariable("CUTEFISH_DESKTOP_BINARY", QStringLiteral("/usr/bin/cutefish-desktop")),
+        qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0")));
 }
 
-void ProcessManager::startAfterKWinReady()
+void ProcessManager::startAfterCompositorReady()
 {
-    if (m_kwinReady)
-        return;
+    if (m_compositorReady) return;
+    m_compositorReady = true;
 
-    m_kwinReady = true;
-    if (m_kwinWatcher) {
-        m_kwinWatcher->deleteLater();
-        m_kwinWatcher = nullptr;
-    }
-
-    // Start the desktop after the services daemon has registered its D-Bus
-    // service so its theme and input backends are available to the shell.
+    // Application autostart waits for the existing external services daemon.
     const QString serviceName = QStringLiteral("com.cutefish.Services");
     const auto servicesReady = [this]() {
         if (m_servicesWatcher) {
@@ -123,8 +118,7 @@ void ProcessManager::logout()
 
     stopProcesses(m_coreProcesses);
 
-    // KWin is started with --exit-with-session, so returning from this
-    // process also ends the compositor session and returns to the greeter.
+    m_compositorProcess->stop();
 
     QCoreApplication::exit(0);
 }
@@ -148,43 +142,8 @@ void ProcessManager::stopProcesses(QMap<QString, QProcess *> &processes)
 
 void ProcessManager::startDesktopProcess()
 {
-    if (!m_kwinReady) {
-        qWarning() << "Ignoring desktop startup before KWin is ready";
-        return;
-    }
-
-    if (m_desktopStarted)
-        return;
-
+    if (!m_compositorReady || m_desktopStarted) return;
     m_desktopStarted = true;
-
-    QList<QPair<QString, QStringList>> list;
-    // Desktop components
-    // The status bar, dock, launcher, desktop and notifications are one process now.
-    list << qMakePair(QString("cutefish-shell"), QStringList());
-
-    for (QPair<QString, QStringList> pair : list) {
-        QProcess *process = new QProcess;
-        process->setProcessChannelMode(QProcess::ForwardedChannels);
-        process->setProgram(pair.first);
-        process->setArguments(pair.second);
-        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-        environment.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("wayland"));
-        process->setProcessEnvironment(environment);
-        process->start();
-        process->waitForStarted();
-
-        qDebug() << "Load DE components: " << pair.first << pair.second;
-
-        // Add to map
-        if (process->state() != QProcess::NotRunning) {
-            m_coreProcesses.insert(pair.first, process);
-        } else {
-            qWarning() << "Failed to start desktop process:" << pair.first
-                       << process->errorString();
-            process->deleteLater();
-        }
-    }
 
     // For CutefishOS. An ordinary application, so the runtime starts it.
     if (QFile("/usr/bin/cutefish-welcome").exists() &&
@@ -253,7 +212,10 @@ void ProcessManager::loadAutoStartProcess()
             const QString execValue = desktop.value("Exec").toString();
 
             if (execValue.contains("cutefish-services") ||
-                    execValue.contains("cutefish-appruntime"))
+                    execValue.contains("cutefish-appruntime") ||
+                    execValue.contains("cutefish-shell") ||
+                    execValue.contains("cutefish-desktop") ||
+                    execValue.contains("kwin_wayland"))
                 continue;
 
             if (!execValue.isEmpty()) {
