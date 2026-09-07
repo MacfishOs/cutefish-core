@@ -45,7 +45,8 @@ void CompositorProcess::fail(const QString &reason)
     stop();
     emit failed(reason);
 }
-void CompositorProcess::start(const QString &program, const QString &socket, int timeoutMs)
+void CompositorProcess::start(const QString &program, const QString &socket,
+                              const QString &controlSocket, int timeoutMs)
 {
     if (m_process.state() != QProcess::NotRunning || m_readFd >= 0) return;
     m_ready = false;
@@ -59,8 +60,11 @@ void CompositorProcess::start(const QString &program, const QString &socket, int
     m_readFd = fds[0];
     const int writeFd = fds[1];
     m_process.setProgram(program);
-    m_process.setArguments({QStringLiteral("--socket"), socket,
-                           QStringLiteral("--ready-fd"), QString::number(writeFd)});
+    QStringList arguments {QStringLiteral("--socket"), socket,
+                           QStringLiteral("--ready-fd"), QString::number(writeFd)};
+    if (!controlSocket.isEmpty())
+        arguments << QStringLiteral("--shell-control-socket") << controlSocket;
+    m_process.setArguments(arguments);
     m_process.setChildProcessModifier([readFd = fds[0], writeFd] {
         close(readFd);
         fcntl(writeFd, F_SETFD, 0);

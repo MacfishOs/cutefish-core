@@ -12,7 +12,8 @@ class CompositorProcess final : public QObject
 public:
     explicit CompositorProcess(QObject *parent = nullptr);
     ~CompositorProcess() override;
-    void start(const QString &program, const QString &socket, int timeoutMs = 15000);
+    void start(const QString &program, const QString &socket, const QString &controlSocket,
+               int timeoutMs = 15000);
     void stop();
     bool isReady() const { return m_ready; }
 signals:

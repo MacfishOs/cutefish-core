@@ -28,7 +28,9 @@
 class Application;
 class QDBusServiceWatcher;
 class CompositorProcess;
+class ShellConnection;
 class ShellProcess;
+class QTimer;
 class ProcessManager : public QObject
 {
     Q_OBJECT
@@ -46,16 +48,26 @@ public:
 
 private:
     void startAfterCompositorReady();
+    void startShell();
+    void onShellFinished(int code, QProcess::ExitStatus status);
     void stopProcesses(QMap<QString, QProcess *> &processes);
 
 private:
     Application *m_app;
     CompositorProcess *m_compositorProcess = nullptr;
+    ShellConnection *m_shellConnection = nullptr;
     ShellProcess *m_shellProcess = nullptr;
+    QTimer *m_shellRestartTimer = nullptr;
     QDBusServiceWatcher *m_servicesWatcher = nullptr;
     bool m_started = false;
     bool m_compositorReady = false;
     bool m_desktopStarted = false;
+    bool m_loggingOut = false;
+    // Bounded restart policy: a shell that keeps dying must not become a busy
+    // loop, and after enough failures the session carries on without it.
+    int m_shellRestarts = 0;
+    QString m_waylandSocket;
+    QString m_controlSocket;
     QMap<QString, QProcess *> m_coreProcesses;
 
 };

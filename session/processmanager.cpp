@@ -19,6 +19,7 @@
 
 #include "processmanager.h"
 #include "compositorprocess.h"
+#include "shellconnection.h"
 #include "shellprocess.h"
 #include "application.h"
 #include "applicationlauncher.h"
@@ -35,16 +36,33 @@
 #include <QDBusReply>
 #include <QDBusServiceWatcher>
 
+namespace
+{
+// Bounded restart policy for cutefish-shell. The compositor keeps running
+// either way: a shell that cannot come up leaves the session with applications
+// and no panels, which is recoverable, while a restart loop is not.
+constexpr int kMaxShellRestarts = 5;
+constexpr int kShellRestartDelayMs = 1000;
+constexpr int kShellRestartBackoffMs = 2000;
+}
+
 ProcessManager::ProcessManager(Application *app, QObject *parent)
     : QObject(parent)
     , m_app(app)
     , m_compositorProcess(new CompositorProcess(this))
+    , m_shellConnection(new ShellConnection(this))
     , m_shellProcess(new ShellProcess(this))
+    , m_shellRestartTimer(new QTimer(this))
 {
+    m_shellRestartTimer->setSingleShot(true);
+    connect(m_shellRestartTimer, &QTimer::timeout, this, &ProcessManager::startShell);
+    connect(m_shellProcess, &QProcess::finished, this, &ProcessManager::onShellFinished);
 }
 
 ProcessManager::~ProcessManager()
 {
+    m_loggingOut = true;
+    m_shellRestartTimer->stop();
     m_shellProcess->stop();
     stopProcesses(m_coreProcesses);
     m_compositorProcess->stop();
@@ -60,28 +78,47 @@ void ProcessManager::start()
 {
     if (m_started) return;
     m_started = true;
+
+    m_waylandSocket = qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0"));
+    const QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR", QStringLiteral("/tmp"));
+    m_controlSocket = QStringLiteral("%1/%2-shell.control").arg(runtimeDir, m_waylandSocket);
+
     connect(m_compositorProcess, &CompositorProcess::ready,
             this, &ProcessManager::startAfterCompositorReady);
     connect(m_compositorProcess, &CompositorProcess::failed, this, [this](const QString &reason) {
         qCritical() << reason;
+        m_loggingOut = true;
+        m_shellRestartTimer->stop();
         m_shellProcess->stop();
         stopProcesses(m_coreProcesses);
         QCoreApplication::exit(1);
     });
+    // A compositor that dies takes the graphical session with it: there is no
+    // display left to run on.
     connect(m_compositorProcess, &CompositorProcess::exited, this, [this](int code) {
+        m_loggingOut = true;
+        m_shellRestartTimer->stop();
         m_shellProcess->stop();
         stopProcesses(m_coreProcesses);
         QCoreApplication::exit(code);
     });
     m_compositorProcess->start(
         qEnvironmentVariable("CUTEFISH_COMPOSITOR_BINARY", QStringLiteral("/usr/bin/cutefish-compositor")),
-        qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0")));
+        m_waylandSocket, m_controlSocket);
 }
 
 void ProcessManager::startAfterCompositorReady()
 {
     if (m_compositorReady) return;
     m_compositorReady = true;
+
+    // The persistent control channel. It is what makes a shell restart possible
+    // without restarting the compositor: every shell generation gets a fresh
+    // Wayland socketpair over it.
+    if (!m_shellConnection->connectToCompositor(m_controlSocket)) {
+        qWarning() << "No compositor control channel; the shell will run without "
+                      "the private Cutefish protocols";
+    }
 
     // Application autostart waits for the existing external services daemon.
     const QString serviceName = QStringLiteral("com.cutefish.Services");
@@ -111,8 +148,41 @@ void ProcessManager::startAfterCompositorReady()
     }
 }
 
+void ProcessManager::startShell()
+{
+    if (m_loggingOut || m_shellProcess->state() != QProcess::NotRunning)
+        return;
+
+    m_shellProcess->startForSession(
+        qEnvironmentVariable("CUTEFISH_SHELL_BINARY", QStringLiteral("/usr/bin/cutefish-shell")),
+        m_waylandSocket, m_shellConnection->isConnected() ? m_shellConnection : nullptr);
+}
+
+void ProcessManager::onShellFinished(int code, QProcess::ExitStatus status)
+{
+    if (m_loggingOut || !m_desktopStarted)
+        return;
+
+    // The compositor and every application it is showing carry on; only the
+    // shell surfaces disappear, and the compositor releases the work area it
+    // had reserved for them. A new connection repopulates the dock.
+    if (m_shellRestarts >= kMaxShellRestarts) {
+        qCritical() << "cutefish-shell failed" << m_shellRestarts
+                    << "times; not restarting it again";
+        return;
+    }
+
+    const int delay = kShellRestartDelayMs + m_shellRestarts * kShellRestartBackoffMs;
+    ++m_shellRestarts;
+    qWarning() << "cutefish-shell exited" << code << status << "- restarting in" << delay << "ms";
+    m_shellRestartTimer->start(delay);
+}
+
 void ProcessManager::logout()
 {
+    m_loggingOut = true;
+    m_shellRestartTimer->stop();
+
     // Applications belong to the runtime, so ask it to quit them, then close
     // what we started ourselves.
     ApplicationRuntime *runtime = ApplicationRuntime::instance();
@@ -151,9 +221,7 @@ void ProcessManager::startDesktopProcess()
     if (!m_compositorReady || m_desktopStarted) return;
     m_desktopStarted = true;
 
-    m_shellProcess->startForSession(
-        qEnvironmentVariable("CUTEFISH_SHELL_BINARY", QStringLiteral("/usr/bin/cutefish-shell")),
-        qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0")));
+    startShell();
 
     // For CutefishOS. An ordinary application, so the runtime starts it.
     if (QFile("/usr/bin/cutefish-welcome").exists() &&

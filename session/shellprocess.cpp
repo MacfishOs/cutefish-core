@@ -1,7 +1,11 @@
 #include "shellprocess.h"
+#include "shellconnection.h"
 
 #include <QDebug>
 #include <QProcessEnvironment>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 ShellProcess::ShellProcess(QObject *parent)
     : QProcess(parent)
@@ -23,22 +27,43 @@ ShellProcess::~ShellProcess()
     stop();
 }
 
-void ShellProcess::startForSession(const QString &program, const QString &socket)
+void ShellProcess::startForSession(const QString &program, const QString &socket,
+                                   ShellConnection *connection)
 {
     if (state() != QProcess::NotRunning)
         return;
 
     auto environment = QProcessEnvironment::systemEnvironment();
     environment.remove(QStringLiteral("DISPLAY"));
-    environment.remove(QStringLiteral("WAYLAND_SOCKET"));
     environment.insert(QStringLiteral("WAYLAND_DISPLAY"), socket);
     environment.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("wayland"));
-    // The compositor currently exposes shared-memory client buffers only.
-    environment.insert(QStringLiteral("QT_QUICK_BACKEND"), QStringLiteral("software"));
+
+    int shellFd = -1;
+    if (connection)
+        shellFd = connection->createShellConnection();
+
+    if (shellFd >= 0) {
+        environment.insert(QStringLiteral("WAYLAND_SOCKET"), QString::number(shellFd));
+        // The fd is close-on-exec here so it cannot leak into anything else the
+        // session starts; the child clears the flag on its own copy just before
+        // exec, which is the only process that may have it.
+        setChildProcessModifier([shellFd] { fcntl(shellFd, F_SETFD, 0); });
+    } else {
+        environment.remove(QStringLiteral("WAYLAND_SOCKET"));
+        setChildProcessModifier({});
+        qWarning() << "Starting cutefish-shell without a privileged connection; "
+                      "the private shell protocols will be unavailable";
+    }
+
     setProcessEnvironment(environment);
     setProgram(program);
     setArguments({});
     start();
+    waitForStarted(5000);
+
+    // The session's own copy is no longer needed once the child has it.
+    if (shellFd >= 0)
+        ::close(shellFd);
 }
 
 void ShellProcess::stop()

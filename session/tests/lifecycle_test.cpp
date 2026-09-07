@@ -13,7 +13,7 @@ private slots:
         QSignalSpy ready(&process, &CompositorProcess::ready);
         QSignalSpy failed(&process, &CompositorProcess::failed);
         QSignalSpy exited(&process, &CompositorProcess::exited);
-        process.start(QCoreApplication::applicationFilePath(), "test-socket");
+        process.start(QCoreApplication::applicationFilePath(), "test-socket", "test-control");
         QTRY_COMPARE(ready.count(), 1);
         QVERIFY(process.isReady());
         process.stop();
@@ -25,7 +25,7 @@ private slots:
         qputenv("SESSION_TEST_CHILD", "exit");
         CompositorProcess process;
         QSignalSpy failed(&process, &CompositorProcess::failed);
-        process.start(QCoreApplication::applicationFilePath(), "test-socket");
+        process.start(QCoreApplication::applicationFilePath(), "test-socket", "test-control");
         QTRY_COMPARE(failed.count(), 1);
         QVERIFY(!process.isReady());
     }
@@ -33,14 +33,14 @@ private slots:
         qputenv("SESSION_TEST_CHILD", "hang");
         CompositorProcess process;
         QSignalSpy failed(&process, &CompositorProcess::failed);
-        process.start(QCoreApplication::applicationFilePath(), "test-socket", 30);
+        process.start(QCoreApplication::applicationFilePath(), "test-socket", "test-control", 30);
         QTRY_COMPARE(failed.count(), 1);
         QVERIFY(!process.isReady());
     }
     void missingExecutable() {
         CompositorProcess process;
         QSignalSpy failed(&process, &CompositorProcess::failed);
-        process.start("/does-not-exist/cutefish-compositor", "test-socket");
+        process.start("/does-not-exist/cutefish-compositor", "test-socket", "test-control");
         QCOMPARE(failed.count(), 1);
     }
 };
@@ -49,7 +49,10 @@ int main(int argc, char **argv) {
     const auto mode = qgetenv("SESSION_TEST_CHILD");
     if (!mode.isEmpty()) {
         if (mode == "exit") return 1;
-        if (app.arguments().size() != 5 || app.arguments().at(2) != "test-socket") return 2;
+        // --socket <name> --ready-fd <fd> --shell-control-socket <path>
+        if (app.arguments().size() != 7 || app.arguments().at(2) != "test-socket"
+            || app.arguments().at(6) != "test-control")
+            return 2;
         if (mode == "ready") {
             const int fd = app.arguments().at(4).toInt();
             if (write(fd, "R", 1) != 1) return 3;
