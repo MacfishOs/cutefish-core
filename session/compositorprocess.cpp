@@ -3,7 +3,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-CompositorProcess::CompositorProcess(QObject *parent) : QObject(parent)
+CompositorProcess::CompositorProcess(QObject* parent)
+    : QObject(parent)
 {
     m_process.setProcessChannelMode(QProcess::ForwardedChannels);
     m_timeout.setSingleShot(true);
@@ -16,15 +17,20 @@ CompositorProcess::CompositorProcess(QObject *parent) : QObject(parent)
     });
     connect(&m_process, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
         closeReadyPipe();
-        if (m_stopping || m_failed) return;
-        if (!m_ready) fail(QStringLiteral("Compositor exited before becoming ready"));
-        else emit exited(status == QProcess::NormalExit ? code : 1);
+        if (m_stopping || m_failed)
+            return;
+        if (!m_ready)
+            fail(QStringLiteral("Compositor exited before becoming ready"));
+        else
+            emit exited(status == QProcess::NormalExit ? code : 1);
     });
 }
+
 CompositorProcess::~CompositorProcess()
 {
     stop();
 }
+
 void CompositorProcess::closeReadyPipe()
 {
     m_timeout.stop();
@@ -38,17 +44,22 @@ void CompositorProcess::closeReadyPipe()
         m_readFd = -1;
     }
 }
-void CompositorProcess::fail(const QString &reason)
+
+void CompositorProcess::fail(const QString& reason)
 {
-    if (m_failed || m_stopping) return;
+    if (m_failed || m_stopping)
+        return;
     m_failed = true;
     stop();
     emit failed(reason);
 }
-void CompositorProcess::start(const QString &program, const QString &socket,
-                              const QString &controlSocket, int timeoutMs)
+
+void CompositorProcess::start(const QString& program, const QString& socket,
+                              const QString& controlSocket, int timeoutMs,
+                              const QString& xwaylandReadyFile)
 {
-    if (m_process.state() != QProcess::NotRunning || m_readFd >= 0) return;
+    if (m_process.state() != QProcess::NotRunning || m_readFd >= 0)
+        return;
     m_ready = false;
     m_stopping = false;
     m_failed = false;
@@ -60,10 +71,12 @@ void CompositorProcess::start(const QString &program, const QString &socket,
     m_readFd = fds[0];
     const int writeFd = fds[1];
     m_process.setProgram(program);
-    QStringList arguments {QStringLiteral("--socket"), socket,
-                           QStringLiteral("--ready-fd"), QString::number(writeFd)};
+    QStringList arguments {QStringLiteral("--socket"), socket, QStringLiteral("--ready-fd"),
+                           QString::number(writeFd)};
     if (!controlSocket.isEmpty())
         arguments << QStringLiteral("--shell-control-socket") << controlSocket;
+    if (!xwaylandReadyFile.isEmpty())
+        arguments << QStringLiteral("--xwayland-ready-file") << xwaylandReadyFile;
     m_process.setArguments(arguments);
     m_process.setChildProcessModifier([readFd = fds[0], writeFd] {
         close(readFd);
@@ -73,7 +86,8 @@ void CompositorProcess::start(const QString &program, const QString &socket,
     connect(m_notifier, &QSocketNotifier::activated, this, [this] {
         char marker = 0;
         const auto count = read(m_readFd, &marker, 1);
-        if (count < 0) return;
+        if (count < 0)
+            return;
         if (count != 1 || marker != 'R') {
             fail(QStringLiteral("Compositor did not confirm startup"));
             return;
@@ -89,8 +103,10 @@ void CompositorProcess::start(const QString &program, const QString &socket,
         fail(m_process.errorString());
         return;
     }
-    if (!m_ready && !m_failed && !m_stopping) m_timeout.start(timeoutMs);
+    if (!m_ready && !m_failed && !m_stopping)
+        m_timeout.start(timeoutMs);
 }
+
 void CompositorProcess::stop()
 {
     m_stopping = true;

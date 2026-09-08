@@ -20,23 +20,25 @@
 #ifndef PROCESSMANAGER_H
 #define PROCESSMANAGER_H
 
-#include <QObject>
-#include <QProcess>
 #include <QEventLoop>
 #include <QMap>
+#include <QObject>
+#include <QProcess>
 
+class XwaylandEnvironment;
 class Application;
 class QDBusServiceWatcher;
 class CompositorProcess;
 class ShellConnection;
 class ShellProcess;
 class QTimer;
+
 class ProcessManager : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit ProcessManager(Application *app, QObject *parent = nullptr);
+    explicit ProcessManager(Application* app, QObject* parent = nullptr);
     ~ProcessManager();
 
     void start();
@@ -48,17 +50,19 @@ public:
 
 private:
     void startAfterCompositorReady();
+    void publishXwaylandEnvironment(bool startDesktop);
     void startShell();
     void onShellFinished(int code, QProcess::ExitStatus status);
-    void stopProcesses(QMap<QString, QProcess *> &processes);
+    void stopProcesses(QMap<QString, QProcess*>& processes);
 
 private:
-    Application *m_app;
-    CompositorProcess *m_compositorProcess = nullptr;
-    ShellConnection *m_shellConnection = nullptr;
-    ShellProcess *m_shellProcess = nullptr;
-    QTimer *m_shellRestartTimer = nullptr;
-    QDBusServiceWatcher *m_servicesWatcher = nullptr;
+    XwaylandEnvironment* m_xwaylandEnvironment = nullptr;
+    Application* m_app;
+    CompositorProcess* m_compositorProcess = nullptr;
+    ShellConnection* m_shellConnection = nullptr;
+    ShellProcess* m_shellProcess = nullptr;
+    QTimer* m_shellRestartTimer = nullptr;
+    QDBusServiceWatcher* m_servicesWatcher = nullptr;
     bool m_started = false;
     bool m_compositorReady = false;
     bool m_desktopStarted = false;
@@ -68,8 +72,7 @@ private:
     int m_shellRestarts = 0;
     QString m_waylandSocket;
     QString m_controlSocket;
-    QMap<QString, QProcess *> m_coreProcesses;
-
+    QMap<QString, QProcess*> m_coreProcesses;
 };
 
 #endif // PROCESSMANAGER_H

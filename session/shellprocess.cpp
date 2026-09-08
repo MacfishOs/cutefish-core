@@ -1,13 +1,14 @@
 #include "shellprocess.h"
-#include "shellconnection.h"
-
-#include <QDebug>
-#include <QProcessEnvironment>
 
 #include <fcntl.h>
 #include <unistd.h>
 
-ShellProcess::ShellProcess(QObject *parent)
+#include <QDebug>
+#include <QProcessEnvironment>
+
+#include "shellconnection.h"
+
+ShellProcess::ShellProcess(QObject* parent)
     : QProcess(parent)
 {
     setProcessChannelMode(QProcess::ForwardedChannels);
@@ -27,14 +28,13 @@ ShellProcess::~ShellProcess()
     stop();
 }
 
-void ShellProcess::startForSession(const QString &program, const QString &socket,
-                                   ShellConnection *connection)
+void ShellProcess::startForSession(const QString& program, const QString& socket,
+                                   ShellConnection* connection)
 {
     if (state() != QProcess::NotRunning)
         return;
 
     auto environment = QProcessEnvironment::systemEnvironment();
-    environment.remove(QStringLiteral("DISPLAY"));
     environment.insert(QStringLiteral("WAYLAND_DISPLAY"), socket);
     environment.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("wayland"));
 
@@ -47,7 +47,9 @@ void ShellProcess::startForSession(const QString &program, const QString &socket
         // The fd is close-on-exec here so it cannot leak into anything else the
         // session starts; the child clears the flag on its own copy just before
         // exec, which is the only process that may have it.
-        setChildProcessModifier([shellFd] { fcntl(shellFd, F_SETFD, 0); });
+        setChildProcessModifier([shellFd] {
+            fcntl(shellFd, F_SETFD, 0);
+        });
     } else {
         environment.remove(QStringLiteral("WAYLAND_SOCKET"));
         setChildProcessModifier({});

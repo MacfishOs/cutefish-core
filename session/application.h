@@ -22,43 +22,38 @@
 
 #include <QCoreApplication>
 
-#include "processmanager.h"
 #include "networkproxymanager.h"
 #include "powermanager/power.h"
+#include "processmanager.h"
 
 class Application : public QCoreApplication
 {
     Q_OBJECT
 
 public:
-    explicit Application(int &argc, char **argv);
+    explicit Application(int& argc, char** argv);
 
 public slots:
-    void logout() {
-        m_processManager->logout();
-    }
 
-    void reboot() {
+    void logout() { m_processManager->logout(); }
+
+    void reboot()
+    {
         if (m_power.reboot())
             QCoreApplication::exit(0);
     }
 
-    void powerOff() {
+    void powerOff()
+    {
         if (m_power.shutdown())
             QCoreApplication::exit(0);
     }
 
-    bool suspend() {
-        return m_power.suspend();
-    }
+    bool suspend() { return m_power.suspend(); }
 
-    void startDesktopProcess() {
-        m_processManager->startDesktopProcess();
-    }
+    void startDesktopProcess() { m_processManager->startDesktopProcess(); }
 
-    void updateNetworkProxy() {
-        m_networkProxyManager->update();
-    }
+    void updateNetworkProxy() { m_networkProxyManager->update(); }
 
 private:
     void initEnvironments();
@@ -67,13 +62,12 @@ private:
     void importSystemdEnvrionment();
     void createConfigDirectory();
     void updateUserDirs();
-    int runSync(const QString &program, const QStringList &args, const QStringList &env = {});
+    int runSync(const QString& program, const QStringList& args, const QStringList& env = {});
 
 private:
-    ProcessManager *m_processManager;
-    NetworkProxyManager *m_networkProxyManager;
+    ProcessManager* m_processManager;
+    NetworkProxyManager* m_networkProxyManager;
     Power m_power;
-
 };
 
 #endif // APPLICATION_H

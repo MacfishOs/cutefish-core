@@ -18,35 +18,37 @@
  */
 
 #include "processmanager.h"
-#include "compositorprocess.h"
-#include "shellconnection.h"
-#include "shellprocess.h"
-#include "application.h"
-#include "applicationlauncher.h"
-#include "applicationruntime.h"
 
 #include <QCoreApplication>
-#include <QStandardPaths>
-#include <QSettings>
-#include <QDebug>
-#include <QProcessEnvironment>
-#include <QTimer>
-#include <QDir>
 #include <QDBusConnectionInterface>
 #include <QDBusReply>
 #include <QDBusServiceWatcher>
+#include <QDebug>
+#include <QDir>
+#include <QProcessEnvironment>
+#include <QSettings>
+#include <QStandardPaths>
+#include <QTimer>
 
-namespace
-{
+#include "application.h"
+#include "applicationlauncher.h"
+#include "applicationruntime.h"
+#include "autostartentries.h"
+#include "compositorprocess.h"
+#include "shellconnection.h"
+#include "shellprocess.h"
+#include "xwaylandenvironment.h"
+
+namespace {
 // Bounded restart policy for cutefish-shell. The compositor keeps running
 // either way: a shell that cannot come up leaves the session with applications
 // and no panels, which is recoverable, while a restart loop is not.
 constexpr int kMaxShellRestarts = 5;
 constexpr int kShellRestartDelayMs = 1000;
 constexpr int kShellRestartBackoffMs = 2000;
-}
+} // namespace
 
-ProcessManager::ProcessManager(Application *app, QObject *parent)
+ProcessManager::ProcessManager(Application* app, QObject* parent)
     : QObject(parent)
     , m_app(app)
     , m_compositorProcess(new CompositorProcess(this))
@@ -66,7 +68,7 @@ ProcessManager::~ProcessManager()
     m_shellProcess->stop();
     stopProcesses(m_coreProcesses);
     m_compositorProcess->stop();
-    QMapIterator<QString, QProcess *> i(m_coreProcesses);
+    QMapIterator<QString, QProcess*> i(m_coreProcesses);
     while (i.hasNext()) {
         i.next();
         delete i.value();
@@ -76,16 +78,27 @@ ProcessManager::~ProcessManager()
 
 void ProcessManager::start()
 {
-    if (m_started) return;
+    if (m_started)
+        return;
     m_started = true;
 
     m_waylandSocket = qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0"));
     const QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR", QStringLiteral("/tmp"));
     m_controlSocket = QStringLiteral("%1/%2-shell.control").arg(runtimeDir, m_waylandSocket);
 
-    connect(m_compositorProcess, &CompositorProcess::ready,
-            this, &ProcessManager::startAfterCompositorReady);
-    connect(m_compositorProcess, &CompositorProcess::failed, this, [this](const QString &reason) {
+    qunsetenv("DISPLAY");
+    qunsetenv("XAUTHORITY");
+    m_xwaylandEnvironment = new XwaylandEnvironment(this);
+    connect(m_xwaylandEnvironment, &XwaylandEnvironment::resolved, this, [this](bool) {
+        publishXwaylandEnvironment(true);
+    });
+    connect(m_xwaylandEnvironment, &XwaylandEnvironment::lost, this, [this] {
+        publishXwaylandEnvironment(false);
+    });
+    connect(m_compositorProcess, &CompositorProcess::ready, this, [this] {
+        m_xwaylandEnvironment->waitForReady();
+    });
+    connect(m_compositorProcess, &CompositorProcess::failed, this, [this](const QString& reason) {
         qCritical() << reason;
         m_loggingOut = true;
         m_shellRestartTimer->stop();
@@ -102,14 +115,52 @@ void ProcessManager::start()
         stopProcesses(m_coreProcesses);
         QCoreApplication::exit(code);
     });
-    m_compositorProcess->start(
-        qEnvironmentVariable("CUTEFISH_COMPOSITOR_BINARY", QStringLiteral("/usr/bin/cutefish-compositor")),
-        m_waylandSocket, m_controlSocket);
+    m_compositorProcess->start(qEnvironmentVariable("CUTEFISH_COMPOSITOR_BINARY",
+                                                    QStringLiteral("/usr/bin/cutefish-compositor")),
+                               m_waylandSocket, m_controlSocket, 15000,
+                               m_xwaylandEnvironment->readinessFile());
+}
+
+void ProcessManager::publishXwaylandEnvironment(bool startDesktop)
+{
+    if (m_loggingOut)
+        return;
+    auto* process = new QProcess(this);
+    auto* deadline = new QTimer(process);
+    deadline->setSingleShot(true);
+    const auto finish = [this, process, deadline, startDesktop] {
+        deadline->stop();
+        process->disconnect(this);
+        process->deleteLater();
+        if (startDesktop && !m_loggingOut)
+            startAfterCompositorReady();
+    };
+    connect(process, &QProcess::finished, this, [finish](int code) {
+        if (code != 0)
+            qWarning() << "Could not publish Xwayland environment to activation services";
+        finish();
+    });
+    connect(process, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            qWarning() << "dbus-update-activation-environment is unavailable";
+            finish();
+        }
+    });
+    connect(deadline, &QTimer::timeout, process, [process] {
+        process->kill();
+    });
+    process->setProcessChannelMode(QProcess::ForwardedChannels);
+    process->start(QStringLiteral("dbus-update-activation-environment"),
+                   {QStringLiteral("--systemd"),
+                    QStringLiteral("DISPLAY=") + qEnvironmentVariable("DISPLAY"),
+                    QStringLiteral("XAUTHORITY=") + qEnvironmentVariable("XAUTHORITY")});
+    deadline->start(3000);
 }
 
 void ProcessManager::startAfterCompositorReady()
 {
-    if (m_compositorReady) return;
+    if (m_compositorReady)
+        return;
     m_compositorReady = true;
 
     // The persistent control channel. It is what makes a shell restart possible
@@ -130,18 +181,16 @@ void ProcessManager::startAfterCompositorReady()
         startDesktopProcess();
     };
 
-    m_servicesWatcher = new QDBusServiceWatcher(serviceName,
-                                                QDBusConnection::sessionBus(),
-                                                QDBusServiceWatcher::WatchForRegistration,
-                                                this);
-    connect(m_servicesWatcher, &QDBusServiceWatcher::serviceRegistered,
-            this, [servicesReady](const QString &) {
-        servicesReady();
-    });
+    m_servicesWatcher = new QDBusServiceWatcher(serviceName, QDBusConnection::sessionBus(),
+                                                QDBusServiceWatcher::WatchForRegistration, this);
+    connect(m_servicesWatcher, &QDBusServiceWatcher::serviceRegistered, this,
+            [servicesReady](const QString&) {
+                servicesReady();
+            });
 
     startDaemonProcess();
 
-    if (QDBusConnectionInterface *interface = QDBusConnection::sessionBus().interface()) {
+    if (QDBusConnectionInterface* interface = QDBusConnection::sessionBus().interface()) {
         const QDBusReply<bool> reply = interface->isServiceRegistered(serviceName);
         if (reply.isValid() && reply.value())
             servicesReady();
@@ -185,9 +234,9 @@ void ProcessManager::logout()
 
     // Applications belong to the runtime, so ask it to quit them, then close
     // what we started ourselves.
-    ApplicationRuntime *runtime = ApplicationRuntime::instance();
+    ApplicationRuntime* runtime = ApplicationRuntime::instance();
     if (!runtime->quitAll()) {
-        for (const QString &appId : runtime->runningApplications())
+        for (const QString& appId : runtime->runningApplications())
             runtime->quitApplication(appId);
     }
 
@@ -199,12 +248,12 @@ void ProcessManager::logout()
     QCoreApplication::exit(0);
 }
 
-void ProcessManager::stopProcesses(QMap<QString, QProcess *> &processes)
+void ProcessManager::stopProcesses(QMap<QString, QProcess*>& processes)
 {
-    QMapIterator<QString, QProcess *> i(processes);
+    QMapIterator<QString, QProcess*> i(processes);
     while (i.hasNext()) {
         i.next();
-        QProcess *p = i.value();
+        QProcess* p = i.value();
 
         if (!p || p->state() == QProcess::NotRunning)
             continue;
@@ -218,22 +267,22 @@ void ProcessManager::stopProcesses(QMap<QString, QProcess *> &processes)
 
 void ProcessManager::startDesktopProcess()
 {
-    if (!m_compositorReady || m_desktopStarted) return;
+    if (!m_compositorReady || m_desktopStarted)
+        return;
     m_desktopStarted = true;
 
     startShell();
 
     // For CutefishOS. An ordinary application, so the runtime starts it.
     if (QFile("/usr/bin/cutefish-welcome").exists() &&
-            !QFile("/run/live/medium/live/filesystem.squashfs").exists()) {
+        !QFile("/run/live/medium/live/filesystem.squashfs").exists()) {
         QSettings settings("cutefishos", "login");
-        QStringList command{QStringLiteral("/usr/bin/cutefish-welcome")};
+        QStringList command {QStringLiteral("/usr/bin/cutefish-welcome")};
 
         if (settings.value("Finished", false).toBool())
             command << QStringLiteral("-d");
 
-        ApplicationLauncher::startDetached(command, QString(),
-                                           QStringLiteral("cutefish-welcome"));
+        ApplicationLauncher::startDetached(command, QString(), QStringLiteral("cutefish-welcome"));
     }
 
     // Auto start
@@ -250,7 +299,7 @@ void ProcessManager::startDaemonProcess()
     list << qMakePair(QString("cutefish-services"), QStringList());
 
     for (QPair<QString, QStringList> pair : list) {
-        QProcess *process = new QProcess;
+        QProcess* process = new QProcess;
         process->setProcessChannelMode(QProcess::ForwardedChannels);
         process->setProgram(pair.first);
         process->setArguments(pair.second);
@@ -264,8 +313,7 @@ void ProcessManager::startDaemonProcess()
         if (process->state() != QProcess::NotRunning) {
             m_coreProcesses.insert(pair.first, process);
         } else {
-            qWarning() << "Failed to start daemon:" << pair.first
-                       << process->errorString();
+            qWarning() << "Failed to start daemon:" << pair.first << process->errorString();
             process->deleteLater();
         }
     }
@@ -273,47 +321,31 @@ void ProcessManager::startDaemonProcess()
 
 void ProcessManager::loadAutoStartProcess()
 {
-    QStringList execList;
-    const QStringList dirs = QStandardPaths::locateAll(QStandardPaths::GenericConfigLocation,
-                                                       QStringLiteral("autostart"),
-                                                       QStandardPaths::LocateDirectory);
-    for (const QString &dir : dirs) {
-        const QDir d(dir);
-        const QStringList fileNames = d.entryList(QStringList() << QStringLiteral("*.desktop"));
-        for (const QString &file : fileNames) {
-            QSettings desktop(d.absoluteFilePath(file), QSettings::IniFormat);
-            desktop.beginGroup("Desktop Entry");
-
-            if (desktop.contains("OnlyShowIn"))
-                continue;
-
-            const QString execValue = desktop.value("Exec").toString();
-
-            if (execValue.contains("cutefish-services") ||
-                    execValue.contains("cutefish-appruntime") ||
-                    execValue.contains("cutefish-shell") ||
-                    execValue.contains("cutefish-compositor") ||
-                    execValue.contains("kwin_wayland"))
-                continue;
-
-            if (!execValue.isEmpty()) {
-                execList << execValue;
-            }
-        }
-    }
+    const QStringList dirs =
+        QStandardPaths::locateAll(QStandardPaths::GenericConfigLocation,
+                                  QStringLiteral("autostart"), QStandardPaths::LocateDirectory);
+    const auto desktops =
+        qEnvironmentVariable("XDG_CURRENT_DESKTOP", "Cutefish").split(':', Qt::SkipEmptyParts);
+    const auto execList = autostartEntries(dirs, desktops);
 
     // Autostart entries are applications: the runtime starts them, and keeps
     // them quittable like any other application.
-    for (const QString &exec : execList) {
+    for (const QString& exec : execList) {
         QStringList command = QProcess::splitCommand(exec);
 
         // Autostart entries take no files, so their field codes expand to
         // nothing rather than to a literal "%U" argument.
-        command.removeIf([](const QString &argument) {
+        command.removeIf([](const QString& argument) {
             return argument.size() == 2 && argument.startsWith(QLatin1Char('%'));
         });
 
         if (command.isEmpty())
+            continue;
+
+        const auto executable = QFileInfo(command.first()).fileName();
+        if (QStringList {"cutefish-services", "cutefish-appruntime", "cutefish-shell",
+                         "cutefish-compositor", "kwin_wayland"}
+                .contains(executable))
             continue;
 
         ApplicationLauncher::startDetached(command);

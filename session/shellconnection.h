@@ -22,12 +22,12 @@ class ShellConnection : public QObject
     Q_OBJECT
 
 public:
-    explicit ShellConnection(QObject *parent = nullptr);
+    explicit ShellConnection(QObject* parent = nullptr);
     ~ShellConnection() override;
 
     //! Connects to the compositor's control socket, retrying for @p timeoutMs
     //! while the compositor is still creating it.
-    bool connectToCompositor(const QString &path, int timeoutMs = 5000);
+    bool connectToCompositor(const QString& path, int timeoutMs = 5000);
 
     bool isConnected() const { return m_fd >= 0; }
 
@@ -46,5 +46,5 @@ private:
     void onReadable();
 
     int m_fd = -1;
-    QSocketNotifier *m_notifier = nullptr;
+    QSocketNotifier* m_notifier = nullptr;
 };

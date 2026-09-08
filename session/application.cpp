@@ -18,19 +18,19 @@
  */
 
 #include "application.h"
+
 #include "sessionadaptor.h"
 
 // Qt
 #include <QCommandLineOption>
 #include <QDBusConnection>
-#include <QStandardPaths>
-#include <QSettings>
-#include <QProcess>
-#include <QDebug>
-#include <QDir>
-
 #include <QDBusConnectionInterface>
 #include <QDBusServiceWatcher>
+#include <QDebug>
+#include <QDir>
+#include <QProcess>
+#include <QSettings>
+#include <QStandardPaths>
 
 // STL
 #include <optional>
@@ -38,10 +38,9 @@
 std::optional<QStringList> getSystemdEnvironment()
 {
     QStringList list;
-    auto msg = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
-                                              QStringLiteral("/org/freedesktop/systemd1"),
-                                              QStringLiteral("org.freedesktop.DBus.Properties"),
-                                              QStringLiteral("Get"));
+    auto msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
+        QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
     msg << QStringLiteral("org.freedesktop.systemd1.Manager") << QStringLiteral("Environment");
     auto reply = QDBusConnection::sessionBus().call(msg);
     if (reply.type() == QDBusMessage::ErrorMessage) {
@@ -61,26 +60,27 @@ std::optional<QStringList> getSystemdEnvironment()
     return variant.toStringList();
 }
 
-bool isShellVariable(const QByteArray &name)
+bool isShellVariable(const QByteArray& name)
 {
     return name == "_" || name.startsWith("SHLVL");
 }
 
-bool isSessionVariable(const QByteArray &name)
+bool isSessionVariable(const QByteArray& name)
 {
     // Check is variable is specific to session.
-    return name == "WAYLAND_DISPLAY" || name == "WAYLAND_SOCKET" || //
+    return name == "DISPLAY" || name == "XAUTHORITY" || name == "WAYLAND_DISPLAY" ||
+        name == "WAYLAND_SOCKET" || //
         name.startsWith("XDG_");
 }
 
-void setEnvironmentVariable(const QByteArray &name, const QByteArray &value)
+void setEnvironmentVariable(const QByteArray& name, const QByteArray& value)
 {
     if (qgetenv(name) != value) {
         qputenv(name, value);
     }
 }
 
-Application::Application(int &argc, char **argv)
+Application::Application(int& argc, char** argv)
     : QCoreApplication(argc, argv)
     , m_processManager(new ProcessManager(this))
     , m_networkProxyManager(new NetworkProxyManager)
@@ -124,13 +124,17 @@ void Application::initEnvironments()
 {
     // Set defaults
     if (qEnvironmentVariableIsEmpty("XDG_DATA_HOME"))
-        qputenv("XDG_DATA_HOME", QDir::home().absoluteFilePath(QStringLiteral(".local/share")).toLocal8Bit());
+        qputenv("XDG_DATA_HOME",
+                QDir::home().absoluteFilePath(QStringLiteral(".local/share")).toLocal8Bit());
     if (qEnvironmentVariableIsEmpty("XDG_DESKTOP_DIR"))
-        qputenv("XDG_DESKTOP_DIR", QDir::home().absoluteFilePath(QStringLiteral("Desktop")).toLocal8Bit());
+        qputenv("XDG_DESKTOP_DIR",
+                QDir::home().absoluteFilePath(QStringLiteral("Desktop")).toLocal8Bit());
     if (qEnvironmentVariableIsEmpty("XDG_CONFIG_HOME"))
-        qputenv("XDG_CONFIG_HOME", QDir::home().absoluteFilePath(QStringLiteral(".config")).toLocal8Bit());
+        qputenv("XDG_CONFIG_HOME",
+                QDir::home().absoluteFilePath(QStringLiteral(".config")).toLocal8Bit());
     if (qEnvironmentVariableIsEmpty("XDG_CACHE_HOME"))
-        qputenv("XDG_CACHE_HOME", QDir::home().absoluteFilePath(QStringLiteral(".cache")).toLocal8Bit());
+        qputenv("XDG_CACHE_HOME",
+                QDir::home().absoluteFilePath(QStringLiteral(".cache")).toLocal8Bit());
     if (qEnvironmentVariableIsEmpty("XDG_DATA_DIRS"))
         qputenv("XDG_DATA_DIRS", "/usr/local/share/:/usr/share/");
     if (qEnvironmentVariableIsEmpty("XDG_CONFIG_DIRS"))
@@ -147,10 +151,8 @@ void Application::initEnvironments()
     const QString gsettings = QStandardPaths::findExecutable(QStringLiteral("gsettings"));
     if (!gsettings.isEmpty()) {
         runSync(gsettings,
-                { QStringLiteral("set"),
-                  QStringLiteral("org.gnome.desktop.wm.preferences"),
-                  QStringLiteral("button-layout"),
-                  QStringLiteral("menu:minimize,maximize,close") });
+                {QStringLiteral("set"), QStringLiteral("org.gnome.desktop.wm.preferences"),
+                 QStringLiteral("button-layout"), QStringLiteral("menu:minimize,maximize,close")});
     }
 
     // Qt
@@ -159,8 +161,9 @@ void Application::initEnvironments()
     if (qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
         qputenv("WAYLAND_DISPLAY", "cutefish-0");
     qputenv("QT_QPA_PLATFORMTHEME", "cutefish");
-    
-    // ref: https://stackoverflow.com/questions/34399993/qml-performance-issue-when-updating-an-item-in-presence-of-many-non-overlapping
+
+    // ref:
+    // https://stackoverflow.com/questions/34399993/qml-performance-issue-when-updating-an-item-in-presence-of-many-non-overlapping
     qputenv("QT_QPA_UPDATE_IDLE_TIME", "10");
 
     // IM Config
@@ -182,7 +185,7 @@ void Application::initLanguage()
         if (file.open(QIODevice::ReadOnly)) {
             QStringList lines = QString(file.readAll()).split('\n');
 
-            for (const QString &line : lines) {
+            for (const QString& line : lines) {
                 if (line.startsWith('#'))
                     continue;
 
@@ -201,9 +204,8 @@ void Application::initLanguage()
 
     QString str = QString("%1.UTF-8").arg(value);
 
-    const auto lcValues = {
-        "LANG", "LC_NUMERIC", "LC_TIME", "LC_MONETARY", "LC_MEASUREMENT", "LC_COLLATE", "LC_CTYPE"
-    };
+    const auto lcValues = {"LANG",           "LC_NUMERIC", "LC_TIME", "LC_MONETARY",
+                           "LC_MEASUREMENT", "LC_COLLATE", "LC_CTYPE"};
 
     for (auto lc : lcValues) {
         const QString value = str;
@@ -221,9 +223,12 @@ bool Application::syncDBusEnvironment()
 {
     int exitCode = 0;
 
-    // At this point all environment variables are set, let's send it to the DBus session server to update the activation environment
-    if (!QStandardPaths::findExecutable(QStringLiteral("dbus-update-activation-environment")).isEmpty()) {
-        exitCode = runSync(QStringLiteral("dbus-update-activation-environment"), { QStringLiteral("--systemd"), QStringLiteral("--all") });
+    // At this point all environment variables are set, let's send it to the DBus session server to
+    // update the activation environment
+    if (!QStandardPaths::findExecutable(QStringLiteral("dbus-update-activation-environment"))
+             .isEmpty()) {
+        exitCode = runSync(QStringLiteral("dbus-update-activation-environment"),
+                           {QStringLiteral("--systemd"), QStringLiteral("--all")});
     }
 
     return exitCode == 0;
@@ -239,7 +244,7 @@ void Application::importSystemdEnvrionment()
         return;
     }
 
-    for (auto &envString : environment.value()) {
+    for (auto& envString : environment.value()) {
         const auto env = envString.toLocal8Bit();
         const int idx = env.indexOf('=');
         if (Q_UNLIKELY(idx <= 0)) {
@@ -256,7 +261,8 @@ void Application::importSystemdEnvrionment()
 
 void Application::createConfigDirectory()
 {
-    const QString configDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    const QString configDir =
+        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
 
     if (!QDir().mkpath(configDir))
         qDebug() << "Could not create config directory XDG_CONFIG_HOME: " << configDir;
@@ -275,7 +281,7 @@ void Application::updateUserDirs()
     // p.waitForFinished(-1);
 }
 
-int Application::runSync(const QString &program, const QStringList &args, const QStringList &env)
+int Application::runSync(const QString& program, const QStringList& args, const QStringList& env)
 {
     QProcess p;
 

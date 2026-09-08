@@ -16,12 +16,12 @@ class ShellConnection;
 class ShellProcess final : public QProcess
 {
 public:
-    explicit ShellProcess(QObject *parent = nullptr);
+    explicit ShellProcess(QObject* parent = nullptr);
     ~ShellProcess() override;
 
     //! `connection` may be null, in which case the shell falls back to the
     //! public socket and simply gets no private globals.
-    void startForSession(const QString &program, const QString &socket,
-                         ShellConnection *connection);
+    void startForSession(const QString& program, const QString& socket,
+                         ShellConnection* connection);
     void stop();
 };

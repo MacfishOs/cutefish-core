@@ -27,7 +27,7 @@ class Process : public QProcess
     Q_OBJECT
 
 public:
-    Process(QObject *parent = nullptr);
+    Process(QObject* parent = nullptr);
     ~Process();
 };
 

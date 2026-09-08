@@ -19,22 +19,22 @@
  *
  * END_COMMON_COPYRIGHT_HEADER */
 
-
 #include "power.h"
+
+#include <QDebug>
+#include <QtAlgorithms>
+
 #include "powerproviders.h"
 
-#include <QtAlgorithms>
-#include <QDebug>
-
-Power::Power(bool useSessionProvider, QObject * parent /*= nullptr*/) :
-    QObject(parent)
+Power::Power(bool useSessionProvider, QObject* parent /*= nullptr*/)
+    : QObject(parent)
 {
     m_providers.append(new SystemdProvider(this));
     m_providers.append(new UPowerProvider(this));
     m_providers.append(new ConsoleKitProvider(this));
 }
 
-Power::Power(QObject * parent /*= nullptr*/)
+Power::Power(QObject* parent /*= nullptr*/)
     : Power(true, parent)
 {
 }
@@ -45,7 +45,7 @@ Power::~Power()
 
 bool Power::canAction(Power::Action action) const
 {
-    for(const PowerProvider* provider : qAsConst(m_providers))
+    for (const PowerProvider* provider : qAsConst(m_providers))
         if (provider->canAction(action))
             return true;
 
@@ -54,27 +54,80 @@ bool Power::canAction(Power::Action action) const
 
 bool Power::doAction(Power::Action action)
 {
-    for(PowerProvider* provider : qAsConst(m_providers)) {
-        if (provider->canAction(action) &&
-            provider->doAction(action)) {
+    for (PowerProvider* provider : qAsConst(m_providers)) {
+        if (provider->canAction(action) && provider->doAction(action)) {
             return true;
         }
     }
     return false;
 }
 
-bool Power::canLogout()    const { return canAction(PowerLogout);    }
-bool Power::canHibernate() const { return canAction(PowerHibernate); }
-bool Power::canReboot()    const { return canAction(PowerReboot);    }
-bool Power::canShutdown()  const { return canAction(PowerShutdown);  }
-bool Power::canSuspend()   const { return canAction(PowerSuspend);   }
-bool Power::canMonitorOff() const { return canAction(PowerMonitorOff);   }
-bool Power::canShowLeaveDialog() const { return canAction(PowerShowLeaveDialog);   }
+bool Power::canLogout() const
+{
+    return canAction(PowerLogout);
+}
 
-bool Power::logout()       { return doAction(PowerLogout);    }
-bool Power::hibernate()    { return doAction(PowerHibernate); }
-bool Power::reboot()       { return doAction(PowerReboot);    }
-bool Power::shutdown()     { return doAction(PowerShutdown);  }
-bool Power::suspend()      { return doAction(PowerSuspend);   }
-bool Power::monitorOff()   { return doAction(PowerMonitorOff);   }
-bool Power::showLeaveDialog()   { return doAction(PowerShowLeaveDialog);   }
+bool Power::canHibernate() const
+{
+    return canAction(PowerHibernate);
+}
+
+bool Power::canReboot() const
+{
+    return canAction(PowerReboot);
+}
+
+bool Power::canShutdown() const
+{
+    return canAction(PowerShutdown);
+}
+
+bool Power::canSuspend() const
+{
+    return canAction(PowerSuspend);
+}
+
+bool Power::canMonitorOff() const
+{
+    return canAction(PowerMonitorOff);
+}
+
+bool Power::canShowLeaveDialog() const
+{
+    return canAction(PowerShowLeaveDialog);
+}
+
+bool Power::logout()
+{
+    return doAction(PowerLogout);
+}
+
+bool Power::hibernate()
+{
+    return doAction(PowerHibernate);
+}
+
+bool Power::reboot()
+{
+    return doAction(PowerReboot);
+}
+
+bool Power::shutdown()
+{
+    return doAction(PowerShutdown);
+}
+
+bool Power::suspend()
+{
+    return doAction(PowerSuspend);
+}
+
+bool Power::monitorOff()
+{
+    return doAction(PowerMonitorOff);
+}
+
+bool Power::showLeaveDialog()
+{
+    return doAction(PowerShowLeaveDialog);
+}

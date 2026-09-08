@@ -28,7 +28,7 @@ class NetworkProxyManager : public QObject
     Q_OBJECT
 
 public:
-    explicit NetworkProxyManager(QObject *parent = nullptr);
+    explicit NetworkProxyManager(QObject* parent = nullptr);
 
     void update();
 

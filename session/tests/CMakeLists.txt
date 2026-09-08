@@ -14,3 +14,13 @@ add_executable(shell-lifecycle-test shell_lifecycle_test.cpp ../shellprocess.cpp
 target_include_directories(shell-lifecycle-test PRIVATE ..)
 target_link_libraries(shell-lifecycle-test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME shell-lifecycle COMMAND shell-lifecycle-test)
+
+add_executable(xwayland-environment-test xwayland_environment_test.cpp ../xwaylandenvironment.cpp)
+target_include_directories(xwayland-environment-test PRIVATE ..)
+target_link_libraries(xwayland-environment-test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME xwayland-environment COMMAND xwayland-environment-test)
+
+add_executable(autostart-test autostart_test.cpp ../autostartentries.cpp)
+target_include_directories(autostart-test PRIVATE ..)
+target_link_libraries(autostart-test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME autostart COMMAND autostart-test)

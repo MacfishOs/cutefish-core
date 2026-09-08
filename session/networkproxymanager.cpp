@@ -17,14 +17,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #include "networkproxymanager.h"
-#include <QDBusPendingCall>
-#include <QDBusMessage>
-#include <QProcess>
-#include <QDBusConnection>
 
-NetworkProxyManager::NetworkProxyManager(QObject *parent)
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCall>
+#include <QProcess>
+
+NetworkProxyManager::NetworkProxyManager(QObject* parent)
     : QObject(parent)
     , m_settings(QSettings::UserScope, "cutefishos", "network")
 {
@@ -89,9 +89,11 @@ void NetworkProxyManager::update()
         qputenv("NO_PROXY", "localhost,127.0.0.0/8,::1");
         qputenv("no_proxy", "localhost,127.0.0.0/8,::1");
 
-         if (!m_socksProxy.isEmpty() && !m_socksProxyPort.isEmpty()) {
-             // qputenv("ALL_PROXY", QString("socks://%1:%2/").arg(m_socksProxy).arg(m_socksProxyPort).toLatin1());
-             // qputenv("all_proxy", QString("socks://%1:%2/").arg(m_socksProxy).arg(m_socksProxyPort).toLatin1());
-         }
+        if (!m_socksProxy.isEmpty() && !m_socksProxyPort.isEmpty()) {
+            // qputenv("ALL_PROXY",
+            // QString("socks://%1:%2/").arg(m_socksProxy).arg(m_socksProxyPort).toLatin1());
+            // qputenv("all_proxy",
+            // QString("socks://%1:%2/").arg(m_socksProxy).arg(m_socksProxyPort).toLatin1());
+        }
     }
 }

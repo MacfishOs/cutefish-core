@@ -1,5 +1,8 @@
-#include "shellconnection.h"
-#include "shellprocess.h"
+#include <cstring>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 #include <QCoreApplication>
 #include <QProcessEnvironment>
@@ -7,14 +10,10 @@
 #include <QTest>
 #include <QTimer>
 
-#include <cstring>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+#include "shellconnection.h"
+#include "shellprocess.h"
 
-namespace
-{
+namespace {
 QString controlSocketPath()
 {
     return QStringLiteral("%1/cutefish-shell-lifecycle-test.control")
@@ -28,7 +27,7 @@ QString controlSocketPath()
 class FakeCompositor
 {
 public:
-    bool listen(const QString &path)
+    bool listen(const QString& path)
     {
         m_path = path;
         ::unlink(path.toUtf8().constData());
@@ -41,7 +40,7 @@ public:
         m_listenFd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (m_listenFd < 0)
             return false;
-        if (bind(m_listenFd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0)
+        if (bind(m_listenFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
             return false;
         return ::listen(m_listenFd, 4) == 0;
     }
@@ -74,7 +73,7 @@ public:
         if (recvmsg(m_clientFd, &message, MSG_CMSG_CLOEXEC) <= 0)
             return -1;
 
-        for (cmsghdr *header = CMSG_FIRSTHDR(&message); header;
+        for (cmsghdr* header = CMSG_FIRSTHDR(&message); header;
              header = CMSG_NXTHDR(&message, header)) {
             if (header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS) {
                 int fd = -1;
@@ -100,12 +99,13 @@ private:
     int m_listenFd = -1;
     int m_clientFd = -1;
 };
-}
+} // namespace
 
 class ShellLifecycleTest : public QObject
 {
     Q_OBJECT
 private slots:
+
     void environmentAndSingleStart()
     {
         qputenv("SHELL_TEST_CHILD", "1");
@@ -193,12 +193,11 @@ private slots:
     }
 };
 
-namespace
-{
+namespace {
 // Runs as the shell: verifies its own privileged environment, then starts a
 // grandchild the way ApplicationRuntime starts an application and verifies that
 // nothing privileged came along.
-int runPrivilegedChild(QCoreApplication &app)
+int runPrivilegedChild(QCoreApplication& app)
 {
     if (qgetenv("WAYLAND_DISPLAY") != "shell-test-socket")
         return 3;
@@ -248,9 +247,9 @@ int runGrandchild()
 
     return 0;
 }
-}
+} // namespace
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     const auto mode = qgetenv("SHELL_TEST_CHILD");
@@ -263,8 +262,9 @@ int main(int argc, char **argv)
 
     if (!mode.isEmpty()) {
         if (qgetenv("WAYLAND_DISPLAY") != "shell-test-socket" ||
-            qgetenv("QT_QPA_PLATFORM") != "wayland" ||
-            qEnvironmentVariableIsSet("DISPLAY") || qEnvironmentVariableIsSet("WAYLAND_SOCKET"))
+            qgetenv("QT_QPA_PLATFORM") != "wayland" || qgetenv("DISPLAY") != ":99" ||
+            qgetenv("XAUTHORITY") != "/test-authority" ||
+            qEnvironmentVariableIsSet("WAYLAND_SOCKET"))
             return 2;
         if (mode != "hang")
             QTimer::singleShot(50, &app, &QCoreApplication::quit);
@@ -272,6 +272,7 @@ int main(int argc, char **argv)
     }
 
     qputenv("DISPLAY", ":99");
+    qputenv("XAUTHORITY", "/test-authority");
     qputenv("WAYLAND_SOCKET", "999");
     qputenv("QT_QPA_PLATFORM", "xcb");
     ShellLifecycleTest test;

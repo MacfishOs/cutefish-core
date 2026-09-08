@@ -6,5 +6,5 @@ export XDG_SESSION_DESKTOP=Cutefish
 export DESKTOP_SESSION=Cutefish
 export XDG_SESSION_TYPE=wayland
 export WAYLAND_DISPLAY=cutefish-0
-unset DISPLAY WAYLAND_SOCKET
+unset DISPLAY XAUTHORITY WAYLAND_SOCKET
 exec /usr/bin/cutefish-session "$@"

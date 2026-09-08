@@ -20,31 +20,32 @@
  *
  * END_COMMON_COPYRIGHT_HEADER */
 
-
 #include "powerproviders.h"
-#include <QDBusInterface>
-#include <QProcess>
-#include <QDebug>
+
 #include <signal.h> // for kill()
 
-#define UPOWER_SERVICE          "org.freedesktop.UPower"
-#define UPOWER_PATH             "/org/freedesktop/UPower"
-#define UPOWER_INTERFACE        UPOWER_SERVICE
+#include <QDBusInterface>
+#include <QDebug>
+#include <QProcess>
 
-#define CONSOLEKIT_SERVICE      "org.freedesktop.ConsoleKit"
-#define CONSOLEKIT_PATH         "/org/freedesktop/ConsoleKit/Manager"
-#define CONSOLEKIT_INTERFACE    "org.freedesktop.ConsoleKit.Manager"
+#define UPOWER_SERVICE "org.freedesktop.UPower"
+#define UPOWER_PATH "/org/freedesktop/UPower"
+#define UPOWER_INTERFACE UPOWER_SERVICE
 
-#define SYSTEMD_SERVICE         "org.freedesktop.login1"
-#define SYSTEMD_PATH            "/org/freedesktop/login1"
-#define SYSTEMD_INTERFACE       "org.freedesktop.login1.Manager"
+#define CONSOLEKIT_SERVICE "org.freedesktop.ConsoleKit"
+#define CONSOLEKIT_PATH "/org/freedesktop/ConsoleKit/Manager"
+#define CONSOLEKIT_INTERFACE "org.freedesktop.ConsoleKit.Manager"
 
-#define PROPERTIES_INTERFACE    "org.freedesktop.DBus.Properties"
+#define SYSTEMD_SERVICE "org.freedesktop.login1"
+#define SYSTEMD_PATH "/org/freedesktop/login1"
+#define SYSTEMD_INTERFACE "org.freedesktop.login1.Manager"
+
+#define PROPERTIES_INTERFACE "org.freedesktop.DBus.Properties"
 
 /************************************************
  Helper func
  ************************************************/
-void printDBusMsg(const QDBusMessage &msg)
+void printDBusMsg(const QDBusMessage& msg)
 {
     qWarning() << "** Dbus error **************************";
     qWarning() << "Error name " << msg.errorName();
@@ -55,24 +56,22 @@ void printDBusMsg(const QDBusMessage &msg)
 /************************************************
  Helper func
  ************************************************/
-static bool dbusCall(const QString &service,
-              const QString &path,
-              const QString &interface,
-              const QDBusConnection &connection,
-              const QString & method,
-              PowerProvider::DbusErrorCheck errorCheck = PowerProvider::CheckDBUS
-              )
+static bool dbusCall(const QString& service, const QString& path, const QString& interface,
+                     const QDBusConnection& connection, const QString& method,
+                     PowerProvider::DbusErrorCheck errorCheck = PowerProvider::CheckDBUS)
 {
     QDBusInterface dbus(service, path, interface, connection);
-    
+
     if (!dbus.isValid()) {
-        qWarning() << "dbusCall: QDBusInterface is invalid" << service << path << interface << method;
-        if (errorCheck == PowerProvider::CheckDBUS)
-        {
+        qWarning() << "dbusCall: QDBusInterface is invalid" << service << path
+                   << interface << method;
+        if (errorCheck == PowerProvider::CheckDBUS) {
             // Notification::notify(
             //                         QObject::tr("Power Manager Error"),
-            //                         QObject::tr("QDBusInterface is invalid") + QStringLiteral("\n\n") + service + QStringLiteral(' ') + path + QStringLiteral(' ') + interface + QStringLiteral(' ') + method,
-            //                         QStringLiteral("logo.png"));
+            //                         QObject::tr("QDBusInterface is invalid") +
+            //                         QStringLiteral("\n\n") + service + QStringLiteral(' ') + path
+            //                         + QStringLiteral(' ') + interface + QStringLiteral(' ') +
+            //                         method, QStringLiteral("logo.png"));
         }
         return false;
     }
@@ -80,21 +79,19 @@ static bool dbusCall(const QString &service,
     QDBusMessage msg = dbus.call(method);
     if (!msg.errorName().isEmpty()) {
         printDBusMsg(msg);
-        if (errorCheck == PowerProvider::CheckDBUS)
-        {
+        if (errorCheck == PowerProvider::CheckDBUS) {
             // Notification::notify(
             //                         QObject::tr("Power Manager Error (D-BUS call)"),
-            //                         msg.errorName() + QStringLiteral("\n\n") + msg.errorMessage(),
-            //                         QStringLiteral("logo.png"));
+            //                         msg.errorName() + QStringLiteral("\n\n") +
+            //                         msg.errorMessage(), QStringLiteral("logo.png"));
         }
 
         return false;
     }
 
     // If the method no returns value, we believe that it was successful.
-    return msg.arguments().isEmpty() ||
-           msg.arguments().constFirst().isNull() ||
-           msg.arguments().constFirst().toBool();
+    return msg.arguments().isEmpty() || msg.arguments().constFirst().isNull() ||
+        msg.arguments().constFirst().toBool();
 }
 
 /************************************************
@@ -104,39 +101,36 @@ static bool dbusCall(const QString &service,
  returns a string instead of a bool, and it takes
  an "interactivity boolean" as an argument.
  ************************************************/
-static bool dbusCallSystemd(const QString &service,
-                     const QString &path,
-                     const QString &interface,
-                     const QDBusConnection &connection,
-                     const QString &method,
-                     bool needBoolArg,
-                     PowerProvider::DbusErrorCheck errorCheck = PowerProvider::CheckDBUS
-                     )
+static bool dbusCallSystemd(const QString& service, const QString& path, const QString& interface,
+                            const QDBusConnection& connection, const QString& method,
+                            bool needBoolArg,
+                            PowerProvider::DbusErrorCheck errorCheck = PowerProvider::CheckDBUS)
 {
     QDBusInterface dbus(service, path, interface, connection);
     if (!dbus.isValid()) {
-        qWarning() << "dbusCall: QDBusInterface is invalid" << service << path << interface << method;
+        qWarning() << "dbusCall: QDBusInterface is invalid" << service << path
+                   << interface << method;
         if (errorCheck == PowerProvider::CheckDBUS) {
             // Notification::notify(
             //                         QObject::tr("Power Manager Error"),
-            //                         QObject::tr("QDBusInterface is invalid") + QStringLiteral("\n\n") + service + QStringLiteral(' ') + path + QStringLiteral(' ')+ interface + QStringLiteral(' ') + method,
-            //                         QStringLiteral("logo.png"));
+            //                         QObject::tr("QDBusInterface is invalid") +
+            //                         QStringLiteral("\n\n") + service + QStringLiteral(' ') + path
+            //                         + QStringLiteral(' ')+ interface + QStringLiteral(' ') +
+            //                         method, QStringLiteral("logo.png"));
         }
 
         return false;
     }
 
-    const QDBusMessage msg = needBoolArg
-        ? dbus.call(method, QVariant(true))
-        : dbus.call(method);
+    const QDBusMessage msg = needBoolArg ? dbus.call(method, QVariant(true)) : dbus.call(method);
 
     if (!msg.errorName().isEmpty()) {
         printDBusMsg(msg);
         if (errorCheck == PowerProvider::CheckDBUS) {
             // Notification::notify(
             //                         QObject::tr("Power Manager Error (D-BUS call)"),
-            //                         msg.errorName() + QStringLiteral("\n\n") + msg.errorMessage(),
-            //                         QStringLiteral("logo.png"));
+            //                         msg.errorName() + QStringLiteral("\n\n") +
+            //                         msg.errorMessage(), QStringLiteral("logo.png"));
         }
 
         return false;
@@ -154,45 +148,41 @@ static bool dbusCallSystemd(const QString &service,
 /************************************************
  Helper func
  ************************************************/
-bool dbusGetProperty(const QString &service,
-                     const QString &path,
-                     const QString &interface,
-                     const QDBusConnection &connection,
-                     const QString & property
-                    )
+bool dbusGetProperty(const QString& service, const QString& path, const QString& interface,
+                     const QDBusConnection& connection, const QString& property)
 {
     QDBusInterface dbus(service, path, interface, connection);
-    if (!dbus.isValid())
-    {
-        qWarning() << "dbusGetProperty: QDBusInterface is invalid" << service << path << interface << property;
-//        Notification::notify(QObject::tr("Power Manager"),
-//                                  "logo.png",
-//                                  QObject::tr("Power Manager Error"),
-//                                  QObject::tr("QDBusInterface is invalid")+ "\n\n" + service +" " + path +" " + interface +" " + property);
+    if (!dbus.isValid()) {
+        qWarning() << "dbusGetProperty: QDBusInterface is invalid" << service << path
+                   << interface << property;
+        //        Notification::notify(QObject::tr("Power Manager"),
+        //                                  "logo.png",
+        //                                  QObject::tr("Power Manager Error"),
+        //                                  QObject::tr("QDBusInterface is invalid")+ "\n\n" +
+        //                                  service +" " + path +" " + interface +" " + property);
 
         return false;
     }
 
     QDBusMessage msg = dbus.call(QStringLiteral("Get"), dbus.interface(), property);
 
-    if (!msg.errorName().isEmpty())
-    {
+    if (!msg.errorName().isEmpty()) {
         printDBusMsg(msg);
-//        Notification::notify(QObject::tr("Power Manager"),
-//                                  "logo.png",
-//                                  QObject::tr("Power Manager Error (Get Property)"),
-//                                  msg.errorName() + "\n\n" + msg.errorMessage());
+        //        Notification::notify(QObject::tr("Power Manager"),
+        //                                  "logo.png",
+        //                                  QObject::tr("Power Manager Error (Get Property)"),
+        //                                  msg.errorName() + "\n\n" + msg.errorMessage());
     }
 
     return !msg.arguments().isEmpty() &&
-            msg.arguments().constFirst().value<QDBusVariant>().variant().toBool();
+        msg.arguments().constFirst().value<QDBusVariant>().variant().toBool();
 }
 
 /************************************************
  PowerProvider
  ************************************************/
-PowerProvider::PowerProvider(QObject *parent):
-    QObject(parent)
+PowerProvider::PowerProvider(QObject* parent)
+    : QObject(parent)
 {
 }
 
@@ -203,8 +193,8 @@ PowerProvider::~PowerProvider()
 /************************************************
  UPowerProvider
  ************************************************/
-UPowerProvider::UPowerProvider(QObject *parent):
-    PowerProvider(parent)
+UPowerProvider::UPowerProvider(QObject* parent)
+    : PowerProvider(parent)
 {
 }
 
@@ -219,35 +209,27 @@ bool UPowerProvider::canAction(Power::Action action) const
     switch (action) {
     case Power::PowerHibernate:
         property = QStringLiteral("CanHibernate");
-        command  = QStringLiteral("HibernateAllowed");
+        command = QStringLiteral("HibernateAllowed");
         break;
     case Power::PowerSuspend:
         property = QStringLiteral("CanSuspend");
-        command  = QStringLiteral("SuspendAllowed");
+        command = QStringLiteral("SuspendAllowed");
         break;
     default:
         return false;
     }
 
-    return dbusGetProperty(  // Whether the system is able to hibernate.
-                QStringLiteral(UPOWER_SERVICE),
-                QStringLiteral(UPOWER_PATH),
-                QStringLiteral(PROPERTIES_INTERFACE),
-                QDBusConnection::systemBus(),
-                property
-            )
-            &&
-            dbusCall( // Check if the caller has (or can get) the PolicyKit privilege to call command.
-                QStringLiteral(UPOWER_SERVICE),
-                QStringLiteral(UPOWER_PATH),
-                QStringLiteral(UPOWER_INTERFACE),
-                QDBusConnection::systemBus(),
-                command,
-                // canAction should be always silent because it can freeze
-                // g_main_context_iteration Qt event loop in QMessageBox
-                // on panel startup if there is no DBUS running.
-                PowerProvider::DontCheckDBUS
-            );
+    return dbusGetProperty( // Whether the system is able to hibernate.
+               QStringLiteral(UPOWER_SERVICE), QStringLiteral(UPOWER_PATH),
+               QStringLiteral(PROPERTIES_INTERFACE), QDBusConnection::systemBus(),
+               property) &&
+        dbusCall( // Check if the caller has (or can get) the PolicyKit privilege to call command.
+               QStringLiteral(UPOWER_SERVICE), QStringLiteral(UPOWER_PATH),
+               QStringLiteral(UPOWER_INTERFACE), QDBusConnection::systemBus(), command,
+               // canAction should be always silent because it can freeze
+               // g_main_context_iteration Qt event loop in QMessageBox
+               // on panel startup if there is no DBUS running.
+               PowerProvider::DontCheckDBUS);
 }
 
 bool UPowerProvider::doAction(Power::Action action)
@@ -265,19 +247,15 @@ bool UPowerProvider::doAction(Power::Action action)
         return false;
     }
 
-
-    return dbusCall(QStringLiteral(UPOWER_SERVICE),
-             QStringLiteral(UPOWER_PATH),
-             QStringLiteral(UPOWER_INTERFACE),
-             QDBusConnection::systemBus(),
-             command );
+    return dbusCall(QStringLiteral(UPOWER_SERVICE), QStringLiteral(UPOWER_PATH),
+                    QStringLiteral(UPOWER_INTERFACE), QDBusConnection::systemBus(), command);
 }
 
 /************************************************
  ConsoleKitProvider
  ************************************************/
-ConsoleKitProvider::ConsoleKitProvider(QObject *parent):
-    PowerProvider(parent)
+ConsoleKitProvider::ConsoleKitProvider(QObject* parent)
+    : PowerProvider(parent)
 {
 }
 
@@ -298,28 +276,24 @@ bool ConsoleKitProvider::canAction(Power::Action action) const
         break;
 
     case Power::PowerHibernate:
-        command  = QStringLiteral("CanHibernate");
+        command = QStringLiteral("CanHibernate");
         break;
 
     case Power::PowerSuspend:
-        command  = QStringLiteral("CanSuspend");
+        command = QStringLiteral("CanSuspend");
         break;
 
     default:
         return false;
     }
 
-    return dbusCallSystemd(QStringLiteral(CONSOLEKIT_SERVICE),
-                    QStringLiteral(CONSOLEKIT_PATH),
-                    QStringLiteral(CONSOLEKIT_INTERFACE),
-                    QDBusConnection::systemBus(),
-                    command,
-                    false,
-                    // canAction should be always silent because it can freeze
-                    // g_main_context_iteration Qt event loop in QMessageBox
-                    // on panel startup if there is no DBUS running.
-                    PowerProvider::DontCheckDBUS
-                   );
+    return dbusCallSystemd(QStringLiteral(CONSOLEKIT_SERVICE), QStringLiteral(CONSOLEKIT_PATH),
+                           QStringLiteral(CONSOLEKIT_INTERFACE), QDBusConnection::systemBus(),
+                           command, false,
+                           // canAction should be always silent because it can freeze
+                           // g_main_context_iteration Qt event loop in QMessageBox
+                           // on panel startup if there is no DBUS running.
+                           PowerProvider::DontCheckDBUS);
 }
 
 bool ConsoleKitProvider::doAction(Power::Action action)
@@ -342,12 +316,9 @@ bool ConsoleKitProvider::doAction(Power::Action action)
         return false;
     }
 
-    return dbusCallSystemd(QStringLiteral(CONSOLEKIT_SERVICE),
-                QStringLiteral(CONSOLEKIT_PATH),
-                QStringLiteral(CONSOLEKIT_INTERFACE),
-                QDBusConnection::systemBus(),
-                command,
-                true);
+    return dbusCallSystemd(QStringLiteral(CONSOLEKIT_SERVICE), QStringLiteral(CONSOLEKIT_PATH),
+                           QStringLiteral(CONSOLEKIT_INTERFACE), QDBusConnection::systemBus(),
+                           command, true);
 }
 
 /************************************************
@@ -356,8 +327,8 @@ bool ConsoleKitProvider::doAction(Power::Action action)
   http://www.freedesktop.org/wiki/Software/systemd/logind
  ************************************************/
 
-SystemdProvider::SystemdProvider(QObject *parent):
-    PowerProvider(parent)
+SystemdProvider::SystemdProvider(QObject* parent)
+    : PowerProvider(parent)
 {
 }
 
@@ -386,17 +357,13 @@ bool SystemdProvider::canAction(Power::Action action) const
         return false;
     }
 
-    return dbusCallSystemd(QStringLiteral(SYSTEMD_SERVICE),
-                    QStringLiteral(SYSTEMD_PATH),
-                    QStringLiteral(SYSTEMD_INTERFACE),
-                    QDBusConnection::systemBus(),
-                    command,
-                    false,
-                    // canAction should be always silent because it can freeze
-                    // g_main_context_iteration Qt event loop in QMessageBox
-                    // on panel startup if there is no DBUS running.
-                    PowerProvider::DontCheckDBUS
-                   );
+    return dbusCallSystemd(QStringLiteral(SYSTEMD_SERVICE), QStringLiteral(SYSTEMD_PATH),
+                           QStringLiteral(SYSTEMD_INTERFACE), QDBusConnection::systemBus(), command,
+                           false,
+                           // canAction should be always silent because it can freeze
+                           // g_main_context_iteration Qt event loop in QMessageBox
+                           // on panel startup if there is no DBUS running.
+                           PowerProvider::DontCheckDBUS);
 }
 
 bool SystemdProvider::doAction(Power::Action action)
@@ -420,20 +387,16 @@ bool SystemdProvider::doAction(Power::Action action)
         return false;
     }
 
-    return dbusCallSystemd(QStringLiteral(SYSTEMD_SERVICE),
-             QStringLiteral(SYSTEMD_PATH),
-             QStringLiteral(SYSTEMD_INTERFACE),
-             QDBusConnection::systemBus(),
-             command,
-             true
-            );
+    return dbusCallSystemd(QStringLiteral(SYSTEMD_SERVICE), QStringLiteral(SYSTEMD_PATH),
+                           QStringLiteral(SYSTEMD_INTERFACE), QDBusConnection::systemBus(), command,
+                           true);
 }
 
 /************************************************
   HalProvider
  ************************************************/
-HalProvider::HalProvider(QObject *parent):
-    PowerProvider(parent)
+HalProvider::HalProvider(QObject* parent)
+    : PowerProvider(parent)
 {
 }
 

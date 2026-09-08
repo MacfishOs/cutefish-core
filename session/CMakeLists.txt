@@ -3,10 +3,12 @@ set(TARGET cutefish-session)
 
 set(SOURCES
     application.cpp
+    autostartentries.cpp
     main.cpp
     process.cpp
     processmanager.cpp
     compositorprocess.cpp
+    xwaylandenvironment.cpp
     shellprocess.cpp
     shellconnection.cpp
     networkproxymanager.cpp

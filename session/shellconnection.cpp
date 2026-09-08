@@ -1,17 +1,16 @@
 #include "shellconnection.h"
 
-#include <QDebug>
-#include <QElapsedTimer>
-#include <QSocketNotifier>
-#include <QThread>
-
 #include <cstring>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 
-namespace
-{
+#include <QDebug>
+#include <QElapsedTimer>
+#include <QSocketNotifier>
+#include <QThread>
+
+namespace {
 // One byte of payload so the ancillary data has a datagram to ride on.
 bool sendFd(int socket, int fd)
 {
@@ -31,7 +30,7 @@ bool sendFd(int socket, int fd)
     message.msg_control = control.buffer;
     message.msg_controllen = sizeof(control.buffer);
 
-    cmsghdr *header = CMSG_FIRSTHDR(&message);
+    cmsghdr* header = CMSG_FIRSTHDR(&message);
     header->cmsg_level = SOL_SOCKET;
     header->cmsg_type = SCM_RIGHTS;
     header->cmsg_len = CMSG_LEN(sizeof(int));
@@ -39,9 +38,9 @@ bool sendFd(int socket, int fd)
 
     return sendmsg(socket, &message, MSG_NOSIGNAL) == 1;
 }
-}
+} // namespace
 
-ShellConnection::ShellConnection(QObject *parent)
+ShellConnection::ShellConnection(QObject* parent)
     : QObject(parent)
 {
 }
@@ -53,7 +52,7 @@ ShellConnection::~ShellConnection()
         close(m_fd);
 }
 
-bool ShellConnection::connectToCompositor(const QString &path, int timeoutMs)
+bool ShellConnection::connectToCompositor(const QString& path, int timeoutMs)
 {
     const QByteArray native = path.toUtf8();
     sockaddr_un address {};
@@ -73,7 +72,7 @@ bool ShellConnection::connectToCompositor(const QString &path, int timeoutMs)
         if (fd < 0)
             return false;
 
-        if (::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0) {
+        if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
             m_fd = fd;
             break;
         }
