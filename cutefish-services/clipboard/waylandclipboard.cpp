@@ -1,554 +1,537 @@
 #include "waylandclipboard.h"
 
-#include "qwayland-wlr-data-control-unstable-v1.h"
-
-#include <QBuffer>
-#include <QElapsedTimer>
-#include <QGuiApplication>
-#include <QImage>
-#include <QImageReader>
-#include <QImageWriter>
-#include <QMetaType>
-#include <QMimeData>
-#include <QPixmap>
-#include <QSet>
-#include <QUrl>
-#include <QWaylandClientExtensionTemplate>
-
-#include <qguiapplication_platform.h>
-
 #include <cerrno>
 #include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <unistd.h>
-
-#include <wayland-client-core.h>
-
 #include <functional>
 #include <memory>
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <wayland-client.h>
+
+#include <QByteArray>
+#include <QHash>
+#include <QMimeData>
+#include <QSocketNotifier>
+#include <QTimer>
+
+#include "ext-data-control-v1-client-protocol.h"
+#include "wlr-data-control-unstable-v1-client-protocol.h"
 
 namespace {
 
-const QString s_textMimeType = QStringLiteral("text/plain");
-const QString s_utf8TextMimeType = QStringLiteral("text/plain;charset=utf-8");
-const QString s_imageMimeType = QStringLiteral("application/x-qt-image");
+constexpr qsizetype kMaxClipboardBytes = 64 * 1024 * 1024;
+constexpr int kMaxFormats = 128;
+constexpr int kTransferTimeoutMs = 5000;
 
-bool isImageMimeType(const QString &mimeType)
+class PipeTransfer : public QObject
 {
-    return mimeType.startsWith(QStringLiteral("image/"));
-}
+public:
+    using Completion = std::function<void(bool, QByteArray)>;
 
-QStringList imageMimeTypes()
-{
-    QStringList mimeTypes;
-    for (const QByteArray &mimeType : QImageWriter::supportedMimeTypes()) {
-        const QString value = QString::fromLatin1(mimeType);
-        if (isImageMimeType(value) && !mimeTypes.contains(value))
-            mimeTypes.append(value);
+    PipeTransfer(int fd, bool writing, QByteArray bytes, qsizetype limit, Completion completion,
+                 QObject* parent)
+        : QObject(parent)
+        , m_fd(fd)
+        , m_writing(writing)
+        , m_bytes(std::move(bytes))
+        , m_limit(limit)
+        , m_completion(std::move(completion))
+        , m_notifier(fd, writing ? QSocketNotifier::Write : QSocketNotifier::Read, this)
+    {
+        const int flags = fcntl(fd, F_GETFL);
+        struct stat status {};
+        m_valid = flags >= 0 && fstat(fd, &status) == 0 &&
+            (S_ISFIFO(status.st_mode) || S_ISSOCK(status.st_mode)) &&
+            fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+        connect(&m_notifier, &QSocketNotifier::activated, this, [this] {
+            pump();
+        });
+        QTimer::singleShot(kTransferTimeoutMs, this, [this] {
+            finish(false);
+        });
+        QTimer::singleShot(0, this, [this] {
+            pump();
+        });
     }
 
-    if (!mimeTypes.contains(QStringLiteral("image/png")))
-        mimeTypes.prepend(QStringLiteral("image/png"));
-    else
-        mimeTypes.move(mimeTypes.indexOf(QStringLiteral("image/png")), 0);
+    ~PipeTransfer() override
+    {
+        if (m_fd >= 0)
+            close(m_fd);
+    }
 
-    return mimeTypes;
-}
-
-QByteArray imageFormatForMimeType(const QString &mimeType)
-{
-    const QList<QByteArray> formats = QImageWriter::imageFormatsForMimeType(mimeType.toLatin1());
-    return formats.isEmpty() ? QByteArrayLiteral("PNG") : formats.constFirst();
-}
-
-QByteArray imageReadFormatForMimeType(const QString &mimeType)
-{
-    const QList<QByteArray> formats = QImageReader::imageFormatsForMimeType(mimeType.toLatin1());
-    return formats.isEmpty() ? QByteArray() : formats.constFirst();
-}
-
-bool readPipe(int fd, QByteArray *data)
-{
-    const int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0)
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-    pollfd descriptor{fd, POLLIN, 0};
-    QElapsedTimer timeout;
-    timeout.start();
-
-    while (true) {
-        const int remaining = 1000 - static_cast<int>(timeout.elapsed());
-        if (remaining <= 0)
-            return false;
-
-        const int result = poll(&descriptor, 1, remaining);
-        if (result < 0) {
-            if (errno == EINTR)
-                continue;
-            return false;
+private:
+    ssize_t writeBytes(const char* data, size_t size)
+    {
+        sigset_t mask, previous, pending;
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGPIPE);
+        if (pthread_sigmask(SIG_BLOCK, &mask, &previous) != 0) {
+            errno = EIO;
+            return -1;
         }
-        if (result == 0)
-            return false;
+        sigpending(&pending);
+        const bool alreadyPending = sigismember(&pending, SIGPIPE);
+        const auto result = write(m_fd, data, size);
+        const int error = errno;
+        if (result < 0 && error == EPIPE && !alreadyPending) {
+            timespec timeout {};
+            sigtimedwait(&mask, nullptr, &timeout);
+        }
+        pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+        errno = error;
+        return result;
+    }
 
-        while (true) {
+    void pump()
+    {
+        if (m_fd < 0)
+            return;
+        if (!m_valid) {
+            finish(false);
+            return;
+        }
+        for (int i = 0; i < 16; ++i) {
             char buffer[4096];
-            const ssize_t length = read(fd, buffer, sizeof(buffer));
-            if (length > 0) {
-                data->append(buffer, length);
-                continue;
-            }
-            if (length == 0)
-                return true;
-            if (errno == EINTR)
-                continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                break;
-            return false;
-        }
-
-        if (descriptor.revents & (POLLERR | POLLNVAL))
-            return false;
-        if (descriptor.revents & POLLHUP)
-            return true;
-        descriptor.revents = 0;
-    }
-}
-
-bool writePipe(int fd, const QByteArray &data)
-{
-    struct sigaction ignoreAction{};
-    struct sigaction oldAction{};
-    ignoreAction.sa_handler = SIG_IGN;
-    sigemptyset(&ignoreAction.sa_mask);
-    const bool restoreSignal = sigaction(SIGPIPE, &ignoreAction, &oldAction) == 0;
-
-    const char *buffer = data.constData();
-    qsizetype remaining = data.size();
-    bool success = true;
-
-    const int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0 && (flags & O_NONBLOCK))
-        fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
-
-    while (remaining > 0) {
-        const ssize_t length = write(fd, buffer, static_cast<size_t>(remaining));
-        if (length > 0) {
-            buffer += length;
-            remaining -= length;
-            continue;
-        }
-        if (length < 0 && errno == EINTR)
-            continue;
-        success = false;
-        break;
-    }
-
-    if (restoreSignal)
-        sigaction(SIGPIPE, &oldAction, nullptr);
-    return success;
-}
-
-class WlrDataControlOffer final : public QMimeData,
-                                  public QtWayland::zwlr_data_control_offer_v1
-{
-public:
-    explicit WlrDataControlOffer(struct ::zwlr_data_control_offer_v1 *object)
-        : QtWayland::zwlr_data_control_offer_v1(object)
-    {
-    }
-
-    ~WlrDataControlOffer() override
-    {
-        if (isInitialized())
-            destroy();
-    }
-
-    QStringList formats() const override
-    {
-        QStringList result = m_formats;
-        if (hasRemoteImage() && !result.contains(s_imageMimeType))
-            result.append(s_imageMimeType);
-        return result;
-    }
-
-    bool hasFormat(const QString &mimeType) const override
-    {
-        if (mimeType == s_imageMimeType)
-            return hasRemoteImage();
-        if (mimeType == s_textMimeType && !m_formats.contains(s_textMimeType))
-            return m_formats.contains(s_utf8TextMimeType);
-        return m_formats.contains(mimeType);
-    }
-
-protected:
-    void zwlr_data_control_offer_v1_offer(const QString &mimeType) override
-    {
-        if (!m_formats.contains(mimeType))
-            m_formats.append(mimeType);
-    }
-
-    QVariant retrieveData(const QString &mimeType, QMetaType preferredType) const override
-    {
-        if (mimeType == s_imageMimeType && m_data.contains(mimeType))
-            return m_data.value(mimeType);
-
-        QString offeredMimeType = mimeType;
-        if (mimeType == s_textMimeType && !m_formats.contains(s_textMimeType))
-            offeredMimeType = s_utf8TextMimeType;
-        else if (mimeType == s_imageMimeType)
-            offeredMimeType = remoteImageMimeType();
-
-        if (offeredMimeType.isEmpty())
-            return {};
-
-        int pipeFds[2];
-        if (pipe(pipeFds) != 0)
-            return {};
-
-        const_cast<WlrDataControlOffer *>(this)->receive(offeredMimeType, pipeFds[1]);
-        close(pipeFds[1]);
-
-        auto *waylandApp = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
-        if (!waylandApp || !waylandApp->display()) {
-            close(pipeFds[0]);
-            return {};
-        }
-
-        if (wl_display_flush(waylandApp->display()) < 0 && errno != EAGAIN) {
-            close(pipeFds[0]);
-            return {};
-        }
-
-        QByteArray data;
-        const bool complete = readPipe(pipeFds[0], &data);
-        close(pipeFds[0]);
-        if (!complete)
-            return {};
-
-        QVariant result;
-        if (mimeType == s_imageMimeType) {
-            const QByteArray format = imageReadFormatForMimeType(offeredMimeType);
-            result = format.isEmpty()
-                    ? QVariant(QImage::fromData(data))
-                    : QVariant(QImage::fromData(data, format.constData()));
-        } else if (mimeType == QStringLiteral("text/uri-list")
-                && data.size() > 1
-                && preferredType != QMetaType::fromType<QByteArray>()) {
-            QList<QUrl> urls;
-            for (const QByteArray &encodedUrl : data.split('\n')) {
-                const QUrl url = QUrl::fromEncoded(encodedUrl.trimmed());
-                if (url.isValid())
-                    urls.append(url);
-            }
-            if (preferredType == QMetaType::fromType<QVariantList>()) {
-                QVariantList variantUrls;
-                for (const QUrl &url : urls)
-                    variantUrls.append(url);
-                result = variantUrls;
-            } else {
-                result = QVariant::fromValue(urls);
-            }
-        } else if (preferredType == QMetaType::fromType<QString>()) {
-            result = QString::fromUtf8(data);
-        } else {
-            result = data;
-        }
-
-        if (mimeType == s_imageMimeType)
-            m_data.insert(mimeType, result);
-        return result;
-    }
-
-private:
-    bool hasRemoteImage() const
-    {
-        return m_formats.contains(s_imageMimeType) || !remoteImageMimeType().isEmpty();
-    }
-
-    QString remoteImageMimeType() const
-    {
-        if (m_formats.contains(s_imageMimeType))
-            return s_imageMimeType;
-        for (const QString &mimeType : m_formats) {
-            if (isImageMimeType(mimeType)
-                    && !QImageReader::imageFormatsForMimeType(mimeType.toLatin1()).isEmpty())
-                return mimeType;
-        }
-        return {};
-    }
-
-    QStringList m_formats;
-    mutable QHash<QString, QVariant> m_data;
-};
-
-class WlrDataControlSource final : public QObject,
-                                   public QtWayland::zwlr_data_control_source_v1
-{
-public:
-    WlrDataControlSource(struct ::zwlr_data_control_source_v1 *object,
-                         std::unique_ptr<QMimeData> mimeData,
-                         std::function<void()> cancelled)
-        : QtWayland::zwlr_data_control_source_v1(object)
-        , m_mimeData(std::move(mimeData))
-        , m_cancelled(std::move(cancelled))
-    {
-        QSet<QString> offeredFormats;
-        for (const QString &mimeType : m_mimeData->formats()) {
-            offer(mimeType);
-            offeredFormats.insert(mimeType);
-        }
-
-        if (m_mimeData->hasText() && !offeredFormats.contains(s_utf8TextMimeType))
-            offer(s_utf8TextMimeType);
-
-        if (m_mimeData->hasImage()) {
-            for (const QString &mimeType : imageMimeTypes()) {
-                if (!offeredFormats.contains(mimeType))
-                    offer(mimeType);
-            }
-        }
-    }
-
-    ~WlrDataControlSource() override
-    {
-        if (isInitialized())
-            destroy();
-    }
-
-    const QMimeData *mimeData() const
-    {
-        return m_mimeData.get();
-    }
-
-protected:
-    void zwlr_data_control_source_v1_send(const QString &mimeType, int32_t fd) override
-    {
-        QByteArray data;
-        if (m_mimeData->hasImage() && (mimeType == s_imageMimeType || isImageMimeType(mimeType))) {
-            const QVariant imageData = m_mimeData->imageData();
-            QImage image;
-            if (imageData.canConvert<QImage>())
-                image = imageData.value<QImage>();
-            else if (imageData.canConvert<QPixmap>())
-                image = imageData.value<QPixmap>().toImage();
-
-            if (!image.isNull()) {
-                QBuffer buffer(&data);
-                buffer.open(QIODevice::WriteOnly);
-                image.save(&buffer, imageFormatForMimeType(mimeType).constData());
-            }
-        } else {
-            QString requestedMimeType = mimeType;
-            if (mimeType == s_utf8TextMimeType && !m_mimeData->hasFormat(mimeType))
-                requestedMimeType = s_textMimeType;
-            data = m_mimeData->data(requestedMimeType);
-        }
-
-        writePipe(fd, data);
-        close(fd);
-    }
-
-    void zwlr_data_control_source_v1_cancelled() override
-    {
-        if (m_cancelled)
-            m_cancelled();
-    }
-
-private:
-    std::unique_ptr<QMimeData> m_mimeData;
-    std::function<void()> m_cancelled;
-};
-
-class WlrDataControlManager;
-
-class WlrDataControlDevice final : public QObject,
-                                   public QtWayland::zwlr_data_control_device_v1
-{
-public:
-    WlrDataControlDevice(struct ::zwlr_data_control_device_v1 *object,
-                          WlrDataControlManager *manager,
-                          std::function<void()> selectionChanged)
-        : QtWayland::zwlr_data_control_device_v1(object)
-        , m_manager(manager)
-        , m_selectionChanged(std::move(selectionChanged))
-    {
-    }
-
-    ~WlrDataControlDevice() override
-    {
-        m_source.reset();
-        m_selection.reset();
-        m_pendingOffer.reset();
-        if (isInitialized())
-            destroy();
-    }
-
-    const QMimeData *mimeData() const
-    {
-        return m_source ? m_source->mimeData() : m_selection.get();
-    }
-
-    void setMimeData(std::unique_ptr<QMimeData> mimeData);
-
-protected:
-    void zwlr_data_control_device_v1_data_offer(struct ::zwlr_data_control_offer_v1 *object) override
-    {
-        m_pendingOffer = std::make_unique<WlrDataControlOffer>(object);
-    }
-
-    void zwlr_data_control_device_v1_selection(struct ::zwlr_data_control_offer_v1 *object) override
-    {
-        if (!object) {
-            m_selection.reset();
-        } else {
-            auto *baseOffer = QtWayland::zwlr_data_control_offer_v1::fromObject(object);
-            auto *offer = dynamic_cast<WlrDataControlOffer *>(baseOffer);
-            if (offer != m_pendingOffer.get())
+            if (m_writing && m_offset == m_bytes.size()) {
+                finish(true);
                 return;
-            m_selection = std::move(m_pendingOffer);
+            }
+            const auto n = m_writing
+                ? writeBytes(m_bytes.constData() + m_offset,
+                             size_t(qMin<qsizetype>(4096, m_bytes.size() - m_offset)))
+                : read(m_fd, buffer, sizeof(buffer));
+            if (n > 0) {
+                if (m_writing) {
+                    m_offset += n;
+                } else {
+                    if (n > m_limit - m_bytes.size()) {
+                        finish(false);
+                        return;
+                    }
+                    m_bytes.append(buffer, n);
+                }
+            } else if (!m_writing && n == 0) {
+                finish(true);
+                return;
+            } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                return;
+            } else if (n < 0 && errno == EINTR) {
+                continue;
+            } else {
+                finish(false);
+                return;
+            }
         }
-
-        if (m_selectionChanged)
-            m_selectionChanged();
     }
 
-    void zwlr_data_control_device_v1_primary_selection(struct ::zwlr_data_control_offer_v1 *) override
+    void finish(bool success)
     {
-        m_pendingOffer.reset();
+        if (m_fd < 0)
+            return;
+        m_notifier.setEnabled(false);
+        close(m_fd);
+        m_fd = -1;
+        auto completion = std::move(m_completion);
+        auto bytes = std::move(m_bytes);
+        deleteLater();
+        if (completion)
+            completion(success, std::move(bytes));
     }
 
-    void zwlr_data_control_device_v1_finished() override
-    {
-        if (isInitialized())
-            destroy();
-    }
-
-private:
-    WlrDataControlManager *m_manager;
-    std::function<void()> m_selectionChanged;
-    std::unique_ptr<WlrDataControlSource> m_source;
-    std::unique_ptr<WlrDataControlOffer> m_selection;
-    std::unique_ptr<WlrDataControlOffer> m_pendingOffer;
+    int m_fd;
+    bool m_writing;
+    bool m_valid = false;
+    QByteArray m_bytes;
+    qsizetype m_limit;
+    qsizetype m_offset = 0;
+    Completion m_completion;
+    QSocketNotifier m_notifier;
 };
 
-class WlrDataControlManager final
-    : public QWaylandClientExtensionTemplate<WlrDataControlManager>
-    , public QtWayland::zwlr_data_control_manager_v1
-{
-public:
-    WlrDataControlManager()
-        : QWaylandClientExtensionTemplate<WlrDataControlManager>(2)
-    {
-    }
-
-    ~WlrDataControlManager()
-    {
-        if (isInitialized())
-            destroy();
-    }
-
-    void start()
-    {
-        initialize();
-    }
+// ext and wlr data-control have identical request/event layouts.
+struct Protocol {
+    const wl_interface* manager;
+    const wl_interface* device;
+    const wl_interface* source;
+    const wl_interface* offer;
+    uint32_t version;
 };
 
-void WlrDataControlDevice::setMimeData(std::unique_ptr<QMimeData> mimeData)
+const Protocol ext {&ext_data_control_manager_v1_interface, &ext_data_control_device_v1_interface,
+                    &ext_data_control_source_v1_interface, &ext_data_control_offer_v1_interface, 1};
+const Protocol wlr {&zwlr_data_control_manager_v1_interface, &zwlr_data_control_device_v1_interface,
+                    &zwlr_data_control_source_v1_interface, &zwlr_data_control_offer_v1_interface,
+                    2};
+
+void destroyProxy(wl_proxy*& proxy, uint32_t opcode)
 {
-    if (!m_manager || !m_manager->isActive())
+    if (!proxy)
         return;
-
-    if (!mimeData)
-        return;
-
-    struct ::zwlr_data_control_source_v1 *object = m_manager->create_data_source();
-    if (!object)
-        return;
-
-    auto source = std::make_unique<WlrDataControlSource>(
-            object, std::move(mimeData), [this] {
-                QMetaObject::invokeMethod(this, [this] {
-                    m_source.reset();
-                    if (m_selectionChanged)
-                        m_selectionChanged();
-                }, Qt::QueuedConnection);
-            });
-
-    set_selection(source->object());
-    m_source = std::move(source);
+    wl_proxy_marshal_flags(proxy, opcode, nullptr, wl_proxy_get_version(proxy),
+                           WL_MARSHAL_FLAG_DESTROY);
+    proxy = nullptr;
 }
 
 } // namespace
 
-class WlrClipboard::Private : public QObject
+class WaylandClipboard::Private : public QObject
 {
 public:
-    explicit Private(WlrClipboard *q)
-        : QObject(q)
-        , q(q)
+    explicit Private(WaylandClipboard* owner)
+        : QObject(owner)
+        , q(owner)
     {
-        QObject::connect(&manager, &QWaylandClientExtension::activeChanged,
-                         this, [this] {
-            if (!manager.isActive()) {
-                device.reset();
-                emit this->q->availabilityChanged();
-                return;
-            }
-
-            auto *waylandApp = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
-            if (!waylandApp || !waylandApp->seat())
-                return;
-
-            auto *object = manager.get_data_device(waylandApp->seat());
-            if (!object)
-                return;
-
-            device = std::make_unique<WlrDataControlDevice>(object, &manager, [this] {
-                emit this->q->dataChanged();
-            });
-            emit this->q->availabilityChanged();
+        QTimer::singleShot(0, this, [this] {
+            start();
         });
     }
 
-    WlrClipboard *q;
-    WlrDataControlManager manager;
-    std::unique_ptr<WlrDataControlDevice> device;
+    ~Private() override { reset(); }
+
+    struct Offer {
+        wl_proxy* proxy = nullptr;
+        QStringList formats;
+        bool tooManyFormats = false;
+
+        ~Offer() { destroyProxy(proxy, 1); }
+    };
+
+    struct Source : QObject {
+        wl_proxy* proxy = nullptr;
+        QHash<QString, QByteArray> bytes;
+        int writes = 0;
+
+        ~Source() override { destroyProxy(proxy, 1); }
+    };
+
+    void reset()
+    {
+        ++generation;
+        delete reader;
+        reader = nullptr;
+        selection.reset();
+        pending.clear();
+        source.reset();
+        snapshot.reset();
+        destroyProxy(device, 1);
+        destroyProxy(manager, 2);
+        if (seat) {
+            wl_seat_destroy(seat);
+            seat = nullptr;
+        }
+        if (sync) {
+            wl_callback_destroy(sync);
+            sync = nullptr;
+        }
+        if (registry) {
+            wl_registry_destroy(registry);
+            registry = nullptr;
+        }
+        delete readNotifier;
+        readNotifier = nullptr;
+        delete writeNotifier;
+        writeNotifier = nullptr;
+        if (display) {
+            wl_display_flush(display);
+            wl_display_disconnect(display);
+            display = nullptr;
+        }
+    }
+
+    void failed()
+    {
+        if (!display)
+            return;
+        reset();
+        emit q->availabilityChanged();
+    }
+
+    void flush()
+    {
+        if (!display)
+            return;
+        if (wl_display_flush(display) < 0) {
+            if (errno == EAGAIN)
+                writeNotifier->setEnabled(true);
+            else
+                QTimer::singleShot(0, this, [this] {
+                    failed();
+                });
+        } else {
+            writeNotifier->setEnabled(false);
+        }
+    }
+
+    void start()
+    {
+        const auto name = qgetenv("WAYLAND_DISPLAY");
+        display = wl_display_connect(name.isEmpty() ? "wayland-0" : name.constData());
+        if (!display)
+            return;
+        readNotifier = new QSocketNotifier(wl_display_get_fd(display), QSocketNotifier::Read, this);
+        writeNotifier =
+            new QSocketNotifier(wl_display_get_fd(display), QSocketNotifier::Write, this);
+        writeNotifier->setEnabled(false);
+        connect(writeNotifier, &QSocketNotifier::activated, this, [this] {
+            flush();
+        });
+        connect(readNotifier, &QSocketNotifier::activated, this, [this] {
+            if (wl_display_dispatch(display) < 0)
+                failed();
+            else
+                flush();
+        });
+        registry = wl_display_get_registry(display);
+        static const wl_registry_listener registryListener = {
+            [](void* data, wl_registry* registry, uint32_t name, const char* interface,
+               uint32_t version) {
+                auto* self = static_cast<Private*>(data);
+                if (QByteArray(interface) == "wl_seat" && !self->seat)
+                    self->seat = static_cast<wl_seat*>(
+                        wl_registry_bind(registry, name, &wl_seat_interface, 1));
+                if (QByteArray(interface) == ext.manager->name) {
+                    self->extName = name;
+                    self->extVersion = qMin(version, ext.version);
+                } else if (QByteArray(interface) == wlr.manager->name) {
+                    self->wlrName = name;
+                    self->wlrVersion = qMin(version, wlr.version);
+                }
+            },
+            [](void* data, wl_registry*, uint32_t name) {
+                auto* self = static_cast<Private*>(data);
+                if (name == self->boundName)
+                    QTimer::singleShot(0, self, [self] {
+                        self->failed();
+                    });
+            }};
+        wl_registry_add_listener(registry, &registryListener, this);
+        sync = wl_display_sync(display);
+        static const wl_callback_listener ready = {[](void* data, wl_callback* callback, uint32_t) {
+            auto* self = static_cast<Private*>(data);
+            wl_callback_destroy(callback);
+            self->sync = nullptr;
+            self->bind();
+        }};
+        wl_callback_add_listener(sync, &ready, this);
+        flush();
+    }
+
+    void bind()
+    {
+        if (!seat || (!extName && !wlrName))
+            return;
+        protocol = extName ? &ext : &wlr;
+        boundName = extName ? extName : wlrName;
+        const auto version = extName ? extVersion : wlrVersion;
+        manager = static_cast<wl_proxy*>(
+            wl_registry_bind(registry, boundName, protocol->manager, version));
+        device = wl_proxy_marshal_flags(manager, 1, protocol->device, version, 0, nullptr, seat);
+        static const ext_data_control_device_v1_listener listener = {
+            [](void* data, ext_data_control_device_v1*, ext_data_control_offer_v1* proxy) {
+                auto* self = static_cast<Private*>(data);
+                auto offer = std::make_shared<Offer>();
+                offer->proxy = reinterpret_cast<wl_proxy*>(proxy);
+                static const ext_data_control_offer_v1_listener offerListener = {
+                    [](void* data, ext_data_control_offer_v1*, const char* mime) {
+                        auto* offer = static_cast<Offer*>(data);
+                        const auto format = QString::fromUtf8(mime);
+                        // SAVE_TARGETS is a clipboard-manager handshake, not a payload.
+                        if (format == QStringLiteral("SAVE_TARGETS"))
+                            return;
+                        if (offer->formats.contains(format))
+                            return;
+                        if (offer->formats.size() >= kMaxFormats || format.size() > 1024) {
+                            offer->tooManyFormats = true;
+                            return;
+                        }
+                        offer->formats.append(format);
+                    }};
+                wl_proxy_add_listener(
+                    offer->proxy,
+                    reinterpret_cast<void (**)(void)>(
+                        const_cast<ext_data_control_offer_v1_listener*>(&offerListener)),
+                    offer.get());
+                self->pending[offer->proxy] = std::move(offer);
+            },
+            [](void* data, ext_data_control_device_v1*, ext_data_control_offer_v1* proxy) {
+                static_cast<Private*>(data)->select(reinterpret_cast<wl_proxy*>(proxy));
+            },
+            [](void* data, ext_data_control_device_v1*) {
+                auto* self = static_cast<Private*>(data);
+                QTimer::singleShot(0, self, [self] {
+                    self->failed();
+                });
+            },
+            [](void* data, ext_data_control_device_v1*, ext_data_control_offer_v1* proxy) {
+                static_cast<Private*>(data)->pending.remove(reinterpret_cast<wl_proxy*>(proxy));
+            }};
+        wl_proxy_add_listener(device,
+                              reinterpret_cast<void (**)(void)>(
+                                  const_cast<ext_data_control_device_v1_listener*>(&listener)),
+                              this);
+        flush();
+        emit q->availabilityChanged();
+    }
+
+    void select(wl_proxy* proxy)
+    {
+        ++generation;
+        delete reader;
+        reader = nullptr;
+        snapshot.reset();
+        selection = pending.take(proxy);
+        if (!selection || selection->tooManyFormats) {
+            emit q->dataChanged();
+            return;
+        }
+        const auto expected = generation;
+        QTimer::singleShot(kTransferTimeoutMs, this, [this, expected] {
+            if (expected != generation || !collecting)
+                return;
+            delete reader;
+            reader = nullptr;
+            collecting.reset();
+        });
+        collecting = std::make_unique<QMimeData>();
+        formatIndex = 0;
+        totalBytes = 0;
+        readNext();
+    }
+
+    void readNext()
+    {
+        if (!selection)
+            return;
+        if (formatIndex >= selection->formats.size()) {
+            snapshot = std::move(collecting);
+            emit q->dataChanged();
+            return;
+        }
+        const QString format = selection->formats[formatIndex++];
+        int fds[2];
+        if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) < 0) {
+            collecting.reset();
+            return;
+        }
+        const QByteArray mime = format.toUtf8();
+        wl_proxy_marshal_flags(selection->proxy, 0, nullptr, 1, 0, mime.constData(), fds[1]);
+        close(fds[1]);
+        const auto expected = generation;
+        reader = new PipeTransfer(
+            fds[0], false, {}, kMaxClipboardBytes - totalBytes,
+            [this, expected, format](bool complete, QByteArray bytes) {
+                reader = nullptr;
+                if (expected != generation)
+                    return;
+                if (!complete) {
+                    collecting.reset();
+                    return;
+                }
+                totalBytes += bytes.size();
+                collecting->setData(format, bytes);
+                readNext();
+            },
+            this);
+        flush();
+    }
+
+    void publish(std::unique_ptr<QMimeData> data)
+    {
+        if (!device || !data || data->formats().size() > kMaxFormats)
+            return;
+        auto next = std::make_unique<Source>();
+        qsizetype size = 0;
+        for (const auto& format : data->formats()) {
+            auto bytes = data->data(format);
+            size += bytes.size();
+            if (size > kMaxClipboardBytes)
+                return;
+            next->bytes.insert(format, std::move(bytes));
+        }
+        next->proxy = wl_proxy_marshal_flags(manager, 0, protocol->source, 1, 0, nullptr);
+        static const ext_data_control_source_v1_listener sourceListener = {
+            [](void* data, ext_data_control_source_v1*, const char* mime, int fd) {
+                auto* source = static_cast<Source*>(data);
+                const auto it = source->bytes.constFind(QString::fromUtf8(mime));
+                if (it == source->bytes.cend() || source->writes >= 16) {
+                    close(fd);
+                    return;
+                }
+                ++source->writes;
+                new PipeTransfer(
+                    fd, true, *it, kMaxClipboardBytes,
+                    [source](bool, QByteArray) {
+                        --source->writes;
+                    },
+                    source);
+            },
+            [](void* data, ext_data_control_source_v1*) {
+                auto* source = static_cast<Source*>(data);
+                source->bytes.clear();
+            }};
+        wl_proxy_add_listener(
+            next->proxy,
+            reinterpret_cast<void (**)(void)>(
+                const_cast<ext_data_control_source_v1_listener*>(&sourceListener)),
+            next.get());
+        for (auto it = next->bytes.cbegin(); it != next->bytes.cend(); ++it) {
+            const auto mime = it.key().toUtf8();
+            wl_proxy_marshal_flags(next->proxy, 0, nullptr, 1, 0, mime.constData());
+        }
+        wl_proxy_marshal_flags(device, 0, nullptr, wl_proxy_get_version(device), 0, next->proxy);
+        source = std::move(next);
+        snapshot = std::move(data);
+        flush();
+    }
+
+    WaylandClipboard* q;
+    wl_display* display = nullptr;
+    wl_registry* registry = nullptr;
+    wl_callback* sync = nullptr;
+    wl_seat* seat = nullptr;
+    wl_proxy* manager = nullptr;
+    wl_proxy* device = nullptr;
+    const Protocol* protocol = nullptr;
+    uint32_t extName = 0, extVersion = 0, wlrName = 0, wlrVersion = 0, boundName = 0;
+    QSocketNotifier* readNotifier = nullptr;
+    QSocketNotifier* writeNotifier = nullptr;
+    QHash<wl_proxy*, std::shared_ptr<Offer>> pending;
+    std::shared_ptr<Offer> selection;
+    std::unique_ptr<Source> source;
+    std::unique_ptr<QMimeData> snapshot;
+    std::unique_ptr<QMimeData> collecting;
+    PipeTransfer* reader = nullptr;
+    uint64_t generation = 0;
+    qsizetype totalBytes = 0;
+    qsizetype formatIndex = 0;
 };
 
-WlrClipboard::WlrClipboard(QObject *parent)
+WaylandClipboard::WaylandClipboard(QObject* parent)
     : QObject(parent)
     , d(new Private(this))
 {
-    QMetaObject::invokeMethod(d, [this] {
-        auto *waylandApp = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
-        if (!waylandApp || !waylandApp->display() || !waylandApp->seat())
-            return;
-        d->manager.start();
-    }, Qt::QueuedConnection);
 }
 
-WlrClipboard::~WlrClipboard()
+WaylandClipboard::~WaylandClipboard()
 {
     delete d;
 }
 
-bool WlrClipboard::isAvailable() const
+bool WaylandClipboard::isAvailable() const
 {
     return d->device != nullptr;
 }
 
-const QMimeData *WlrClipboard::mimeData() const
+const QMimeData* WaylandClipboard::mimeData() const
 {
-    return d->device ? d->device->mimeData() : nullptr;
+    return d->snapshot.get();
 }
 
-void WlrClipboard::setMimeData(QMimeData *mimeData)
+void WaylandClipboard::setMimeData(QMimeData* data)
 {
-    if (!d->device) {
-        delete mimeData;
-        return;
-    }
-    d->device->setMimeData(std::unique_ptr<QMimeData>(mimeData));
+    d->publish(std::unique_ptr<QMimeData>(data));
 }

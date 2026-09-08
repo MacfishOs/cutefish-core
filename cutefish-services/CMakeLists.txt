@@ -11,6 +11,9 @@ file(GLOB_RECURSE SOURCES
   "*.h"
 )
 
+list(FILTER SOURCES EXCLUDE REGEX "/clipboard/")
+add_subdirectory(clipboard)
+
 set(HEADERS "")
 set(FORMS "")
 set(RESOURCES "")
@@ -39,12 +42,9 @@ qt6_add_dbus_adaptor(DBUS_SOURCES
 set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
 
 add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${HEADERS} ${FORMS} ${RESOURCES})
-qt6_generate_wayland_protocol_client_sources(
-        ${TARGET}
-        PRIVATE_CODE
-        FILES ${CMAKE_CURRENT_SOURCE_DIR}/clipboard/wlr-data-control-unstable-v1.xml
-)
+
 target_link_libraries(${TARGET}
+        cutefish-clipboard-backend
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets

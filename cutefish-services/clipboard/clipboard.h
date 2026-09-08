@@ -1,24 +1,24 @@
 #ifndef CLIPBOARD_H
 #define CLIPBOARD_H
 
-#include <QObject>
 #include <QClipboard>
+#include <QObject>
 
-class WlrClipboard;
+class WaylandClipboard;
 
 class Clipboard : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit Clipboard(QObject *parent = nullptr);
+    explicit Clipboard(QObject* parent = nullptr);
 
 private slots:
     void onDataChanged();
 
 private:
-    QClipboard *m_qtClipboard = nullptr;
-    WlrClipboard *m_waylandClipboard = nullptr;
+    QClipboard* m_qtClipboard = nullptr;
+    WaylandClipboard* m_waylandClipboard = nullptr;
 };
 
 #endif // CLIPBOARD_H

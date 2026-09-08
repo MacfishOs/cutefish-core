@@ -5,17 +5,17 @@
 
 class QMimeData;
 
-class WlrClipboard : public QObject
+class WaylandClipboard : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit WlrClipboard(QObject *parent = nullptr);
-    ~WlrClipboard() override;
+    explicit WaylandClipboard(QObject* parent = nullptr);
+    ~WaylandClipboard() override;
 
     bool isAvailable() const;
-    const QMimeData *mimeData() const;
-    void setMimeData(QMimeData *mimeData);
+    const QMimeData* mimeData() const;
+    void setMimeData(QMimeData* mimeData);
 
 Q_SIGNALS:
     void availabilityChanged();
@@ -23,7 +23,7 @@ Q_SIGNALS:
 
 private:
     class Private;
-    Private *d;
+    Private* d;
 };
 
 #endif // WAYLANDCLIPBOARD_H

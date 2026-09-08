@@ -38,6 +38,9 @@
   </interface>
 
   <interface name="zwlr_data_control_device_v1" version="2">
+    <enum name="error">
+      <entry name="used_source" value="1" summary="source was already used"/>
+    </enum>
     <request name="set_selection">
       <arg name="source" type="object" interface="zwlr_data_control_source_v1" allow-null="true"/>
     </request>
@@ -58,6 +61,9 @@
   </interface>
 
   <interface name="zwlr_data_control_source_v1" version="1">
+    <enum name="error">
+      <entry name="invalid_offer" value="1" summary="MIME type offered after source was used"/>
+    </enum>
     <request name="offer">
       <arg name="mime_type" type="string"/>
     </request>
