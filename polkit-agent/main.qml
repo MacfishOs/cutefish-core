@@ -50,11 +50,6 @@ Item {
         id: windowHelper
     }
 
-    FishUI.WindowShadow {
-        view: rootWindow
-        radius: _background.radius
-    }
-
     FontMetrics {
         id: fontMetrics
     }
