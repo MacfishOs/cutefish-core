@@ -6,7 +6,7 @@ import FishUI 1.0 as FishUI
 Item {
     id: root
 
-    property var heightValue: mainLayout.implicitHeight + FishUI.Units.largeSpacing * 2
+    property var heightValue: mainLayout.implicitHeight + 32
 
     width: 450
     height: heightValue
@@ -35,7 +35,7 @@ Item {
     Rectangle {
         id: _background
         anchors.fill: parent
-        radius: FishUI.Theme.bigRadius
+        radius: 16
         color: FishUI.Theme.secondBackgroundColor
     }
 
@@ -50,99 +50,79 @@ Item {
         id: windowHelper
     }
 
-    FontMetrics {
-        id: fontMetrics
-    }
-
-    RowLayout {
+    ColumnLayout {
         id: mainLayout
         anchors.fill: parent
-        anchors.margins: FishUI.Units.largeSpacing
+        anchors.margins: 16
+        spacing: 16
 
-        Image {
-            id: icon
-            source: "qrc:/svg/emblem-warning.svg"
-            sourceSize.width: 64
-            sourceSize.height: 64
-            smooth: true
-            Layout.alignment: Qt.AlignTop
-            visible: !iconImage
-        }
+        Column {
+            Layout.fillWidth: true
+            spacing: 4
 
-        Image {
-            id: iconImage
-            source: "image://icontheme/" + confirmation.iconName
-            sourceSize.width: 64
-            sourceSize.height: 64
-            Layout.alignment: Qt.AlignTop
-            visible: state !== Image.Ready
-        }
-
-        Item {
-            width: FishUI.Units.largeSpacing
-        }
-
-        ColumnLayout {
-            id: column
-            spacing: FishUI.Units.largeSpacing
-
-            Text {
-                text: confirmation.message
-                font.bold: false
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                maximumLineCount: 2
-                wrapMode: Text.Wrap
-                elide: Text.ElideRight
+            Label {
+                width: root.width - 32
+                text: "Authentication Required"
+                textFormat: Text.PlainText
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
                 color: FishUI.Theme.textColor
             }
 
-            TextField {
-                id: userTextField
-                text: confirmation.identity
-                enabled: false
-                Layout.fillWidth: true
+            Label {
+                width: root.width - 32
+                text: confirmation.message
+                textFormat: Text.PlainText
+                font.pixelSize: 14
+                wrapMode: Text.Wrap
+                lineHeight: 20
+                lineHeightMode: Text.FixedHeight
+                color: FishUI.Theme.disabledTextColor
+            }
+        }
+
+        TextField {
+            id: userTextField
+            text: confirmation.identity
+            enabled: false
+            Layout.fillWidth: true
+        }
+
+        TextField {
+            id: passwordInput
+            placeholderText: qsTr("Password")
+            echoMode: TextField.Password
+            Layout.fillWidth: true
+            selectByMouse: true
+            focus: true
+
+            onAccepted: {
+                if (passwordInput.text)
+                    confirmation.setConfirmationResult(passwordInput.text)
             }
 
-            TextField {
-                id: passwordInput
-                placeholderText: qsTr("Password")
-                echoMode: TextField.Password
-                Layout.fillWidth: true
-                selectByMouse: true
-                focus: true
+            Keys.onEscapePressed: {
+                confirmation.setConfirmationResult("")
+            }
+        }
 
-                onAccepted: {
-                    if (passwordInput.text)
-                        confirmation.setConfirmationResult(passwordInput.text)
-                }
+        RowLayout {
+            Layout.alignment: Qt.AlignRight
+            spacing: 8
 
-                Keys.onEscapePressed: {
-                    confirmation.setConfirmationResult("")
-                }
+            FishUI.ConfirmDialogButton {
+                text: qsTr("Cancel")
+                onClicked: confirmation.rejected()
             }
 
-            RowLayout {
-                spacing: FishUI.Units.largeSpacing
-
-                Button {
-                    text: qsTr("Cancel")
-                    Layout.fillWidth: true
-                    height: 50
-                    onClicked: confirmation.rejected()
-                }
-
-                Button {
-                    id: doneButton
-                    text: qsTr("Done")
-                    Layout.fillWidth: true
-                    flat: true
-                    height: 50
-                    onClicked: {
-                        doneButton.enabled = false
-                        passwordInput.enabled = false
-                        confirmation.setConfirmationResult(passwordInput.text)
-                    }
+            FishUI.ConfirmDialogButton {
+                id: doneButton
+                text: "Authenticate"
+                primary: true
+                onClicked: {
+                    doneButton.enabled = false
+                    passwordInput.enabled = false
+                    confirmation.setConfirmationResult(passwordInput.text)
                 }
             }
         }
