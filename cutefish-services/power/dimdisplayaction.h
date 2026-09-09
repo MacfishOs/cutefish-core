@@ -21,32 +21,20 @@
 #ifndef DIMDISPLAYACTION_H
 #define DIMDISPLAYACTION_H
 
-#include "action.h"
-#include <QElapsedTimer>
-#include <QList>
 #include <QDBusInterface>
 #include <QDBusUnixFileDescriptor>
-#include <QPointer>
+#include <QElapsedTimer>
+#include <QHash>
 #include <QTimer>
 
-namespace KWayland
-{
-namespace Client
-{
-class ConnectionThread;
-class Dpms;
-class DpmsManager;
-class Output;
-class Registry;
-}
-}
+#include "action.h"
 
 class DimDisplayAction : public Action
 {
     Q_OBJECT
 
 public:
-    explicit DimDisplayAction(QObject *parent = nullptr);
+    explicit DimDisplayAction(QObject* parent = nullptr);
 
     void onWakeupFromIdle() override;
     void onIdleTimeout(int msec) override;
@@ -58,10 +46,14 @@ public:
 
 private Q_SLOTS:
     void onScreenSaverActiveChanged(bool active);
-    void onLogindPropertiesChanged(const QString &interfaceName,
-                                   const QVariantMap &changedProperties,
-                                   const QStringList &invalidatedProperties);
+    void onLogindPropertiesChanged(const QString& interfaceName,
+                                   const QVariantMap& changedProperties,
+                                   const QStringList& invalidatedProperties);
     void onSuspendTimerTimeout();
+    void onDisplayOperationFinished(const QString& token, bool succeeded, bool degraded,
+                                    uint errorCode, const QString& message,
+                                    const QStringList& affectedDisplays,
+                                    qulonglong topologyGeneration, qulonglong appliedRevision);
 
 private:
     bool lockSession();
@@ -72,14 +64,13 @@ private:
     void configureScreenLocker(int timeout);
     void startSuspendCountdown();
     void inhibitSystemdLidSwitch();
-    void setupWaylandDpms();
-    void setupWaylandOutput(quint32 name, quint32 version);
-    void setupWaylandDpmsManager(quint32 name, quint32 version);
-    void addWaylandDpms(KWayland::Client::Output *output);
-    bool hasSupportedWaylandDpms() const;
+    bool hasNativeDisplayPower() const;
     bool setDisplayPower(bool on);
+    bool requestDockedLid(bool closed);
+    void finishDockedLid(bool succeeded);
 
     QDBusInterface m_iface;
+    QDBusInterface m_displayConfig;
     int m_dimOnIdleTime = 0;
     int m_suspendDelay = 900;
     int m_oldScreenBrightness = -1;
@@ -92,14 +83,12 @@ private:
     bool m_lidClosed = false;
     bool m_lidPresent = false;
     bool m_lidDisplayOff = false;
+    bool m_dockedLidPending = false;
+    bool m_dockedLidActive = false;
+    QString m_dockedOperationToken;
+    QHash<QString, bool> m_earlyDisplayResults;
 
     QDBusUnixFileDescriptor m_lidSwitchInhibitor;
-
-    KWayland::Client::ConnectionThread *m_waylandConnection = nullptr;
-    KWayland::Client::Registry *m_waylandRegistry = nullptr;
-    KWayland::Client::DpmsManager *m_waylandDpmsManager = nullptr;
-    QList<QPointer<KWayland::Client::Output>> m_waylandOutputs;
-    QList<QPointer<KWayland::Client::Dpms>> m_waylandDpmsOutputs;
 
     QTimer m_suspendTimer;
     QElapsedTimer m_displayOffTimer;

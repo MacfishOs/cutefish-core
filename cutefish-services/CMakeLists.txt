@@ -2,9 +2,6 @@ project(cutefish-services)
 set(TARGET cutefish-services)
 
 find_package(KF6IdleTime REQUIRED)
-find_package(KWayland REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS WaylandClient)
-find_package(WaylandScanner REQUIRED)
 
 file(GLOB_RECURSE SOURCES
   "*.cpp"
@@ -51,8 +48,6 @@ target_link_libraries(${TARGET}
         Qt6::DBus
         Qt6::Xml
         KF6::IdleTime
-        Qt6::WaylandClient
-        Plasma::KWaylandClient
 )
 
 file(GLOB TS_FILES translations/*.ts)
