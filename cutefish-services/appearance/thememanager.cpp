@@ -20,13 +20,13 @@
 #include "thememanager.h"
 #include "appearanceadaptor.h"
 
-#include <QDomDocument>
-#include <QTextStream>
 #include <QDBusInterface>
-#include <QProcess>
-#include <QFile>
 #include <QDebug>
+#include <QDomDocument>
+#include <QFile>
 #include <QFontDatabase>
+#include <QProcess>
+#include <QTextStream>
 static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
 static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
 static const QByteArray s_systemPointFontSize = QByteArrayLiteral("FontSize");
@@ -38,7 +38,8 @@ static QString gtkRc2Path()
 
 static QString gtk3SettingsIniPath()
 {
-    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QLatin1String("/gtk-3.0/settings.ini");
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+            + QLatin1String("/gtk-3.0/settings.ini");
 }
 
 ThemeManager *ThemeManager::self()
@@ -62,14 +63,17 @@ ThemeManager::ThemeManager(QObject *parent)
 
     // init dbus
     new AppearanceAdaptor(this);
-    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Appearance"), this);
+    QDBusConnection::sessionBus().registerObject(
+            QStringLiteral("/com/cutefish/Services/Appearance"), this);
 
     // init value
     m_isDarkMode = m_settings->value("DarkMode", false).toBool();
     m_darkModeDimsWallpaer = m_settings->value("DarkModeDimsWallpaer", false).toBool();
     m_blurEnabled = m_settings->value("BlurEnabled", true).toBool();
     m_backgroundVisible = true;
-    m_wallpaperPath = m_settings->value("Wallpaper", "/usr/share/backgrounds/cutefishos/default.jpg").toString();
+    m_wallpaperPath =
+            m_settings->value("Wallpaper", "/usr/share/backgrounds/cutefishos/default.jpg")
+                    .toString();
     m_accentColor = m_settings->value("AccentColor", 0).toInt();
     m_backgroundType = m_settings->value("BackgroundType", 0).toInt();
     m_backgroundColor = m_settings->value("BackgroundColor", "#2B8ADA").toString();
@@ -109,7 +113,6 @@ ThemeManager::ThemeManager(QObject *parent)
 
     // 登陆后更新 fontconfig
     updateFontConfig();
-
 }
 
 bool ThemeManager::isDarkMode()
@@ -185,7 +188,7 @@ void ThemeManager::setAccentColor(int accentColor)
 {
     if (m_accentColor == accentColor)
         return;
-    
+
     m_accentColor = accentColor;
     m_settings->setValue("AccentColor", m_accentColor);
 
@@ -199,6 +202,9 @@ QString ThemeManager::cursorTheme() const
 
 void ThemeManager::setCursorTheme(const QString &theme)
 {
+    if (theme.isEmpty() || theme.size() > 255 || theme == "." || theme == ".."
+        || theme.contains('/') || theme.contains('\\') || theme.contains(QChar::Null))
+        return;
     if (m_cursorTheme != theme) {
         m_cursorTheme = theme;
         m_settings->setValue("CursorTheme", m_cursorTheme);
@@ -214,6 +220,7 @@ int ThemeManager::cursorSize() const
 
 void ThemeManager::setCursorSize(int size)
 {
+    size = qBound(16, size, 64);
     if (m_cursorSize != size) {
         m_cursorSize = size;
         m_settings->setValue("CursorSize", m_cursorSize);
@@ -224,7 +231,6 @@ void ThemeManager::setCursorSize(int size)
 
 void ThemeManager::updateGtk2Config()
 {
-
 }
 
 QString ThemeManager::systemFont()
@@ -314,7 +320,8 @@ void ThemeManager::updateGtk3Config()
     settings.beginGroup("Settings");
 
     // font
-    settings.setValue("gtk-font-name", QString("%1 %2").arg(systemFont()).arg(systemFontPointSize()));
+    settings.setValue("gtk-font-name",
+                      QString("%1 %2").arg(systemFont()).arg(systemFontPointSize()));
     // dark mode
     settings.setValue("gtk-application-prefer-dark-theme", isDarkMode());
     // icon theme
@@ -339,44 +346,20 @@ void ThemeManager::applyCursorSettings()
 {
     m_settings->sync();
 
-    QSettings inputSettings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                                + QStringLiteral("/kcminputrc"),
-                            QSettings::IniFormat);
-    inputSettings.beginGroup(QStringLiteral("Mouse"));
-    inputSettings.setValue(QStringLiteral("cursorTheme"), cursorTheme());
-    inputSettings.setValue(QStringLiteral("cursorSize"), cursorSize());
-    inputSettings.endGroup();
-    inputSettings.sync();
-
     updateGtk3Config();
-
-    QDBusMessage message = QDBusMessage::createSignal("/KGlobalSettings",
-                                                      "org.kde.KGlobalSettings",
-                                                      "notifyChange");
-    message << 5;
-    message << 0;
-    QDBusConnection::sessionBus().send(message);
-
-    QDBusInterface kwin(QStringLiteral("org.kde.KWin"), QStringLiteral("/KWin"),
-                        QStringLiteral("org.kde.KWin"), QDBusConnection::sessionBus());
-    if (kwin.isValid())
-        kwin.asyncCall(QStringLiteral("reconfigure"));
 }
 
 void ThemeManager::updateFontConfig()
 {
     QFontDatabase database;
     const QStringList families = database.families();
-    const QString familyFont = families.contains(systemFont())
-            ? systemFont()
-            : families.contains(QStringLiteral("Noto Sans"))
-                ? QStringLiteral("Noto Sans")
-                : QStringLiteral("DejaVu Sans");
-    const QString fixedFont = families.contains(systemFixedFont())
-            ? systemFixedFont()
+    const QString familyFont = families.contains(systemFont()) ? systemFont()
+            : families.contains(QStringLiteral("Noto Sans"))   ? QStringLiteral("Noto Sans")
+                                                               : QStringLiteral("DejaVu Sans");
+    const QString fixedFont = families.contains(systemFixedFont()) ? systemFixedFont()
             : families.contains(QStringLiteral("Noto Sans Mono"))
-                ? QStringLiteral("Noto Sans Mono")
-                : QStringLiteral("DejaVu Sans Mono");
+            ? QStringLiteral("Noto Sans Mono")
+            : QStringLiteral("DejaVu Sans Mono");
     const QString familyFallback = familyFont;
 
     QSettings settings(QSettings::UserScope, "cutefishos", "theme");
@@ -384,57 +367,62 @@ void ThemeManager::updateFontConfig()
     QString hintStyle = settings.value("FontHintStyle", "hintslight").toString();
 
     QString content = QString("<?xml version=\"1.0\"?>"
-                        "<!DOCTYPE fontconfig SYSTEM \"fonts.dtd\">"
-                        "<fontconfig>"
-                        "<match target=\"pattern\">"
-                        "<test qual=\"any\" name=\"family\">"
-                        "<string>serif</string>"
-                        "</test>"
-                        "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
-                        "<string>%1</string>"
-                        "<string>%2</string>"
-                        "</edit>"
-                        "</match>"
-                        "<match target=\"pattern\">"
-                        "<test qual=\"any\" name=\"family\">"
-                        "<string>sans-serif</string>"
-                        "</test>"
-                        "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
-                        "<string>%3</string>"
-                        "<string>%4</string>"
-                        "</edit>"
-                        "</match>"
-                        "<match target=\"pattern\">"
-                        "<test qual=\"any\" name=\"family\">"
-                        "<string>monospace</string>"
-                        "</test>"
-                        "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
-                        "<string>%5</string>"
-                        "<string>%6</string>"
-                        "<string>%7</string>"
-                        "</edit>"
-                        "</match>"
-                        "<match target=\"font\">"
-                        "<edit name=\"rgba\" mode=\"assign\"><const>rgb</const></edit>"
-                        "</match>"
-                        "<match target=\"font\">"
-                        "<edit name=\"hinting\" mode=\"assign\">"
-                        "<bool>%8</bool>"
-                        "</edit>"
-                        "</match>"
-                        "<match target=\"font\">"
-                        "<edit name=\"hintstyle\" mode=\"assign\">"
-                        "<const>%9</const>"
-                        "</edit>"
-                        "</match>"
-                        "</fontconfig>"
-    ).arg(familyFont).arg(familyFallback)
-     .arg(familyFont).arg(familyFallback)
-     .arg(fixedFont).arg(fixedFont)
-     .arg(familyFont).arg(hinting ? "true" : "false")
-     .arg(hintStyle);
+                              "<!DOCTYPE fontconfig SYSTEM \"fonts.dtd\">"
+                              "<fontconfig>"
+                              "<match target=\"pattern\">"
+                              "<test qual=\"any\" name=\"family\">"
+                              "<string>serif</string>"
+                              "</test>"
+                              "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
+                              "<string>%1</string>"
+                              "<string>%2</string>"
+                              "</edit>"
+                              "</match>"
+                              "<match target=\"pattern\">"
+                              "<test qual=\"any\" name=\"family\">"
+                              "<string>sans-serif</string>"
+                              "</test>"
+                              "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
+                              "<string>%3</string>"
+                              "<string>%4</string>"
+                              "</edit>"
+                              "</match>"
+                              "<match target=\"pattern\">"
+                              "<test qual=\"any\" name=\"family\">"
+                              "<string>monospace</string>"
+                              "</test>"
+                              "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
+                              "<string>%5</string>"
+                              "<string>%6</string>"
+                              "<string>%7</string>"
+                              "</edit>"
+                              "</match>"
+                              "<match target=\"font\">"
+                              "<edit name=\"rgba\" mode=\"assign\"><const>rgb</const></edit>"
+                              "</match>"
+                              "<match target=\"font\">"
+                              "<edit name=\"hinting\" mode=\"assign\">"
+                              "<bool>%8</bool>"
+                              "</edit>"
+                              "</match>"
+                              "<match target=\"font\">"
+                              "<edit name=\"hintstyle\" mode=\"assign\">"
+                              "<const>%9</const>"
+                              "</edit>"
+                              "</match>"
+                              "</fontconfig>")
+                              .arg(familyFont)
+                              .arg(familyFallback)
+                              .arg(familyFont)
+                              .arg(familyFallback)
+                              .arg(fixedFont)
+                              .arg(fixedFont)
+                              .arg(familyFont)
+                              .arg(hinting ? "true" : "false")
+                              .arg(hintStyle);
 
-    QString targetPath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QLatin1Char('/') + QLatin1String("fontconfig"));
+    QString targetPath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                       + QLatin1Char('/') + QLatin1String("fontconfig"));
 
     if (!QDir(targetPath).exists()) {
         QDir(targetPath).mkpath(targetPath);
