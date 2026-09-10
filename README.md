@@ -4,18 +4,20 @@ System backend and start session and more.
 
 ## Compile dependencies
 
-Install Qt 6, KDE Frameworks 6, NetworkManager, Polkit, Fontconfig, FreeType
-and the development tools provided by your distribution. The currently
-retained services daemon has its remaining input-backend dependencies
-declared in `cutefish-services/CMakeLists.txt`.
+Install Qt 6, Wayland development libraries, wayland-protocols (>= 1.39),
+Polkit, Fontconfig, FreeType, and the development tools provided by your
+distribution. Core does not depend on KDE Frameworks.
+
+The services daemon consumes `ext_idle_notifier_v1` from the compositor for
+idle timeouts and resume notifications. Cutefish compositor implements this
+protocol; idle detection requires a compositor that advertises it.
 
 ## Runtime
 
-For the Wayland session, install KWin Wayland and select `Cutefish (KWin
-Wayland)` from the display manager. The session entry launches KWin with
-Wayland enabled and starts `cutefish-session` inside the
-compositor. The session starts the retained services daemon, waits for its
-D-Bus service to register, and then starts the desktop components.
+For the Wayland session, install `cutefish-compositor` and `cutefish-shell`,
+then select `Cutefish (Wayland)` from the display manager. The session entry
+starts `cutefish-session`, which supervises the compositor and the separate
+shell process. The services daemon provides the session's system backends.
 
 ## Build
 
