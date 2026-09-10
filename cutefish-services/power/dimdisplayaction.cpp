@@ -20,7 +20,6 @@
 
 #include "dimdisplayaction.h"
 
-#include <KIdleTime>
 #include <utility>
 
 #include <QDBusPendingCallWatcher>
@@ -47,7 +46,7 @@ constexpr int s_brightnessDimTimeoutFinalNumerator = 3;
 constexpr int s_brightnessDimTimeoutFinalDenominator = 4;
 } // namespace
 
-DimDisplayAction::DimDisplayAction(QObject* parent)
+DimDisplayAction::DimDisplayAction(QObject *parent)
     : Action(parent)
     , m_iface("com.cutefish.Services", "/com/cutefish/Services/Brightness",
               "com.cutefish.Services.Brightness", QDBusConnection::sessionBus())
@@ -57,20 +56,20 @@ DimDisplayAction::DimDisplayAction(QObject* parent)
                       QStringLiteral("com.cutefish.DisplayConfig1"), QDBusConnection::sessionBus())
 {
     QDBusConnection::sessionBus().connect(
-        QString::fromLatin1(s_screenSaverService), QString::fromLatin1(s_screenSaverPath),
-        QString::fromLatin1(s_screenSaverInterface), QStringLiteral("ActiveChanged"), this,
-        SLOT(onScreenSaverActiveChanged(bool)));
+            QString::fromLatin1(s_screenSaverService), QString::fromLatin1(s_screenSaverPath),
+            QString::fromLatin1(s_screenSaverInterface), QStringLiteral("ActiveChanged"), this,
+            SLOT(onScreenSaverActiveChanged(bool)));
     QDBusConnection::systemBus().connect(
-        QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
-        QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("PropertiesChanged"),
-        this, SLOT(onLogindPropertiesChanged(QString, QVariantMap, QStringList)));
+            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
+            QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("PropertiesChanged"),
+            this, SLOT(onLogindPropertiesChanged(QString, QVariantMap, QStringList)));
     m_suspendTimer.setSingleShot(true);
     connect(&m_suspendTimer, &QTimer::timeout, this, &DimDisplayAction::onSuspendTimerTimeout);
     QDBusConnection::sessionBus().connect(
-        m_displayConfig.service(), m_displayConfig.path(), m_displayConfig.interface(),
-        QStringLiteral("OperationFinished"), this,
-        SLOT(onDisplayOperationFinished(QString, bool, bool, uint, QString, QStringList, qulonglong,
-                                        qulonglong)));
+            m_displayConfig.service(), m_displayConfig.path(), m_displayConfig.interface(),
+            QStringLiteral("OperationFinished"), this,
+            SLOT(onDisplayOperationFinished(QString, bool, bool, uint, QString, QStringList,
+                                            qulonglong, qulonglong)));
 }
 
 void DimDisplayAction::setLidPresent(bool present)
@@ -101,6 +100,7 @@ bool DimDisplayAction::setDisplayPower(bool on)
 
 void DimDisplayAction::onWakeupFromIdle()
 {
+    m_idleLockPending = false;
     if (!m_dimmed) {
         return;
     }
@@ -122,9 +122,7 @@ void DimDisplayAction::onWakeupFromIdle()
 
 void DimDisplayAction::onIdleTimeout(int msec)
 {
-    // KIdleTime may already have queued a timeout notification when the
-    // policy is changed. Never trigger the idle action if that stale
-    // notification is delivered after screen-off has been disabled.
+    // Policy changes can invalidate an already queued notification.
     if (m_dimOnIdleTime < 0)
         return;
 
@@ -135,22 +133,24 @@ void DimDisplayAction::onIdleTimeout(int msec)
         // Wait for ActiveChanged before powering off the display so locking
         // is established before DPMS is disabled.
         m_idleLockPending = true;
+        if (m_screenSaverActive)
+            onScreenSaverActiveChanged(true);
         return;
     }
 
-    if (!hasNativeDisplayPower() &&
-        sec ==
-            (m_dimOnIdleTime * s_brightnessDimTimeoutFinalNumerator /
-             s_brightnessDimTimeoutFinalDenominator)) {
+    if (!hasNativeDisplayPower()
+        && sec
+                == (m_dimOnIdleTime * s_brightnessDimTimeoutFinalNumerator
+                    / s_brightnessDimTimeoutFinalDenominator)) {
         if (m_oldScreenBrightness > 0) {
             const int newBrightness = qRound(m_oldScreenBrightness / 8.0);
             m_iface.asyncCall("setValue", QVariant::fromValue(newBrightness));
         }
         m_dimmed = true;
-    } else if (!hasNativeDisplayPower() &&
-               sec ==
-                   (m_dimOnIdleTime * s_brightnessDimTimeoutNumerator /
-                    s_brightnessDimTimeoutDenominator)) {
+    } else if (!hasNativeDisplayPower()
+               && sec
+                       == (m_dimOnIdleTime * s_brightnessDimTimeoutNumerator
+                           / s_brightnessDimTimeoutDenominator)) {
         m_oldScreenBrightness = m_iface.property("brightness").toInt();
 
         if (m_oldScreenBrightness > 0) {
@@ -185,9 +185,9 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
     }
 
     const int halfTimeout =
-        timeout * s_brightnessDimTimeoutNumerator / s_brightnessDimTimeoutDenominator;
+            timeout * s_brightnessDimTimeoutNumerator / s_brightnessDimTimeoutDenominator;
     const int finalDimTimeout =
-        timeout * s_brightnessDimTimeoutFinalNumerator / s_brightnessDimTimeoutFinalDenominator;
+            timeout * s_brightnessDimTimeoutFinalNumerator / s_brightnessDimTimeoutFinalDenominator;
 
     if (halfTimeout > 0)
         registerIdleTimeout(halfTimeout);
@@ -208,8 +208,8 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
 
 void DimDisplayAction::configureScreenLocker(int timeout)
 {
-    QSettings settings(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) +
-                           QStringLiteral("/kscreenlockerrc"),
+    QSettings settings(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)
+                               + QStringLiteral("/kscreenlockerrc"),
                        QSettings::IniFormat);
     settings.beginGroup(QStringLiteral("Daemon"));
     settings.setValue(QStringLiteral("Autolock"), timeout >= 0);
@@ -219,14 +219,15 @@ void DimDisplayAction::configureScreenLocker(int timeout)
     settings.sync();
 
     QDBusInterface screenSaver(
-        QString::fromLatin1(s_kdeScreenSaverService), QString::fromLatin1(s_screenSaverPath),
-        QString::fromLatin1(s_kdeScreenSaverInterface), QDBusConnection::sessionBus());
+            QString::fromLatin1(s_kdeScreenSaverService), QString::fromLatin1(s_screenSaverPath),
+            QString::fromLatin1(s_kdeScreenSaverInterface), QDBusConnection::sessionBus());
     if (screenSaver.isValid())
         screenSaver.asyncCall(QStringLiteral("configure"));
 }
 
 void DimDisplayAction::onScreenSaverActiveChanged(bool active)
 {
+    m_screenSaverActive = active;
     if (!active) {
         m_idleLockPending = false;
         m_dimmed = false;
@@ -245,8 +246,7 @@ void DimDisplayAction::onScreenSaverActiveChanged(bool active)
     if (m_displayOff || m_dimOnIdleTime < 0)
         return;
 
-    const int idleTime = KIdleTime::instance()->idleTime();
-    if (!m_idleLockPending && idleTime < m_dimOnIdleTime * 1000)
+    if (!m_idleLockPending)
         return;
 
     m_idleLockPending = false;
@@ -257,19 +257,19 @@ void DimDisplayAction::onScreenSaverActiveChanged(bool active)
     trySuspend();
 }
 
-void DimDisplayAction::onLogindPropertiesChanged(const QString& interfaceName,
-                                                 const QVariantMap& changedProperties,
-                                                 const QStringList& invalidatedProperties)
+void DimDisplayAction::onLogindPropertiesChanged(const QString &interfaceName,
+                                                 const QVariantMap &changedProperties,
+                                                 const QStringList &invalidatedProperties)
 {
     if (interfaceName != QString::fromLatin1(s_logindInterface))
         return;
 
-    if (!changedProperties.contains(QStringLiteral("BlockInhibited")) &&
-        !changedProperties.contains(QStringLiteral("BlockWeakInhibited")) &&
-        !changedProperties.contains(QStringLiteral("DelayInhibited")) &&
-        !invalidatedProperties.contains(QStringLiteral("BlockInhibited")) &&
-        !invalidatedProperties.contains(QStringLiteral("BlockWeakInhibited")) &&
-        !invalidatedProperties.contains(QStringLiteral("DelayInhibited"))) {
+    if (!changedProperties.contains(QStringLiteral("BlockInhibited"))
+        && !changedProperties.contains(QStringLiteral("BlockWeakInhibited"))
+        && !changedProperties.contains(QStringLiteral("DelayInhibited"))
+        && !invalidatedProperties.contains(QStringLiteral("BlockInhibited"))
+        && !invalidatedProperties.contains(QStringLiteral("BlockWeakInhibited"))
+        && !invalidatedProperties.contains(QStringLiteral("DelayInhibited"))) {
         return;
     }
 
@@ -288,8 +288,8 @@ void DimDisplayAction::onSuspendTimerTimeout()
 bool DimDisplayAction::lockSession()
 {
     QDBusInterface screenSaver(
-        QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/ScreenSaver"),
-        QStringLiteral("org.freedesktop.ScreenSaver"), QDBusConnection::sessionBus());
+            QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/ScreenSaver"),
+            QStringLiteral("org.freedesktop.ScreenSaver"), QDBusConnection::sessionBus());
     if (!screenSaver.isValid())
         return false;
 
@@ -312,8 +312,8 @@ bool DimDisplayAction::suspendSession()
         return false;
 
     const QDBusMessage reply = session.call(QStringLiteral("suspend"));
-    return reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty() &&
-        reply.arguments().constFirst().toBool();
+    return reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()
+            && reply.arguments().constFirst().toBool();
 }
 
 void DimDisplayAction::trySuspend()
@@ -432,8 +432,8 @@ bool DimDisplayAction::requestDockedLid(bool closed)
 {
     if (!m_displayConfig.isValid())
         return false;
-    auto* watcher = new QDBusPendingCallWatcher(
-        m_displayConfig.asyncCall(QStringLiteral("SetDockedLidClosed"), closed), this);
+    auto *watcher = new QDBusPendingCallWatcher(
+            m_displayConfig.asyncCall(QStringLiteral("SetDockedLidClosed"), closed), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, closed] {
         QDBusPendingReply<QString> reply = *watcher;
         watcher->deleteLater();
@@ -449,8 +449,8 @@ bool DimDisplayAction::requestDockedLid(bool closed)
     return true;
 }
 
-void DimDisplayAction::onDisplayOperationFinished(const QString& token, bool succeeded, bool, uint,
-                                                  const QString&, const QStringList&, qulonglong,
+void DimDisplayAction::onDisplayOperationFinished(const QString &token, bool succeeded, bool, uint,
+                                                  const QString &, const QStringList &, qulonglong,
                                                   qulonglong)
 {
     if (token == m_dockedOperationToken)
@@ -493,10 +493,10 @@ void DimDisplayAction::inhibitSystemdLidSwitch()
     if (!logind.isValid())
         return;
 
-    const QDBusMessage reply =
-        logind.call(QStringLiteral("Inhibit"), QStringLiteral("handle-lid-switch"),
-                    QStringLiteral("Cutefish Settings"),
-                    QStringLiteral("Cutefish manages lid power policy"), QStringLiteral("block"));
+    const QDBusMessage reply = logind.call(
+            QStringLiteral("Inhibit"), QStringLiteral("handle-lid-switch"),
+            QStringLiteral("Cutefish Settings"),
+            QStringLiteral("Cutefish manages lid power policy"), QStringLiteral("block"));
     if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
         qWarning() << "Unable to inhibit systemd lid handling:" << reply.errorMessage();
         return;

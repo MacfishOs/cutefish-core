@@ -34,7 +34,7 @@ class DimDisplayAction : public Action
     Q_OBJECT
 
 public:
-    explicit DimDisplayAction(QObject* parent = nullptr);
+    explicit DimDisplayAction(QObject *parent = nullptr);
 
     void onWakeupFromIdle() override;
     void onIdleTimeout(int msec) override;
@@ -46,13 +46,13 @@ public:
 
 private Q_SLOTS:
     void onScreenSaverActiveChanged(bool active);
-    void onLogindPropertiesChanged(const QString& interfaceName,
-                                   const QVariantMap& changedProperties,
-                                   const QStringList& invalidatedProperties);
+    void onLogindPropertiesChanged(const QString &interfaceName,
+                                   const QVariantMap &changedProperties,
+                                   const QStringList &invalidatedProperties);
     void onSuspendTimerTimeout();
-    void onDisplayOperationFinished(const QString& token, bool succeeded, bool degraded,
-                                    uint errorCode, const QString& message,
-                                    const QStringList& affectedDisplays,
+    void onDisplayOperationFinished(const QString &token, bool succeeded, bool degraded,
+                                    uint errorCode, const QString &message,
+                                    const QStringList &affectedDisplays,
                                     qulonglong topologyGeneration, qulonglong appliedRevision);
 
 private:
@@ -78,6 +78,7 @@ private:
     bool m_displayPoweredOff = false;
     bool m_displayOff = false;
     bool m_suspendRequested = false;
+    bool m_screenSaverActive = false;
     bool m_idleLockPending = false;
     bool m_suspendDue = false;
     bool m_lidClosed = false;

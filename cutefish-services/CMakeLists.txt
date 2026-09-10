@@ -1,7 +1,6 @@
 project(cutefish-services)
 set(TARGET cutefish-services)
 
-find_package(KF6IdleTime REQUIRED)
 
 file(GLOB_RECURSE SOURCES
   "*.cpp"
@@ -9,7 +8,9 @@ file(GLOB_RECURSE SOURCES
 )
 
 list(FILTER SOURCES EXCLUDE REGEX "/clipboard/")
+list(FILTER SOURCES EXCLUDE REGEX "/idle/")
 add_subdirectory(clipboard)
+add_subdirectory(idle)
 
 set(HEADERS "")
 set(FORMS "")
@@ -47,7 +48,7 @@ target_link_libraries(${TARGET}
         Qt6::Widgets
         Qt6::DBus
         Qt6::Xml
-        KF6::IdleTime
+        cutefish-idle-backend
 )
 
 file(GLOB TS_FILES translations/*.ts)

@@ -21,11 +21,12 @@
 #ifndef IDLEMANAGER_H
 #define IDLEMANAGER_H
 
-#include <QObject>
 #include <QHash>
+#include <QObject>
 #include <QSet>
 
 #include "action.h"
+#include "idle/waylandidle.h"
 
 class IdleManager : public QObject
 {
@@ -39,12 +40,14 @@ public:
     void unregisterActionTimeouts(Action *action);
 
 private slots:
-    void onKIdleTimeoutReached(int, int);
+    void onIdleTimeoutReached(int, int);
     void onResumingFromIdle();
 
 private:
     friend class Action;
 
+    WaylandIdle m_idle;
+    QHash<Action *, QMetaObject::Connection> m_destroyConnections;
     QHash<Action *, QList<int>> m_registeredActionTimeouts;
     QSet<Action *> m_pendingResumeFromIdleActions;
 };

@@ -17,7 +17,6 @@
  *   51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA .        *
  ***************************************************************************/
 
-
 #ifndef CUTEFISH_SETTINGS_DAEMON_ACTION_H
 #define CUTEFISH_SETTINGS_DAEMON_ACTION_H
 
@@ -25,6 +24,7 @@
 #include <QVariantMap>
 
 class IDleManager;
+
 class Q_DECL_EXPORT Action : public QObject
 {
     Q_OBJECT
@@ -42,10 +42,11 @@ public:
 
     /**
      * This function is meant to find out if this action is available on this system. Actions
-     * CAN reimplement this function if they are dependent on specific hardware/software requirements.
-     * By default, this function will always return true.
+     * CAN reimplement this function if they are dependent on specific hardware/software
+     * requirements. By default, this function will always return true.
      *
-     * Should this function return false, the core will delete and ignore the action right after creation.
+     * Should this function return false, the core will delete and ignore the action right after
+     * creation.
      *
      * @returns Whether this action is supported or not by the current system
      */
@@ -54,27 +55,22 @@ public:
     virtual void setTimeout(int timeout);
 
 protected:
-    /**
-     * Registers an idle timeout for this action. Call this function and not KIdleTime directly to take advantage
-     * of Action's automated handling of idle timeouts. Also, please reimplement onIdleTimeout instead of listening
-     * to KIdleTime's signals to catch idle timeout events.
-     *
-     * @param msec The idle timeout to be registered in milliseconds.
-     */
-    void registerIdleTimeout(int msec);
+    // Registration uses seconds; onIdleTimeout receives milliseconds.
+    void registerIdleTimeout(int seconds);
 
     void unregisterIdleTimeout();
 
 public Q_SLOTS:
     /**
-     * This slot is triggered whenever an idle timeout registered with registerIdleTimeout is reached.
+     * This slot is triggered whenever an idle timeout registered with registerIdleTimeout is
+     * reached.
      *
      * @param msec The idle timeout reached in milliseconds
      */
     virtual void onIdleTimeout(int msec) = 0;
     /**
-     * This slot is triggered whenever the PC wakes up from an Idle state. It is @b always called after a registered
-     * idle timeout has been reached.
+     * This slot is triggered whenever the PC wakes up from an Idle state. It is @b always called
+     * after a registered idle timeout has been reached.
      */
     virtual void onWakeupFromIdle() = 0;
 
@@ -83,7 +79,7 @@ Q_SIGNALS:
 
 private:
     class Private;
-    Private * const d;
+    Private *const d;
 
     friend class IDleManager;
 };

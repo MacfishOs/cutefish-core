@@ -1,0 +1,36 @@
+cmake_minimum_required(VERSION 3.22)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    project(cutefish-idle LANGUAGES C CXX)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_AUTOMOC ON)
+    find_package(Qt6 REQUIRED COMPONENTS Core)
+    include(CTest)
+endif()
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(IdleWayland REQUIRED IMPORTED_TARGET wayland-client)
+pkg_check_modules(IdleProtocols REQUIRED wayland-protocols>=1.39)
+pkg_get_variable(IDLE_PROTOCOL_DIR wayland-protocols pkgdatadir)
+pkg_get_variable(IDLE_SCANNER wayland-scanner wayland_scanner)
+set(xml ${IDLE_PROTOCOL_DIR}/staging/ext-idle-notify/ext-idle-notify-v1.xml)
+set(header ${CMAKE_CURRENT_BINARY_DIR}/ext-idle-notify-v1-client-protocol.h)
+set(code ${CMAKE_CURRENT_BINARY_DIR}/ext-idle-notify-v1-protocol.c)
+add_custom_command(OUTPUT ${header} ${code}
+    COMMAND ${IDLE_SCANNER} client-header ${xml} ${header}
+    COMMAND ${IDLE_SCANNER} private-code ${xml} ${code}
+    DEPENDS ${xml} VERBATIM)
+add_library(cutefish-idle-backend STATIC waylandidle.cpp waylandidle.h ${header} ${code})
+target_include_directories(cutefish-idle-backend PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(cutefish-idle-backend PUBLIC Qt6::Core PRIVATE PkgConfig::IdleWayland)
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND BUILD_TESTING)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    pkg_check_modules(IdleServer REQUIRED IMPORTED_TARGET wayland-server)
+    set(server_header ${CMAKE_CURRENT_BINARY_DIR}/ext-idle-notify-v1-server-protocol.h)
+    add_custom_command(OUTPUT ${server_header}
+        COMMAND ${IDLE_SCANNER} server-header ${xml} ${server_header}
+        DEPENDS ${xml} VERBATIM)
+    add_executable(waylandidle_test tests/waylandidle_test.cpp ${server_header})
+    target_include_directories(waylandidle_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+    target_link_libraries(waylandidle_test PRIVATE cutefish-idle-backend Qt6::Test PkgConfig::IdleServer)
+    add_test(NAME waylandidle_test COMMAND waylandidle_test)
+endif()
