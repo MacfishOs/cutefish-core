@@ -78,8 +78,6 @@ private:
     bool m_displayPoweredOff = false;
     bool m_displayOff = false;
     bool m_suspendRequested = false;
-    bool m_screenSaverActive = false;
-    bool m_idleLockPending = false;
     bool m_suspendDue = false;
     bool m_lidClosed = false;
     bool m_lidPresent = false;

@@ -100,7 +100,6 @@ bool DimDisplayAction::setDisplayPower(bool on)
 
 void DimDisplayAction::onWakeupFromIdle()
 {
-    m_idleLockPending = false;
     if (!m_dimmed) {
         return;
     }
@@ -129,12 +128,10 @@ void DimDisplayAction::onIdleTimeout(int msec)
     int sec = msec / 1000;
 
     if (sec == m_dimOnIdleTime && !m_displayOff) {
-        // KScreenLocker owns the automatic lock and its inhibitor handling.
-        // Wait for ActiveChanged before powering off the display so locking
-        // is established before DPMS is disabled.
-        m_idleLockPending = true;
-        if (m_screenSaverActive)
-            onScreenSaverActiveChanged(true);
+        turnDisplayOff();
+        m_dimmed = true;
+        startSuspendCountdown();
+        trySuspend();
         return;
     }
 
@@ -172,7 +169,6 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
 
     m_dimOnIdleTime = timeout;
     m_suspendDelay = qMax(0, suspendDelay);
-    m_idleLockPending = false;
     m_suspendTimer.stop();
     if (!m_lidClosed)
         m_suspendDue = false;
@@ -227,34 +223,16 @@ void DimDisplayAction::configureScreenLocker(int timeout)
 
 void DimDisplayAction::onScreenSaverActiveChanged(bool active)
 {
-    m_screenSaverActive = active;
-    if (!active) {
-        m_idleLockPending = false;
-        m_dimmed = false;
-
-        if (!m_lidClosed) {
-            m_suspendTimer.stop();
-            m_suspendDue = false;
-            m_displayOffTimer.invalidate();
-
-            if (m_displayOff)
-                restoreDisplay();
-        }
+    if (active)
         return;
+    m_dimmed = false;
+    if (!m_lidClosed) {
+        m_suspendTimer.stop();
+        m_suspendDue = false;
+        m_displayOffTimer.invalidate();
+        if (m_displayOff)
+            restoreDisplay();
     }
-
-    if (m_displayOff || m_dimOnIdleTime < 0)
-        return;
-
-    if (!m_idleLockPending)
-        return;
-
-    m_idleLockPending = false;
-    turnDisplayOff();
-    m_dimmed = true;
-    startSuspendCountdown();
-
-    trySuspend();
 }
 
 void DimDisplayAction::onLogindPropertiesChanged(const QString &interfaceName,
