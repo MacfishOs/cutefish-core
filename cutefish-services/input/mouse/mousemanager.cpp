@@ -5,21 +5,21 @@
 
 #include <QDBusConnection>
 
-namespace
-{
+namespace {
 constexpr auto s_leftHandedKey = "leftHanded";
 constexpr auto s_naturalScrollKey = "naturalScroll";
 constexpr auto s_pointerAccelerationKey = "pointerAcceleration";
 constexpr auto s_accelerationProfileKey = "accelerationProfile";
-}
+} // namespace
 
 Mouse::Mouse(QObject *parent)
     : QObject(parent)
     , m_backend(new KWinInputBackend(KWinInputBackend::DeviceType::Pointer, this))
-    , m_settings(QSettings::UserScope, QStringLiteral("cutefishos"), QStringLiteral("mouse"))
+    , m_settings(QSettings::UserScope, QStringLiteral("cutefish"), QStringLiteral("mouse"))
 {
     new MouseAdaptor(this);
-    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Input/Mouse"), this);
+    QDBusConnection::sessionBus().registerObject(
+            QStringLiteral("/com/cutefish/Services/Input/Mouse"), this);
 
     connect(m_backend, &KWinInputBackend::devicesChanged, this, [this] {
         restoreSettings();
@@ -48,8 +48,9 @@ void Mouse::restoreSettings()
     restoreBoolean(QStringLiteral("pointerAccelerationProfileFlat"), s_accelerationProfileKey);
 
     if (m_settings.contains(QLatin1String(s_pointerAccelerationKey))) {
-        m_backend->setRealProperty(QStringLiteral("pointerAcceleration"),
-                                   m_settings.value(QLatin1String(s_pointerAccelerationKey)).toReal());
+        m_backend->setRealProperty(
+                QStringLiteral("pointerAcceleration"),
+                m_settings.value(QLatin1String(s_pointerAccelerationKey)).toReal());
     }
 }
 

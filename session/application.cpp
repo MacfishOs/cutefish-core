@@ -39,8 +39,8 @@ std::optional<QStringList> getSystemdEnvironment()
 {
     QStringList list;
     auto msg = QDBusMessage::createMethodCall(
-        QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
-        QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+            QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
+            QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
     msg << QStringLiteral("org.freedesktop.systemd1.Manager") << QStringLiteral("Environment");
     auto reply = QDBusConnection::sessionBus().call(msg);
     if (reply.type() == QDBusMessage::ErrorMessage) {
@@ -60,27 +60,27 @@ std::optional<QStringList> getSystemdEnvironment()
     return variant.toStringList();
 }
 
-bool isShellVariable(const QByteArray& name)
+bool isShellVariable(const QByteArray &name)
 {
     return name == "_" || name.startsWith("SHLVL");
 }
 
-bool isSessionVariable(const QByteArray& name)
+bool isSessionVariable(const QByteArray &name)
 {
     // Check is variable is specific to session.
-    return name == "DISPLAY" || name == "XAUTHORITY" || name == "WAYLAND_DISPLAY" ||
-        name == "WAYLAND_SOCKET" || //
-        name.startsWith("XDG_");
+    return name == "DISPLAY" || name == "XAUTHORITY" || name == "WAYLAND_DISPLAY"
+            || name == "WAYLAND_SOCKET" || //
+            name.startsWith("XDG_");
 }
 
-void setEnvironmentVariable(const QByteArray& name, const QByteArray& value)
+void setEnvironmentVariable(const QByteArray &name, const QByteArray &value)
 {
     if (qgetenv(name) != value) {
         qputenv(name, value);
     }
 }
 
-Application::Application(int& argc, char** argv)
+Application::Application(int &argc, char **argv)
     : QCoreApplication(argc, argv)
     , m_processManager(new ProcessManager(this))
     , m_networkProxyManager(new NetworkProxyManager)
@@ -176,7 +176,7 @@ void Application::initEnvironments()
 
 void Application::initLanguage()
 {
-    QSettings settings(QSettings::UserScope, "cutefishos", "language");
+    QSettings settings(QSettings::UserScope, "cutefish", "language");
     QString value = settings.value("language", "").toString();
 
     // Init Language
@@ -185,7 +185,7 @@ void Application::initLanguage()
         if (file.open(QIODevice::ReadOnly)) {
             QStringList lines = QString(file.readAll()).split('\n');
 
-            for (const QString& line : lines) {
+            for (const QString &line : lines) {
                 if (line.startsWith('#'))
                     continue;
 
@@ -226,7 +226,7 @@ bool Application::syncDBusEnvironment()
     // At this point all environment variables are set, let's send it to the DBus session server to
     // update the activation environment
     if (!QStandardPaths::findExecutable(QStringLiteral("dbus-update-activation-environment"))
-             .isEmpty()) {
+                 .isEmpty()) {
         exitCode = runSync(QStringLiteral("dbus-update-activation-environment"),
                            {QStringLiteral("--systemd"), QStringLiteral("--all")});
     }
@@ -244,7 +244,7 @@ void Application::importSystemdEnvrionment()
         return;
     }
 
-    for (auto& envString : environment.value()) {
+    for (auto &envString : environment.value()) {
         const auto env = envString.toLocal8Bit();
         const int idx = env.indexOf('=');
         if (Q_UNLIKELY(idx <= 0)) {
@@ -262,7 +262,7 @@ void Application::importSystemdEnvrionment()
 void Application::createConfigDirectory()
 {
     const QString configDir =
-        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
 
     if (!QDir().mkpath(configDir))
         qDebug() << "Could not create config directory XDG_CONFIG_HOME: " << configDir;
@@ -281,7 +281,7 @@ void Application::updateUserDirs()
     // p.waitForFinished(-1);
 }
 
-int Application::runSync(const QString& program, const QStringList& args, const QStringList& env)
+int Application::runSync(const QString &program, const QStringList &args, const QStringList &env)
 {
     QProcess p;
 

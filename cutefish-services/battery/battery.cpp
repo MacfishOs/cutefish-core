@@ -1,6 +1,6 @@
 #include "battery.h"
-#include "power.h"
 #include "batteryadaptor.h"
+#include "power.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -28,7 +28,7 @@ Battery::Battery(UPowerDevice *device, QObject *parent)
 }
 
 void Battery::updateCache()
-{    
+{
     m_chargeState = chargeState();
     m_isPresent = isPresent();
     m_chargePercent = chargePercent();
@@ -48,9 +48,10 @@ void Battery::init()
 {
     if (type() == Battery::PrimaryBattery) {
         new BatteryAdaptor(this);
-        QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Battery"), this);
+        QDBusConnection::sessionBus().registerObject(
+                QStringLiteral("/com/cutefish/Services/Battery"), this);
 
-        m_settings = new QSettings(QStringLiteral("cutefishos"), QStringLiteral("PrimaryBattery"));
+        m_settings = new QSettings(QStringLiteral("cutefish"), QStringLiteral("PrimaryBattery"));
         m_lastChargedPercent = m_settings->value("LastChargedPercent", 0).toInt();
         m_lastChargedSecs = m_settings->value("LastChargedSecs").toLongLong();
     }
@@ -58,8 +59,8 @@ void Battery::init()
 
 void Battery::refresh()
 {
-    QDBusInterface iface(UP_DBUS_SERVICE, m_device->udi(),
-                         UP_DBUS_INTERFACE_DEVICE, QDBusConnection::systemBus());
+    QDBusInterface iface(UP_DBUS_SERVICE, m_device->udi(), UP_DBUS_INTERFACE_DEVICE,
+                         QDBusConnection::systemBus());
     if (iface.isValid())
         iface.call("Refresh");
 }
@@ -75,39 +76,39 @@ Battery::BatteryType Battery::type() const
     const uint t = m_device->prop("Type").toUInt();
 
     switch (t) {
-        case UP_DEVICE_KIND_LINE_POWER: // TODO
-            break;
-        case UP_DEVICE_KIND_BATTERY:
-            result = Battery::PrimaryBattery;
-            break;
-        case UP_DEVICE_KIND_UPS:
-            result = Battery::UpsBattery;
-            break;
-        case UP_DEVICE_KIND_MONITOR:
-            result = Battery::MonitorBattery;
-            break;
-        case UP_DEVICE_KIND_MOUSE:
-            result = Battery::MouseBattery;
-            break;
-        case UP_DEVICE_KIND_KEYBOARD:
-            result = Battery::KeyboardBattery;
-            break;
-        case UP_DEVICE_KIND_PDA:
-            result = Battery::PdaBattery;
-            break;
-        case UP_DEVICE_KIND_PHONE:
-            result = Battery::PhoneBattery;
-            break;
-        case UP_DEVICE_KIND_GAMING_INPUT:
-            result = Battery::GamingInputBattery;
-            break;
-        case UP_DEVICE_KIND_UNKNOWN: {
-            // There is currently no "Bluetooth battery" type, so check if it comes from Bluez
-            if (m_device->prop("NativePath").toString().startsWith(QLatin1String("/org/bluez/"))) {
-                result = Battery::BluetoothBattery;
-            }
-            break;
+    case UP_DEVICE_KIND_LINE_POWER: // TODO
+        break;
+    case UP_DEVICE_KIND_BATTERY:
+        result = Battery::PrimaryBattery;
+        break;
+    case UP_DEVICE_KIND_UPS:
+        result = Battery::UpsBattery;
+        break;
+    case UP_DEVICE_KIND_MONITOR:
+        result = Battery::MonitorBattery;
+        break;
+    case UP_DEVICE_KIND_MOUSE:
+        result = Battery::MouseBattery;
+        break;
+    case UP_DEVICE_KIND_KEYBOARD:
+        result = Battery::KeyboardBattery;
+        break;
+    case UP_DEVICE_KIND_PDA:
+        result = Battery::PdaBattery;
+        break;
+    case UP_DEVICE_KIND_PHONE:
+        result = Battery::PhoneBattery;
+        break;
+    case UP_DEVICE_KIND_GAMING_INPUT:
+        result = Battery::GamingInputBattery;
+        break;
+    case UP_DEVICE_KIND_UNKNOWN: {
+        // There is currently no "Bluetooth battery" type, so check if it comes from Bluez
+        if (m_device->prop("NativePath").toString().startsWith(QLatin1String("/org/bluez/"))) {
+            result = Battery::BluetoothBattery;
         }
+        break;
+    }
     }
 
     return result;
@@ -359,8 +360,8 @@ void Battery::slotChanged()
         }
 
         // Save last charge percentage
-        if ((old_chargeState == Battery::Charging || old_chargeState == Battery::FullyCharged) && 
-             m_chargeState == Battery::Discharging) {
+        if ((old_chargeState == Battery::Charging || old_chargeState == Battery::FullyCharged)
+            && m_chargeState == Battery::Discharging) {
             m_lastChargedPercent = m_chargePercent;
             m_lastChargedSecs = QDateTime::currentSecsSinceEpoch();
 

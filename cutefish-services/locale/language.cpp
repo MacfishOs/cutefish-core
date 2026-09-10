@@ -18,8 +18,8 @@
  */
 
 #include "language.h"
-#include "languageadaptor.h"
 #include "appearance/thememanager.h"
+#include "languageadaptor.h"
 
 #include <QDBusInterface>
 #include <QSettings>
@@ -32,10 +32,11 @@ Language *Language::self()
 
 Language::Language(QObject *parent)
     : QObject(parent)
-    , m_settings(new QSettings(QStringLiteral("cutefishos"), QStringLiteral("language")))
+    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("language")))
 {
     new LanguageAdaptor(this);
-    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Language"), this);
+    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Language"),
+                                                 this);
 
     if (!m_settings->contains("language"))
         m_settings->setValue("language", "en_US");
@@ -54,7 +55,7 @@ void Language::setLanguage(const QString &code)
         return;
     }
 
-    QSettings settings(QStringLiteral("cutefishos"), QStringLiteral("theme"));
+    QSettings settings(QStringLiteral("cutefish"), QStringLiteral("theme"));
 
     // Change fonts
     if (code == "zh_CN") {
@@ -72,20 +73,18 @@ void Language::setLanguage(const QString &code)
     m_settings->setValue("language", code);
     emit languageChanged();
 
-    QDBusInterface iface("org.freedesktop.Notifications",
-                         "/org/freedesktop/Notifications",
-                         "org.freedesktop.Notifications",
-                         QDBusConnection::sessionBus());
+    QDBusInterface iface("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                         "org.freedesktop.Notifications", QDBusConnection::sessionBus());
     if (iface.isValid()) {
         QList<QVariant> args;
         args << "cutefish-settings";
-        args << ((unsigned int) 0);
+        args << ((unsigned int)0);
         args << "preferences-system";
         args << "";
         args << tr("The system language has been changed, please log out and log in");
         args << QStringList();
         args << QVariantMap();
-        args << (int) 10;
+        args << (int)10;
         iface.asyncCallWithArgumentList("Notify", args);
     }
 }

@@ -50,7 +50,7 @@ ThemeManager *ThemeManager::self()
 
 ThemeManager::ThemeManager(QObject *parent)
     : QObject(parent)
-    , m_settings(new QSettings(QStringLiteral("cutefishos"), QStringLiteral("theme")))
+    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("theme")))
 {
     if (!QFile::exists(m_settings->fileName())) {
         QFile file(m_settings->fileName());
@@ -89,7 +89,7 @@ ThemeManager::ThemeManager(QObject *parent)
     }
 
     if (!m_settings->contains(s_systemFontName)) {
-        QSettings lanSettings(QStringLiteral("cutefishos"), QStringLiteral("language"));
+        QSettings lanSettings(QStringLiteral("cutefish"), QStringLiteral("language"));
         QString languageCode = lanSettings.value("language").toString();
         QString fontName;
 
@@ -345,7 +345,7 @@ void ThemeManager::updateFontConfig()
             : QStringLiteral("DejaVu Sans Mono");
     const QString familyFallback = familyFont;
 
-    QSettings settings(QSettings::UserScope, "cutefishos", "theme");
+    QSettings settings(QSettings::UserScope, "cutefish", "theme");
     bool hinting = settings.value("FontAntialias", true).toBool();
     QString hintStyle = settings.value("FontHintStyle", "hintslight").toString();
 

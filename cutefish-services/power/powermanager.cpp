@@ -4,8 +4,7 @@
 #include "cpumanagement.h"
 #include "dimdisplayaction.h"
 
-namespace
-{
+namespace {
 constexpr auto s_powerGroup = "Power";
 
 int normalizedTimeout(int timeout)
@@ -29,20 +28,18 @@ int readTimeout(QSettings &settings, const QString &key, const QString &legacyKe
     return fallback;
 }
 
-}
+} // namespace
 
-PowerManager::PowerManager(UPowerManager *upowerManager,
-                           CPUManagement *cpuManagement,
+PowerManager::PowerManager(UPowerManager *upowerManager, CPUManagement *cpuManagement,
                            QObject *parent)
     : QObject(parent)
-    , m_settings(QStringLiteral("cutefishos"), QStringLiteral("power"))
+    , m_settings(QStringLiteral("cutefish"), QStringLiteral("power"))
     , m_upowerManager(upowerManager)
     , m_cpuManagement(cpuManagement)
     , m_dimDisplayAction(new DimDisplayAction(this))
 {
     if (m_cpuManagement) {
-        connect(m_cpuManagement, &CPUManagement::modeChanged,
-                this, &PowerManager::modeChanged);
+        connect(m_cpuManagement, &CPUManagement::modeChanged, this, &PowerManager::modeChanged);
     }
 
     loadSettings();
@@ -50,10 +47,10 @@ PowerManager::PowerManager(UPowerManager *upowerManager,
     m_onBattery = m_upowerManager && m_upowerManager->onBattery();
 
     if (m_upowerManager) {
-        connect(m_upowerManager, &UPowerManager::onBatteryChanged,
-                this, &PowerManager::onBatteryChanged);
-        connect(m_upowerManager, &UPowerManager::lidClosedChanged,
-                this, &PowerManager::onLidClosedChanged);
+        connect(m_upowerManager, &UPowerManager::onBatteryChanged, this,
+                &PowerManager::onBatteryChanged);
+        connect(m_upowerManager, &UPowerManager::lidClosedChanged, this,
+                &PowerManager::onLidClosedChanged);
 
         m_dimDisplayAction->setLidPresent(m_upowerManager->lidIsPresent());
     }
