@@ -85,7 +85,7 @@ ThemeManager::ThemeManager(QObject *parent)
 
     // Init fonts.
     if (!m_settings->contains(s_systemFixedFontName)) {
-        m_settings->setValue(s_systemFixedFontName, "Monospace");
+        m_settings->setValue(s_systemFixedFontName, "Noto Mono");
     }
 
     if (!m_settings->contains(s_systemFontName)) {
@@ -232,7 +232,7 @@ void ThemeManager::setSystemFont(const QString &fontFamily)
 
 QString ThemeManager::systemFixedFont()
 {
-    return m_settings->value(s_systemFixedFontName, "Monospace").toString();
+    return m_settings->value(s_systemFixedFontName, "Noto Mono").toString();
 }
 
 void ThemeManager::setSystemFixedFont(const QString &fontFamily)
