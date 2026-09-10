@@ -27,16 +27,20 @@ class ThemeManager : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool isDarkMode READ isDarkMode WRITE setDarkMode NOTIFY darkModeChanged)
-    Q_PROPERTY(bool darkModeDimsWallpaer READ darkModeDimsWallpaer WRITE setDarkModeDimsWallpaer NOTIFY darkModeDimsWallpaerChanged)
-    Q_PROPERTY(bool blurEnabled READ blurEnabled WRITE setBlurEnabled NOTIFY blurEnabledChanged)
-    Q_PROPERTY(bool backgroundVisible READ backgroundVisible WRITE setBackgroundVisible NOTIFY backgroundVisibleChanged)
+    Q_PROPERTY(bool darkModeDimsWallpaer READ darkModeDimsWallpaer WRITE setDarkModeDimsWallpaer
+                       NOTIFY darkModeDimsWallpaerChanged)
+    Q_PROPERTY(bool backgroundVisible READ backgroundVisible WRITE setBackgroundVisible NOTIFY
+                       backgroundVisibleChanged)
     Q_PROPERTY(QString systemFont READ systemFont WRITE setSystemFont NOTIFY systemFontChanged)
     Q_PROPERTY(QString systemFixedFont READ systemFixedFont WRITE setSystemFixedFont)
-    Q_PROPERTY(qreal systemFontPointSize READ systemFontPointSize WRITE setSystemFontPointSize NOTIFY systemFontPointSizeChanged)
+    Q_PROPERTY(qreal systemFontPointSize READ systemFontPointSize WRITE setSystemFontPointSize
+                       NOTIFY systemFontPointSizeChanged)
     Q_PROPERTY(QString wallpaper READ wallpaper WRITE setWallpaper NOTIFY wallpaperChanged)
     Q_PROPERTY(int accentColor READ accentColor WRITE setAccentColor NOTIFY accentColorChanged)
-    Q_PROPERTY(int backgroundType READ backgroundType WRITE setBackgroundType NOTIFY backgroundTypeChanged)
-    Q_PROPERTY(QString backgroundColor READ backgroundColor WRITE setBackgroundColor NOTIFY backgroundColorChanged)
+    Q_PROPERTY(int backgroundType READ backgroundType WRITE setBackgroundType NOTIFY
+                       backgroundTypeChanged)
+    Q_PROPERTY(QString backgroundColor READ backgroundColor WRITE setBackgroundColor NOTIFY
+                       backgroundColorChanged)
     Q_PROPERTY(QString cursorTheme READ cursorTheme WRITE setCursorTheme NOTIFY cursorThemeChanged)
     Q_PROPERTY(int cursorSize READ cursorSize WRITE setCursorSize NOTIFY cursorSizeChanged)
     Q_PROPERTY(QString iconTheme READ iconTheme WRITE setIconTheme NOTIFY iconThemeChanged)
@@ -51,9 +55,6 @@ public:
 
     bool darkModeDimsWallpaer() const;
     void setDarkModeDimsWallpaer(bool value);
-
-    bool blurEnabled() const;
-    void setBlurEnabled(bool value);
 
     QString systemFont();
     bool backgroundVisible() const;
@@ -98,7 +99,6 @@ signals:
     void darkModeChanged(bool darkMode);
     void wallpaperChanged(QString path);
     void darkModeDimsWallpaerChanged();
-    void blurEnabledChanged();
     void accentColorChanged(int accentColor);
     void backgroundVisibleChanged();
     void backgroundTypeChanged();
@@ -108,12 +108,12 @@ signals:
     void iconThemeChanged();
     void systemFontPointSizeChanged();
     void systemFontChanged();
+
 private:
     QSettings *m_settings;
 
     bool m_isDarkMode;
     bool m_darkModeDimsWallpaer;
-    bool m_blurEnabled;
     QString m_wallpaperPath;
     bool m_backgroundVisible;
     int m_backgroundType;
