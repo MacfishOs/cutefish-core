@@ -20,16 +20,14 @@
 #ifndef APPLICATION_H
 #define APPLICATION_H
 
-#include <QApplication>
 #include "appearance/thememanager.h"
-#include "clipboard/clipboard.h"
-#include "brightness/brightnessmanager.h"
 #include "battery/upowermanager.h"
+#include "brightness/brightnessmanager.h"
+#include "clipboard/clipboard.h"
 #include "locale/language.h"
-#include "input/mouse/mousemanager.h"
-#include "input/touchpad/touchpadmanager.h"
-#include "power/powermanager.h"
 #include "power/cpumanagement.h"
+#include "power/powermanager.h"
+#include <QApplication>
 
 class Application : public QApplication
 {
@@ -45,8 +43,6 @@ private:
     BrightnessManager *m_brightnessManager;
     UPowerManager *m_upowerManager;
     Language *m_language;
-    Mouse *m_mouse;
-    TouchpadManager *m_touchpad;
     Clipboard *m_clipboard;
     CPUManagement *m_cpuManagement;
     PowerManager *m_powerManager;

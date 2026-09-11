@@ -19,17 +19,17 @@
 
 #include "application.h"
 #include "poweradaptor.h"
-#include <QFile>
 #include <QDir>
-#include <QTranslator>
+#include <QFile>
 #include <QLocale>
+#include <QTranslator>
 
+#include <dirent.h>
+#include <fcntl.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <dirent.h>
-#include <stdlib.h>
 
 Application::Application(int &argc, char **argv)
     : QApplication(argc, argv)
@@ -37,8 +37,6 @@ Application::Application(int &argc, char **argv)
     , m_brightnessManager(new BrightnessManager(this))
     , m_upowerManager(new UPowerManager(this))
     , m_language(Language::self())
-    , m_mouse(new Mouse(this))
-    , m_touchpad(new TouchpadManager(this))
     , m_clipboard(new Clipboard(this))
     , m_cpuManagement(new CPUManagement(this))
     , m_powerManager(new PowerManager(m_upowerManager, m_cpuManagement, this))
@@ -47,11 +45,14 @@ Application::Application(int &argc, char **argv)
 
     // Register all service objects before publishing the well-known name.
     new PowerAdaptor(m_powerManager);
-    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Power"), m_powerManager);
+    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Power"),
+                                                 m_powerManager);
 
     // Translations
     QLocale locale;
-    QString qmFilePath = QString("%1/%2.qm").arg("/usr/share/cutefish-services/translations/").arg(locale.name());
+    QString qmFilePath = QString("%1/%2.qm")
+                                 .arg("/usr/share/cutefish-services/translations/")
+                                 .arg(locale.name());
     if (QFile::exists(qmFilePath)) {
         QTranslator *translator = new QTranslator(QApplication::instance());
         if (translator->load(qmFilePath)) {
@@ -78,7 +79,7 @@ void Application::initTrash()
         return;
 
     if ((buff.st_uid == uid) && // must be owned by user
-            ((buff.st_mode & 0777) == 0700)) {
+        ((buff.st_mode & 0777) == 0700)) {
         // check subdirs
         QString infoDir = trashDir + QString::fromLatin1("/info");
         QString filesDir = trashDir + QString::fromLatin1("/files");

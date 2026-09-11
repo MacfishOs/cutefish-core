@@ -29,12 +29,6 @@ qt6_add_dbus_adaptor(DBUS_SOURCES
                      locale/com.cutefish.Services.Language.xml
                      locale/language.h Language)
 qt6_add_dbus_adaptor(DBUS_SOURCES
-                     input/mouse/com.cutefish.Services.Input.Mouse.xml
-                     input/mouse/mousemanager.h Mouse)
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     input/touchpad/com.cutefish.Services.Input.Touchpad.xml
-                     input/touchpad/touchpadmanager.h TouchpadManager)
-qt6_add_dbus_adaptor(DBUS_SOURCES
                      power/com.cutefish.Power.xml
                      power/powermanager.h PowerManager)
 set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)

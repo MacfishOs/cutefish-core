@@ -61,7 +61,6 @@ private:
     void trySuspend();
     void turnDisplayOff();
     void restoreDisplay();
-    void configureScreenLocker(int timeout);
     void startSuspendCountdown();
     void inhibitSystemdLidSwitch();
     bool hasNativeDisplayPower() const;

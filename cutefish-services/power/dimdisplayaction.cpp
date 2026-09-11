@@ -26,16 +26,12 @@
 #include <QDBusPendingReply>
 #include <QDebug>
 #include <QGuiApplication>
-#include <QSettings>
-#include <QStandardPaths>
 #include <QTimer>
 
 namespace {
 constexpr auto s_screenSaverService = "org.freedesktop.ScreenSaver";
 constexpr auto s_screenSaverPath = "/ScreenSaver";
 constexpr auto s_screenSaverInterface = "org.freedesktop.ScreenSaver";
-constexpr auto s_kdeScreenSaverService = "org.kde.screensaver";
-constexpr auto s_kdeScreenSaverInterface = "org.kde.screensaver";
 constexpr auto s_logindService = "org.freedesktop.login1";
 constexpr auto s_logindPath = "/org/freedesktop/login1";
 constexpr auto s_logindInterface = "org.freedesktop.login1.Manager";
@@ -173,8 +169,6 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
     if (!m_lidClosed)
         m_suspendDue = false;
 
-    configureScreenLocker(timeout);
-
     if (timeout < 0) {
         m_displayOffTimer.invalidate();
         return;
@@ -200,25 +194,6 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
             m_suspendTimer.start(int(remaining));
         }
     }
-}
-
-void DimDisplayAction::configureScreenLocker(int timeout)
-{
-    QSettings settings(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)
-                               + QStringLiteral("/kscreenlockerrc"),
-                       QSettings::IniFormat);
-    settings.beginGroup(QStringLiteral("Daemon"));
-    settings.setValue(QStringLiteral("Autolock"), timeout >= 0);
-    if (timeout >= 0)
-        settings.setValue(QStringLiteral("Timeout"), qMax(1, timeout / 60));
-    settings.endGroup();
-    settings.sync();
-
-    QDBusInterface screenSaver(
-            QString::fromLatin1(s_kdeScreenSaverService), QString::fromLatin1(s_screenSaverPath),
-            QString::fromLatin1(s_kdeScreenSaverInterface), QDBusConnection::sessionBus());
-    if (screenSaver.isValid())
-        screenSaver.asyncCall(QStringLiteral("configure"));
 }
 
 void DimDisplayAction::onScreenSaverActiveChanged(bool active)
@@ -271,8 +246,7 @@ bool DimDisplayAction::lockSession()
     if (!screenSaver.isValid())
         return false;
 
-    // KScreenLocker uses a delayed D-Bus reply until the lock is actually
-    // established. Wait for that reply before powering the display off.
+    // Wait for the compositor to establish the lock before continuing.
     const QDBusMessage reply = screenSaver.call(QStringLiteral("Lock"));
     if (reply.type() != QDBusMessage::ReplyMessage) {
         qWarning() << "Unable to lock the session:" << reply.errorMessage();
