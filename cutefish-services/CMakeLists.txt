@@ -52,3 +52,5 @@ add_dependencies(${TARGET} translations)
 
 install(TARGETS ${TARGET} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${QM_FILES} DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${TARGET}/translations)
+install(FILES brightness/60-cutefish-ddc.rules DESTINATION lib/udev/rules.d)
+install(FILES brightness/cutefish-ddc.conf DESTINATION lib/modules-load.d)

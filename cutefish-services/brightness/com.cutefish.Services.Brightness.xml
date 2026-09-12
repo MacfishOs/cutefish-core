@@ -5,10 +5,27 @@
         <arg name="value" type="i" direction="in"/>
     </method>
 
+    <method name="displays">
+        <arg type="as" direction="out"/>
+    </method>
+    <method name="displayBrightness">
+        <arg name="display" type="s" direction="in"/>
+        <arg type="i" direction="out"/>
+    </method>
+    <method name="setDisplayBrightness">
+        <arg name="display" type="s" direction="in"/>
+        <arg name="value" type="i" direction="in"/>
+    </method>
+
     <property name="maxBrightness" type="i" access="read"/>
     <property name="brightness" type="i" access="read"/>
     <property name="brightnessEnabled" type="b" access="read"/>
 
     <signal name="brightnessChanged"></signal>
+    <signal name="displaysChanged"></signal>
+    <signal name="displayBrightnessChanged">
+        <arg name="display" type="s"/>
+        <arg name="value" type="i"/>
+    </signal>
   </interface>
 </node>

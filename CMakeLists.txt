@@ -26,7 +26,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../cutefish-framework/applications
 
 add_subdirectory(appruntime)
 add_subdirectory(polkit-agent)
-add_subdirectory(screen-brightness)
 add_subdirectory(session)
 add_subdirectory(cutefish-services)
 add_subdirectory(cpufreq)
