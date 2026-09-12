@@ -27,6 +27,7 @@
 #include <QFontDatabase>
 #include <QProcess>
 #include <QTextStream>
+#include <QTimer>
 static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
 static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
 static const QByteArray s_systemPointFontSize = QByteArrayLiteral("FontSize");
@@ -112,6 +113,34 @@ ThemeManager::ThemeManager(QObject *parent)
 
     // 登陆后更新 fontconfig
     updateFontConfig();
+
+    auto *iconThemeProcess = new QProcess(this);
+    auto *deadline = new QTimer(iconThemeProcess);
+    deadline->setSingleShot(true);
+    connect(iconThemeProcess, &QProcess::finished, this,
+            [iconThemeProcess, deadline](int exitCode, QProcess::ExitStatus status) {
+                deadline->stop();
+                if (status != QProcess::NormalExit || exitCode != 0)
+                    qWarning() << "Cannot set GTK icon theme to Cutefish:"
+                               << iconThemeProcess->readAllStandardError();
+                iconThemeProcess->deleteLater();
+            });
+    connect(iconThemeProcess, &QProcess::errorOccurred, this,
+            [iconThemeProcess, deadline](QProcess::ProcessError error) {
+                if (error == QProcess::FailedToStart) {
+                    deadline->stop();
+                    qWarning() << "Cannot start gsettings:" << iconThemeProcess->errorString();
+                    iconThemeProcess->deleteLater();
+                }
+            });
+    connect(deadline, &QTimer::timeout, iconThemeProcess, [iconThemeProcess] {
+        qWarning() << "GTK icon theme update timed out";
+        iconThemeProcess->kill();
+    });
+    iconThemeProcess->start(QStringLiteral("gsettings"),
+                            {QStringLiteral("set"), QStringLiteral("org.gnome.desktop.interface"),
+                             QStringLiteral("icon-theme"), QStringLiteral("Cutefish")});
+    deadline->start(3000);
 }
 
 bool ThemeManager::isDarkMode()

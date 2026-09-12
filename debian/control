@@ -20,6 +20,8 @@ Homepage: https://github.com/cutefishos/core
 Package: cutefish-core
 Architecture: any
 Depends: accountsservice,
+         libglib2.0-bin,
+         gsettings-desktop-schemas,
          qml6-module-qtquick-controls,
          qml6-module-qtquick,
          qml6-module-qtquick-layouts,
