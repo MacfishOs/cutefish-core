@@ -79,7 +79,7 @@ ThemeManager::ThemeManager(QObject *parent)
     m_backgroundColor = m_settings->value("BackgroundColor", "#2B8ADA").toString();
     m_cursorTheme = m_settings->value("CursorTheme", "default").toString();
     m_cursorSize = m_settings->value("CursorSize", 24).toInt();
-    m_iconTheme = m_settings->value("IconTheme", "Crule").toString();
+    m_iconTheme = m_settings->value("IconTheme", "Cutefish").toString();
 
     // Synchronize toolkit and compositor cursor settings at session startup.
     applyCursorSettings();
@@ -337,7 +337,12 @@ void ThemeManager::updateGtk3Config()
     // dark mode
     settings.setValue("gtk-application-prefer-dark-theme", isDarkMode());
     // icon theme
-    settings.setValue("gtk-icon-theme-name", m_iconTheme);
+    // "Cutefish" and the legacy Crule names follow dark mode.
+    const bool iconFollowsDarkMode =
+            m_iconTheme.isEmpty() || m_iconTheme == "Cutefish" || m_iconTheme.startsWith("Crule");
+    settings.setValue("gtk-icon-theme-name",
+                      iconFollowsDarkMode ? (isDarkMode() ? "Cutefish-Dark" : "Cutefish-Light")
+                                          : m_iconTheme);
     settings.setValue("gtk-cursor-theme-name", m_cursorTheme);
     settings.setValue("gtk-cursor-theme-size", m_cursorSize);
     // other
