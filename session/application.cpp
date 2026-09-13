@@ -73,6 +73,11 @@ bool isSessionVariable(const QByteArray &name)
             name.startsWith("XDG_");
 }
 
+bool isInputMethodModuleVariable(const QByteArray &name)
+{
+    return name == "GTK_IM_MODULE" || name == "QT_IM_MODULE";
+}
+
 void setEnvironmentVariable(const QByteArray &name, const QByteArray &value)
 {
     if (qgetenv(name) != value) {
@@ -166,12 +171,10 @@ void Application::initEnvironments()
     // https://stackoverflow.com/questions/34399993/qml-performance-issue-when-updating-an-item-in-presence-of-many-non-overlapping
     qputenv("QT_QPA_UPDATE_IDLE_TIME", "10");
 
-    // IM Config
-    // qputenv("GTK_IM_MODULE", "fcitx5");
-    // qputenv("QT4_IM_MODULE", "fcitx5");
-    // qputenv("QT_IM_MODULE", "fcitx5");
-    // qputenv("CLUTTER_IM_MODULE", "fcitx5");
-    // qputenv("XMODIFIERS", "@im=fcitx");
+    // im-config's /etc/profile.d script exports these for Wayland sessions; they would bypass
+    // the compositor's text-input protocols. XMODIFIERS stays for Xwayland clients.
+    qunsetenv("GTK_IM_MODULE");
+    qunsetenv("QT_IM_MODULE");
 }
 
 void Application::initLanguage()
@@ -231,6 +234,14 @@ bool Application::syncDBusEnvironment()
                            {QStringLiteral("--systemd"), QStringLiteral("--all")});
     }
 
+    // --all only adds variables, so values exported by an earlier login stay in systemd.
+    const QString systemctl = QStandardPaths::findExecutable(QStringLiteral("systemctl"));
+    if (!systemctl.isEmpty()) {
+        runSync(systemctl,
+                {QStringLiteral("--user"), QStringLiteral("unset-environment"),
+                 QStringLiteral("GTK_IM_MODULE"), QStringLiteral("QT_IM_MODULE")});
+    }
+
     return exitCode == 0;
 }
 
@@ -252,7 +263,7 @@ void Application::importSystemdEnvrionment()
         }
 
         const auto name = env.left(idx);
-        if (isShellVariable(name) || isSessionVariable(name)) {
+        if (isShellVariable(name) || isSessionVariable(name) || isInputMethodModuleVariable(name)) {
             continue;
         }
         setEnvironmentVariable(name, env.mid(idx + 1));
