@@ -4,17 +4,12 @@
 <context>
     <name>main</name>
     <message>
-        <location filename="../main.qml" line="67"/>
+        <location filename="../main.qml" line="+93"/>
         <source>Password</source>
         <translation>Password</translation>
     </message>
     <message>
-        <location filename="../main.qml" line="94"/>
-        <source>Done</source>
-        <translation>Done</translation>
-    </message>
-    <message>
-        <location filename="../main.qml" line="86"/>
+        <location line="+21"/>
         <source>Cancel</source>
         <translation>Cancel</translation>
     </message>
