@@ -17,22 +17,26 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <QGuiApplication>
 #include <PolkitQt1/Subject>
 #include <QFile>
+#include <QGuiApplication>
 #include <QLocale>
 #include <QTranslator>
 
+#include "cutefishapplication.h"
 #include "polkitagentlistener.h"
 
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+    Cutefish::Application::prepare();
     app.setQuitOnLastWindowClosed(false);
 
     // Translations
     QLocale locale;
-    QString qmFilePath = QString("%1/%2.qm").arg("/usr/share/cutefish-polkit-agent/translations/").arg(locale.name());
+    QString qmFilePath = QString("%1/%2.qm")
+                                 .arg("/usr/share/cutefish-polkit-agent/translations/")
+                                 .arg(locale.name());
     if (QFile::exists(qmFilePath)) {
         QTranslator *translator = new QTranslator(QGuiApplication::instance());
         if (translator->load(qmFilePath)) {
@@ -45,7 +49,8 @@ int main(int argc, char *argv[])
     PolKitAgentListener listener;
     PolkitQt1::UnixSessionSubject session(getpid());
 
-    if (!listener.registerListener(session, QStringLiteral("/com/cutefish/PolicyKit1/AuthenticationAgent")))
+    if (!listener.registerListener(session,
+                                   QStringLiteral("/com/cutefish/PolicyKit1/AuthenticationAgent")))
         return -1;
 
     return app.exec();
