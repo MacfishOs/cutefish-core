@@ -48,7 +48,7 @@
     <name>Language</name>
     <message>
         <location filename="../locale/language.cpp" line="+84"/>
-        <source>The system language has been changed, please log out and log in</source>
+        <source>Some applications may need to be restarted for the change to take effect.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

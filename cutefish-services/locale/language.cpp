@@ -138,7 +138,7 @@ void Language::setPreferredLanguages(const QStringList &languages)
         args << ((unsigned int)0);
         args << "preferences-system";
         args << "";
-        args << tr("The system language has been changed, please log out and log in");
+        args << tr("Some applications may need to be restarted for the change to take effect.");
         args << QStringList();
         args << QVariantMap();
         args << (int)10;
