@@ -28,12 +28,16 @@ class Language : public QObject
     Q_OBJECT
     Q_PROPERTY(QString languageCode READ languageCode WRITE setLanguage NOTIFY languageChanged)
 
+    Q_PROPERTY(QStringList preferredLanguages READ preferredLanguages WRITE setPreferredLanguages NOTIFY languageChanged)
+
 public:
     static Language *self();
     Language(QObject *parent = nullptr);
 
     QString languageCode() const;
     void setLanguage(const QString &code);
+    QStringList preferredLanguages() const;
+    void setPreferredLanguages(const QStringList &codes);
 
 signals:
     void languageChanged();

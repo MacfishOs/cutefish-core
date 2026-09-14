@@ -18,6 +18,7 @@
  */
 
 #include "application.h"
+#include "languageenvironment.h"
 
 #include "sessionadaptor.h"
 
@@ -117,6 +118,7 @@ Application::Application(int &argc, char **argv)
     // Otherwise it may leads to some unwanted order of applying environment
     // variables (e.g. LANG and LC_*)
     // ref plasma
+    qunsetenv("LC_ALL");
     importSystemdEnvrionment();
 
     m_networkProxyManager->update();
@@ -205,21 +207,14 @@ void Application::initLanguage()
 
     settings.setValue("language", value);
 
-    QString str = QString("%1.UTF-8").arg(value);
-
-    const auto lcValues = {"LANG",           "LC_NUMERIC", "LC_TIME", "LC_MONETARY",
-                           "LC_MEASUREMENT", "LC_COLLATE", "LC_CTYPE"};
-
-    for (auto lc : lcValues) {
-        const QString value = str;
-        if (!value.isEmpty()) {
-            qputenv(lc, value.toUtf8());
-        }
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    LanguageEnvironment::apply(environment);
+    for (const QString &name : environment.keys()) {
+        if (name == "LANG" || name == "LANGUAGE" || name.startsWith("LC_"))
+            qputenv(name.toUtf8().constData(), environment.value(name).toUtf8());
     }
-
-    if (!value.isEmpty()) {
-        qputenv("LANGUAGE", value.toUtf8());
-    }
+    // Export an empty value to clear LC_ALL in an already-running D-Bus daemon.
+    qputenv("LC_ALL", "");
 }
 
 bool Application::syncDBusEnvironment()
@@ -239,7 +234,8 @@ bool Application::syncDBusEnvironment()
     if (!systemctl.isEmpty()) {
         runSync(systemctl,
                 {QStringLiteral("--user"), QStringLiteral("unset-environment"),
-                 QStringLiteral("GTK_IM_MODULE"), QStringLiteral("QT_IM_MODULE")});
+                 QStringLiteral("GTK_IM_MODULE"), QStringLiteral("QT_IM_MODULE"),
+                 QStringLiteral("LC_ALL")});
     }
 
     return exitCode == 0;
@@ -263,7 +259,8 @@ void Application::importSystemdEnvrionment()
         }
 
         const auto name = env.left(idx);
-        if (isShellVariable(name) || isSessionVariable(name) || isInputMethodModuleVariable(name)) {
+        if (isShellVariable(name) || isSessionVariable(name)
+            || isInputMethodModuleVariable(name) || name == "LC_ALL") {
             continue;
         }
         setEnvironmentVariable(name, env.mid(idx + 1));

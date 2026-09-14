@@ -36,6 +36,7 @@ set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
 add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${HEADERS} ${FORMS} ${RESOURCES})
 
 target_link_libraries(${TARGET}
+        Cutefish::Applications
         cutefish-clipboard-backend
         Qt6::Core
         Qt6::Gui

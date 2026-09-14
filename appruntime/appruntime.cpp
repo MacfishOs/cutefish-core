@@ -1,4 +1,5 @@
 #include "appruntime.h"
+#include "languageenvironment.h"
 
 #include "applicationregistry.h"
 #include "desktopentry.h"
@@ -81,7 +82,9 @@ uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
     QProcess process;
     process.setProgram(command.first());
     process.setArguments(command.mid(1));
-    process.setProcessEnvironment(QProcessEnvironment::systemEnvironment());
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    LanguageEnvironment::apply(environment);
+    process.setProcessEnvironment(environment);
 
     if (!workingDirectory.isEmpty())
         process.setWorkingDirectory(workingDirectory);

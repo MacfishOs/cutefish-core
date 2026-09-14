@@ -5,6 +5,11 @@
         <arg name="value" type="s" direction="in"/>
     </method>
 
+    <method name="setPreferredLanguages">
+        <arg name="value" type="as" direction="in"/>
+    </method>
+
+    <property name="preferredLanguages" type="as" access="read"/>
     <property name="languageCode" type="s" access="read"/>
 
     <signal name="languageChanged"></signal>
