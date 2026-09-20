@@ -9,8 +9,10 @@ file(GLOB_RECURSE SOURCES
 
 list(FILTER SOURCES EXCLUDE REGEX "/clipboard/")
 list(FILTER SOURCES EXCLUDE REGEX "/idle/")
+list(FILTER SOURCES EXCLUDE REGEX "/permissions/")
 add_subdirectory(clipboard)
 add_subdirectory(idle)
+add_subdirectory(permissions)
 
 set(HEADERS "")
 set(FORMS "")
@@ -44,6 +46,7 @@ target_link_libraries(${TARGET}
         Qt6::DBus
         Qt6::Xml
         cutefish-idle-backend
+        cutefish-permissions
 )
 
 file(GLOB TS_FILES translations/*.ts)

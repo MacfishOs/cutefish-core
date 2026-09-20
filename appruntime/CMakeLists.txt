@@ -2,6 +2,8 @@ project(cutefish-appruntime)
 set(TARGET cutefish-appruntime)
 
 set(SOURCES
+    applicationscope.cpp
+    applicationscope.h
     appruntime.cpp
     main.cpp
 )

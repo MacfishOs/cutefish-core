@@ -1,4 +1,5 @@
 #include "appruntime.h"
+#include "applicationscope.h"
 #include "languageenvironment.h"
 
 #include "applicationregistry.h"
@@ -95,6 +96,10 @@ uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
         return 0;
     }
 
+    // Only an id the registry knows names the scope: portals read the app id
+    // back from it, and a bare executable name would pass for one.
+    if (m_registry->byId(appId))
+        ApplicationScope::adopt(appId, static_cast<uint>(pid));
     m_instances.insert(static_cast<uint>(pid),
                        Instance{appId, startTime(static_cast<uint>(pid))});
 

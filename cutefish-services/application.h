@@ -25,6 +25,7 @@
 #include "brightness/brightnessmanager.h"
 #include "clipboard/clipboard.h"
 #include "locale/language.h"
+#include "permissions/permissionmanager.h"
 #include "power/cpumanagement.h"
 #include "power/powermanager.h"
 #include <QApplication>
@@ -46,6 +47,7 @@ private:
     Clipboard *m_clipboard;
     CPUManagement *m_cpuManagement;
     PowerManager *m_powerManager;
+    PermissionManager *m_permissionManager;
 };
 
 #endif // APPLICATION_H
