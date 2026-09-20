@@ -20,17 +20,95 @@
 #include "thememanager.h"
 #include "appearanceadaptor.h"
 
+#include <QCryptographicHash>
 #include <QDBusInterface>
 #include <QDebug>
+#include <QDir>
 #include <QDomDocument>
 #include <QFile>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QProcess>
+#include <QSaveFile>
+#include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
 static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
 static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
 static const QByteArray s_systemPointFontSize = QByteArrayLiteral("FontSize");
+
+static bool isSystemWallpaper(const QString &path)
+{
+    const QString wallpaperPath = QFileInfo(path).absoluteFilePath();
+    const QString userDataPath = QDir::cleanPath(
+            QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+
+    const QStringList dataPaths =
+            QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
+    for (const QString &dataPath : dataPaths) {
+        if (QDir::cleanPath(dataPath) == userDataPath)
+            continue;
+
+        const QString directory = QDir(dataPath).absoluteFilePath(
+                QStringLiteral("backgrounds/cutefishos"));
+        if (wallpaperPath.startsWith(directory + QDir::separator()))
+            return true;
+    }
+
+    return false;
+}
+
+static QString userWallpaperDirectory()
+{
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
+            .absoluteFilePath(QStringLiteral("backgrounds/cutefish/user"));
+}
+
+static bool isManagedUserWallpaper(const QString &path)
+{
+    return QFileInfo(path).absoluteFilePath().startsWith(
+            userWallpaperDirectory() + QDir::separator());
+}
+
+static QString importUserWallpaper(const QString &path)
+{
+    const QFileInfo sourceInfo(path);
+    if (!sourceInfo.isFile() || isSystemWallpaper(path))
+        return path;
+
+    const QString sourcePath = sourceInfo.absoluteFilePath();
+    const QString destinationDirectory = userWallpaperDirectory();
+    if (sourcePath.startsWith(destinationDirectory + QDir::separator()))
+        return sourcePath;
+
+    if (!QDir().mkpath(destinationDirectory))
+        return path;
+
+    const QByteArray pathHash =
+            QCryptographicHash::hash(sourcePath.toUtf8(), QCryptographicHash::Sha256)
+                    .toHex()
+                    .left(12);
+    QString fileName = sourceInfo.completeBaseName() + QLatin1Char('-')
+            + QString::fromLatin1(pathHash);
+    if (!sourceInfo.suffix().isEmpty())
+        fileName += QLatin1Char('.') + sourceInfo.suffix().toLower();
+
+    const QString destinationPath = QDir(destinationDirectory).absoluteFilePath(fileName);
+    QFile source(sourcePath);
+    QSaveFile destination(destinationPath);
+    if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::WriteOnly))
+        return path;
+
+    while (!source.atEnd()) {
+        const QByteArray data = source.read(1024 * 1024);
+        if (data.isEmpty() && source.error() != QFileDevice::NoError)
+            return path;
+        if (destination.write(data) != data.size())
+            return path;
+    }
+
+    return destination.commit() ? destinationPath : path;
+}
 
 static QString gtkRc2Path()
 {
@@ -74,6 +152,25 @@ ThemeManager::ThemeManager(QObject *parent)
     m_wallpaperPath =
             m_settings->value("Wallpaper", "/usr/share/backgrounds/cutefishos/default.jpg")
                     .toString();
+    const QStringList savedUserWallpapers = m_settings->value("UserWallpapers").toStringList();
+    for (const QString &path : savedUserWallpapers) {
+        if (!QFileInfo::exists(path))
+            continue;
+
+        const QString importedPath = importUserWallpaper(path);
+        if (isManagedUserWallpaper(importedPath))
+            m_userWallpapers.append(importedPath);
+    }
+    if (QFileInfo::exists(m_wallpaperPath) && !isSystemWallpaper(m_wallpaperPath)) {
+        m_wallpaperPath = importUserWallpaper(m_wallpaperPath);
+        m_settings->setValue("Wallpaper", m_wallpaperPath);
+        if (isManagedUserWallpaper(m_wallpaperPath)
+            && !m_userWallpapers.contains(m_wallpaperPath)) {
+            m_userWallpapers.prepend(m_wallpaperPath);
+        }
+    }
+    m_userWallpapers.removeDuplicates();
+    m_settings->setValue("UserWallpapers", m_userWallpapers);
     m_accentColor = m_settings->value("AccentColor", 0).toInt();
     m_backgroundType = m_settings->value("BackgroundType", 0).toInt();
     m_backgroundColor = m_settings->value("BackgroundColor", "#2B8ADA").toString();
@@ -290,11 +387,39 @@ QString ThemeManager::wallpaper()
 
 void ThemeManager::setWallpaper(const QString &path)
 {
-    if (m_wallpaperPath != path) {
-        m_wallpaperPath = path;
-        m_settings->setValue("Wallpaper", path);
-        emit wallpaperChanged(path);
+    const QString wallpaperPath = importUserWallpaper(path);
+    if (QFileInfo::exists(wallpaperPath) && isManagedUserWallpaper(wallpaperPath)
+        && !m_userWallpapers.contains(wallpaperPath)) {
+        m_userWallpapers.prepend(wallpaperPath);
+        m_settings->setValue("UserWallpapers", m_userWallpapers);
+        emit userWallpapersChanged();
     }
+
+    if (m_wallpaperPath != wallpaperPath) {
+        m_wallpaperPath = wallpaperPath;
+        m_settings->setValue("Wallpaper", wallpaperPath);
+        emit wallpaperChanged(wallpaperPath);
+    }
+}
+
+QStringList ThemeManager::userWallpapers() const
+{
+    return m_userWallpapers;
+}
+
+void ThemeManager::removeUserWallpaper(const QString &path)
+{
+    if (path == m_wallpaperPath || !isManagedUserWallpaper(path)
+        || !m_userWallpapers.contains(path)) {
+        return;
+    }
+
+    if (QFileInfo::exists(path) && !QFile::remove(path))
+        return;
+
+    m_userWallpapers.removeAll(path);
+    m_settings->setValue("UserWallpapers", m_userWallpapers);
+    emit userWallpapersChanged();
 }
 
 int ThemeManager::backgroundType()

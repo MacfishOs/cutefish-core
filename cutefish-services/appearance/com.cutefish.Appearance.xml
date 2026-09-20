@@ -22,6 +22,9 @@
     <method name="setWallpaper">
         <arg name="path" type="s" direction="in"/>
     </method>
+    <method name="removeUserWallpaper">
+        <arg name="path" type="s" direction="in"/>
+    </method>
     <method name="setAccentColor">
         <arg name="accentColor" type="i" direction="in"/>
     </method>
@@ -51,6 +54,7 @@
     <property name="systemFixedFont" type="s" access="read"/>
     <property name="systemFontPointSize" type="d" access="read"/>
     <property name="wallpaper" type="s" access="read"/>
+    <property name="userWallpapers" type="as" access="read"/>
     <property name="accentColor" type="i" access="read"/>
     <property name="backgroundType" type="i" access="read"/>
     <property name="backgroundColor" type="s" access="read"/>
@@ -64,6 +68,7 @@
     <signal name="wallpaperChanged">
         <arg type="s"/>
     </signal>
+    <signal name="userWallpapersChanged"></signal>
     <signal name="darkModeDimsWallpaerChanged">
     </signal>
     <signal name="backgroundVisibleChanged">

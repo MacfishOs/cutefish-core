@@ -22,6 +22,7 @@
 
 #include <QObject>
 #include <QSettings>
+#include <QStringList>
 
 class ThemeManager : public QObject
 {
@@ -36,6 +37,7 @@ class ThemeManager : public QObject
     Q_PROPERTY(qreal systemFontPointSize READ systemFontPointSize WRITE setSystemFontPointSize
                        NOTIFY systemFontPointSizeChanged)
     Q_PROPERTY(QString wallpaper READ wallpaper WRITE setWallpaper NOTIFY wallpaperChanged)
+    Q_PROPERTY(QStringList userWallpapers READ userWallpapers NOTIFY userWallpapersChanged)
     Q_PROPERTY(int accentColor READ accentColor WRITE setAccentColor NOTIFY accentColorChanged)
     Q_PROPERTY(int backgroundType READ backgroundType WRITE setBackgroundType NOTIFY
                        backgroundTypeChanged)
@@ -69,6 +71,8 @@ public:
 
     QString wallpaper();
     void setWallpaper(const QString &path);
+    QStringList userWallpapers() const;
+    void removeUserWallpaper(const QString &path);
 
     int backgroundType();
     void setBackgroundType(int type);
@@ -98,6 +102,7 @@ public:
 signals:
     void darkModeChanged(bool darkMode);
     void wallpaperChanged(QString path);
+    void userWallpapersChanged();
     void darkModeDimsWallpaerChanged();
     void accentColorChanged(int accentColor);
     void backgroundVisibleChanged();
@@ -115,6 +120,7 @@ private:
     bool m_isDarkMode;
     bool m_darkModeDimsWallpaer;
     QString m_wallpaperPath;
+    QStringList m_userWallpapers;
     bool m_backgroundVisible;
     int m_backgroundType;
     QString m_backgroundColor;
