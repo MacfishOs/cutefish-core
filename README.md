@@ -30,8 +30,10 @@ services can ask the user for a permission with one dialog style:
 The dialog offers Deny, Allow Once and, when `app_id` is not empty, Always
 Allow; remembering a grant is the caller's job. Kinds are listed in
 `cutefish-services/permissions/permissionprompt.cpp`; each names a QML content
-component. `screen-recording` takes `monitors` (`aa{sv}` with `name`,
-`description`, `x`, `y`, `width`, `height`) and answers with `monitors` (`as`).
+component. `screen-recording` takes `types` (the portal's source-type bitmask),
+`monitors` (`aa{sv}` with `name`, `description`, `x`, `y`, `width`, `height`)
+and `windows` (`aa{sv}` with `identifier`, `title`, `app_id`), shows whichever
+are offered, and answers with `monitors` (`as`) or `windows` (`as`).
 The shell keeps these windows out of the task list and leaves the calling
 application's identity in the status bar, as it does for the file chooser.
 

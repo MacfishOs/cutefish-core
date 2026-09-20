@@ -3,23 +3,52 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import FishUI 1.0 as FishUI
 
-// Display picker for the screen-recording kind. The request carries
-// `monitors`; the answer names the chosen one.
+// Picker for the screen-recording kind. The request carries `monitors` and,
+// when the application may share windows, `windows`; the answer names the
+// chosen one under the matching key.
 ListView {
-    id: displays
+    id: choices
 
     readonly property string title: qsTr("“%1” wants to record the contents of your screen").arg(prompt.application.name)
-    readonly property string description: qsTr("Choose the display to share. Everything shown on it, including other windows, will be visible to the application until it stops recording.")
+    readonly property string description: {
+        var monitors = (prompt.request.monitors || []).length > 0
+        var windows = (prompt.request.windows || []).length > 0
+        if (monitors && windows)
+            return qsTr("Choose a display or a window to share. What is shown on it will be visible to the application until it stops recording.")
+        if (windows)
+            return qsTr("Choose the window to share. Its contents will be visible to the application until it stops recording.")
+        return qsTr("Choose the display to share. Everything shown on it, including other windows, will be visible to the application until it stops recording.")
+    }
     readonly property bool ready: currentIndex >= 0 && currentIndex < count
 
     signal accepted()
 
     function details() {
-        return { "monitors": [ prompt.request.monitors[currentIndex].name ] }
+        var item = choices.model[currentIndex]
+        if (item.kind === "window")
+            return { "windows": [ item.identifier ] }
+        return { "monitors": [ item.name ] }
     }
 
-    implicitHeight: Math.min(count, 3) * 52 + Math.max(0, Math.min(count, 3) - 1) * spacing
-    model: prompt.request.monitors
+    function buildModel() {
+        var rows = []
+        var monitors = prompt.request.monitors || []
+        for (var i = 0; i < monitors.length; ++i) {
+            var m = monitors[i] || {}
+            rows.push({ kind: "monitor", name: m.name || "", description: m.description || "",
+                        width: m.width || 0, height: m.height || 0 })
+        }
+        var windows = prompt.request.windows || []
+        for (var j = 0; j < windows.length; ++j) {
+            var w = windows[j] || {}
+            rows.push({ kind: "window", identifier: w.identifier || "", title: w.title || "",
+                        appId: w.app_id || "" })
+        }
+        return rows
+    }
+
+    implicitHeight: Math.min(contentHeight, 5 * 52 + 4 * spacing + 2 * 24)
+    model: buildModel()
     clip: true
     spacing: 4
     currentIndex: 0
@@ -27,23 +56,42 @@ ListView {
     keyNavigationEnabled: true
     ScrollBar.vertical: ScrollBar {}
 
+    section.property: "kind"
+    section.criteria: ViewSection.FullString
+    section.delegate: Label {
+        width: ListView.view.width
+        height: 24
+        leftPadding: 12
+        verticalAlignment: Text.AlignVCenter
+        text: section === "window" ? qsTr("Windows") : qsTr("Displays")
+        font.pixelSize: 11
+        color: FishUI.Theme.disabledTextColor
+        // A single kind needs no heading.
+        visible: (prompt.request.monitors || []).length > 0 && (prompt.request.windows || []).length > 0
+    }
+
     delegate: Item {
         id: row
         width: ListView.view.width
         height: 52
 
-        readonly property bool selected: displays.currentIndex === index
+        readonly property bool selected: choices.currentIndex === index
         // modelData is gone for a moment while the window tears down.
-        readonly property var monitor: modelData ? modelData : ({})
-        readonly property string label: row.monitor.description ? row.monitor.description
-                                                                : (row.monitor.name || "")
+        readonly property var entry: modelData ? modelData : ({})
+        readonly property bool isWindow: row.entry.kind === "window"
+        readonly property string label: row.isWindow ? (row.entry.title || row.entry.appId || "")
+                                                     : (row.entry.description || row.entry.name || "")
+        readonly property string detail: row.isWindow ? (row.entry.appId || "")
+                                                      : (row.entry.name ? row.entry.name + "  ·  " + row.entry.width + " × " + row.entry.height : "")
+        readonly property string icon: row.isWindow ? (prompt.applicationIcon(row.entry.appId || "") || "window")
+                                                    : "video-display"
 
         MouseArea {
             id: rowArea
             anchors.fill: parent
             hoverEnabled: true
-            onClicked: displays.currentIndex = index
-            onDoubleClicked: displays.accepted()
+            onClicked: choices.currentIndex = index
+            onDoubleClicked: choices.accepted()
         }
 
         Rectangle {
@@ -65,7 +113,7 @@ ListView {
             FishUI.IconItem {
                 Layout.preferredWidth: 28
                 Layout.preferredHeight: 28
-                source: "video-display"
+                source: row.icon
             }
 
             ColumnLayout {
@@ -82,7 +130,8 @@ ListView {
 
                 Label {
                     Layout.fillWidth: true
-                    text: row.monitor.name ? row.monitor.name + "  ·  " + row.monitor.width + " × " + row.monitor.height : ""
+                    visible: text.length > 0
+                    text: row.detail
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
                     font.pixelSize: 11

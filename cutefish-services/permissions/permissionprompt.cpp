@@ -3,6 +3,7 @@
 #include "waylandparent.h"
 
 #include <QDBusArgument>
+#include <QDBusVariant>
 #include <QDebug>
 #include <QFile>
 #include <QJsonArray>
@@ -34,20 +35,41 @@ const Kind *findKind(const QString &name)
     return nullptr;
 }
 
-// D-Bus containers arrive as QDBusArgument; QML wants plain values.
+// D-Bus containers arrive as QDBusArgument; QML wants plain values. Nested
+// dictionaries are pulled out as maps explicitly: QtDBus does not turn an
+// element of an `aa{sv}` into anything usable on its own.
 QVariant plain(const QVariant &value)
 {
-    if (value.canConvert<QDBusArgument>()) {
+    if (value.userType() == qMetaTypeId<QDBusArgument>()) {
         const auto argument = value.value<QDBusArgument>();
-        switch (argument.currentType()) {
-        case QDBusArgument::MapType:
-            return plain(qdbus_cast<QVariantMap>(argument));
-        case QDBusArgument::ArrayType:
-            return plain(qdbus_cast<QVariantList>(argument));
-        default:
-            return QVariant();
+        const QString signature = argument.currentSignature();
+        if (signature.startsWith(QLatin1String("a{"))) {
+            QVariantMap map;
+            argument >> map;
+            return plain(map);
         }
+        if (signature.startsWith(QLatin1Char('a'))) {
+            const bool maps = signature.mid(1).startsWith(QLatin1String("a{"));
+            QVariantList list;
+            argument.beginArray();
+            while (!argument.atEnd()) {
+                if (maps) {
+                    QVariantMap map;
+                    argument >> map;
+                    list.append(plain(map));
+                } else {
+                    QVariant entry;
+                    argument >> entry;
+                    list.append(plain(entry));
+                }
+            }
+            argument.endArray();
+            return list;
+        }
+        return QVariant();
     }
+    if (value.userType() == qMetaTypeId<QDBusVariant>())
+        return plain(value.value<QDBusVariant>().variant());
     if (value.userType() == QMetaType::QVariantMap) {
         QVariantMap result;
         const auto map = value.toMap();
@@ -159,6 +181,11 @@ void PermissionPrompt::allow(const QJsonObject &details, bool always)
 void PermissionPrompt::deny()
 {
     reply(1, {});
+}
+
+QString PermissionPrompt::applicationIcon(const QString &appId) const
+{
+    return describeApplication(appId).value("icon").toString();
 }
 
 void PermissionPrompt::reply(uint response, const QVariantMap &results)

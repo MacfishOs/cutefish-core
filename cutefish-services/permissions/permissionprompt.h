@@ -36,6 +36,9 @@ public:
 
     Q_INVOKABLE void allow(const QJsonObject &details, bool always);
     Q_INVOKABLE void deny();
+    // The icon name of an application's desktop entry, for rows that stand
+    // for another application's windows.
+    Q_INVOKABLE QString applicationIcon(const QString &appId) const;
 
 Q_SIGNALS:
     void finished();
