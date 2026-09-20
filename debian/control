@@ -1,7 +1,7 @@
 Source: cutefish-core
 Section: devel
 Priority: optional
-Maintainer: CutefishOS <cutefishos@foxmail.com>
+Maintainer: Reion Wong <reionwong@gmail.com>
 Build-Depends: cmake,
                debhelper (>= 9),
                pkg-config,
@@ -15,7 +15,7 @@ Build-Depends: cmake,
                qt6-tools-dev,
                qt6-tools-dev-tools
 Standards-Version: 4.5.0
-Homepage: https://github.com/cutefishos/core
+Homepage: https://github.com/cutefishos
 
 Package: cutefish-core
 Architecture: any
