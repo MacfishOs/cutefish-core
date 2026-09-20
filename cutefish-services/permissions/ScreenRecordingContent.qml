@@ -9,16 +9,17 @@ import FishUI 1.0 as FishUI
 ListView {
     id: choices
 
-    readonly property string title: qsTr("“%1” wants to record the contents of your screen").arg(prompt.application.name)
+    readonly property string title: qsTr("Share your screen with “%1”").arg(prompt.application.name)
     readonly property string description: {
         var monitors = (prompt.request.monitors || []).length > 0
         var windows = (prompt.request.windows || []).length > 0
         if (monitors && windows)
-            return qsTr("Choose a display or a window to share. What is shown on it will be visible to the application until it stops recording.")
+            return qsTr("Choose a display or a window. What is shown on it will be visible to the application until it stops sharing.")
         if (windows)
-            return qsTr("Choose the window to share. Its contents will be visible to the application until it stops recording.")
-        return qsTr("Choose the display to share. Everything shown on it, including other windows, will be visible to the application until it stops recording.")
+            return qsTr("Choose a window. Its contents will be visible to the application until it stops sharing.")
+        return qsTr("Choose a display. Everything shown on it, including other windows, will be visible to the application until it stops sharing.")
     }
+    readonly property string accept: qsTr("Share")
     readonly property bool ready: currentIndex >= 0 && currentIndex < count
 
     signal accepted()

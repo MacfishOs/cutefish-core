@@ -23,7 +23,7 @@ public:
 
 public slots:
     // Replies (response, results): 0 allowed, 1 denied or dismissed, 2 failed.
-    // results carries `always` plus whatever the kind's content chose.
+    // results carries whatever the kind's content chose.
     void Prompt(const QString &token, const QString &kind, const QString &appId,
                 const QString &parentWindow, const QVariantMap &options,
                 const QDBusMessage &message);

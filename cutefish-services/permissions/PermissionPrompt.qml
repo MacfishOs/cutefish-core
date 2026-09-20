@@ -30,13 +30,13 @@ FishUI.Window {
 
     function toggleMaximized() {}
 
-    function allow(always) {
+    function allow() {
         if (content.item && content.item.ready)
-            prompt.allow(content.item.details(), always)
+            prompt.allow(content.item.details())
     }
 
     Shortcut { sequence: "Escape"; onActivated: prompt.deny() }
-    Shortcut { sequence: "Return"; onActivated: root.allow(false) }
+    Shortcut { sequence: "Return"; onActivated: root.allow() }
 
     // No title bar, so any empty part of the dialog drags it.
     DragHandler {
@@ -89,7 +89,7 @@ FishUI.Window {
             id: content
             Layout.fillWidth: true
             source: "qrc:/permissions/" + prompt.content
-            onLoaded: item.accepted.connect(function() { root.allow(false) })
+            onLoaded: item.accepted.connect(function() { root.allow() })
         }
 
         RowLayout {
@@ -97,25 +97,18 @@ FishUI.Window {
             Layout.fillWidth: true
 
             FishUI.ConfirmDialogButton {
-                text: qsTr("Deny")
+                text: qsTr("Cancel")
                 onClicked: prompt.deny()
             }
 
             Item { Layout.fillWidth: true }
 
             FishUI.ConfirmDialogButton {
-                visible: prompt.canAlwaysAllow
-                text: qsTr("Always Allow")
-                enabled: content.item && content.item.ready
-                onClicked: root.allow(true)
-            }
-
-            FishUI.ConfirmDialogButton {
                 primary: true
                 focus: true
-                text: qsTr("Allow Once")
+                text: content.item ? content.item.accept : qsTr("Allow")
                 enabled: content.item && content.item.ready
-                onClicked: root.allow(false)
+                onClicked: root.allow()
             }
         }
     }

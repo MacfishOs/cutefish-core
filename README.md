@@ -21,16 +21,17 @@ services can ask the user for a permission with one dialog style:
 - `Prompt(token s, kind s, app_id s, parent_window s, options a{sv})`
   → `(response u, results a{sv})`. The reply waits for the user: `0` allowed,
   `1` denied or dismissed, `2` the prompt could not be shown. `results` carries
-  `always` (`b`, the user chose "Always Allow") plus the kind's own choice.
+  the kind's own choice.
   `parent_window` is a portal window identifier; `wayland:<handle>` parents the
   dialog through xdg-foreign and makes it modal.
 - `Dismiss(token s)` closes a prompt; only the connection that opened it may.
   A caller that leaves the bus takes its prompts with it.
 
-The dialog offers Deny, Allow Once and, when `app_id` is not empty, Always
-Allow; remembering a grant is the caller's job. Kinds are listed in
+The dialog offers Cancel and the kind's accept button; nothing is remembered
+here, an application that should not ask again is the caller's job (the
+screen cast portal hands out restore tokens). Kinds are listed in
 `cutefish-services/permissions/permissionprompt.cpp`; each names a QML content
-component. `screen-recording` takes `types` (the portal's source-type bitmask),
+component, which provides the title, description and accept label. `screen-recording` takes `types` (the portal's source-type bitmask),
 `monitors` (`aa{sv}` with `name`, `description`, `x`, `y`, `width`, `height`)
 and `windows` (`aa{sv}` with `identifier`, `title`, `app_id`), shows whichever
 are offered, and answers with `monitors` (`as`) or `windows` (`as`).

@@ -123,7 +123,6 @@ PermissionPrompt::PermissionPrompt(QQmlEngine *engine, const QString &kind, cons
     , m_parentWindow(parentWindow)
     , m_application(describeApplication(appId))
     , m_request(QJsonObject::fromVariantMap(plain(options).toMap()))
-    , m_canAlwaysAllow(!appId.isEmpty())
 {
     if (const Kind *entry = findKind(kind)) {
         m_content = QString::fromLatin1(entry->content);
@@ -161,7 +160,7 @@ void PermissionPrompt::dismiss()
     reply(1, {});
 }
 
-void PermissionPrompt::allow(const QJsonObject &details, bool always)
+void PermissionPrompt::allow(const QJsonObject &details)
 {
     QVariantMap results = details.toVariantMap();
     // JSON arrays of strings must go out as `as`, not `av`.
@@ -174,7 +173,6 @@ void PermissionPrompt::allow(const QJsonObject &details, bool always)
                 it.value() = it.value().toStringList();
         }
     }
-    results.insert(QStringLiteral("always"), always);
     reply(0, results);
 }
 
