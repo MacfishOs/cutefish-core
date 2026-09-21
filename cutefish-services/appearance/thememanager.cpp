@@ -148,6 +148,7 @@ ThemeManager::ThemeManager(QObject *parent)
     // init value
     m_isDarkMode = m_settings->value("DarkMode", false).toBool();
     m_darkModeDimsWallpaer = m_settings->value("DarkModeDimsWallpaer", false).toBool();
+    m_continuousCorners = m_settings->value("ContinuousCorners", true).toBool();
     m_backgroundVisible = true;
     m_wallpaperPath =
             m_settings->value("Wallpaper", "/usr/share/backgrounds/cutefishos/default.jpg")
@@ -272,6 +273,22 @@ void ThemeManager::setDarkModeDimsWallpaer(bool value)
     m_settings->setValue("DarkModeDimsWallpaer", m_darkModeDimsWallpaer);
 
     emit darkModeDimsWallpaerChanged();
+}
+
+bool ThemeManager::continuousCorners() const
+{
+    return m_continuousCorners;
+}
+
+void ThemeManager::setContinuousCorners(bool value)
+{
+    if (m_continuousCorners == value)
+        return;
+
+    m_continuousCorners = value;
+    m_settings->setValue("ContinuousCorners", m_continuousCorners);
+
+    emit continuousCornersChanged();
 }
 
 bool ThemeManager::backgroundVisible() const

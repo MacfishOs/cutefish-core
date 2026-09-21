@@ -32,6 +32,8 @@ class ThemeManager : public QObject
                        NOTIFY darkModeDimsWallpaerChanged)
     Q_PROPERTY(bool backgroundVisible READ backgroundVisible WRITE setBackgroundVisible NOTIFY
                        backgroundVisibleChanged)
+    Q_PROPERTY(bool continuousCorners READ continuousCorners WRITE setContinuousCorners NOTIFY
+                       continuousCornersChanged)
     Q_PROPERTY(QString systemFont READ systemFont WRITE setSystemFont NOTIFY systemFontChanged)
     Q_PROPERTY(QString systemFixedFont READ systemFixedFont WRITE setSystemFixedFont)
     Q_PROPERTY(qreal systemFontPointSize READ systemFontPointSize WRITE setSystemFontPointSize
@@ -57,6 +59,9 @@ public:
 
     bool darkModeDimsWallpaer() const;
     void setDarkModeDimsWallpaer(bool value);
+
+    bool continuousCorners() const;
+    void setContinuousCorners(bool value);
 
     QString systemFont();
     bool backgroundVisible() const;
@@ -104,6 +109,7 @@ signals:
     void wallpaperChanged(QString path);
     void userWallpapersChanged();
     void darkModeDimsWallpaerChanged();
+    void continuousCornersChanged();
     void accentColorChanged(int accentColor);
     void backgroundVisibleChanged();
     void backgroundTypeChanged();
@@ -119,6 +125,7 @@ private:
 
     bool m_isDarkMode;
     bool m_darkModeDimsWallpaer;
+    bool m_continuousCorners;
     QString m_wallpaperPath;
     QStringList m_userWallpapers;
     bool m_backgroundVisible;

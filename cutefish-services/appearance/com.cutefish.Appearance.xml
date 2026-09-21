@@ -7,6 +7,9 @@
     <method name="setDarkModeDimsWallpaer">
         <arg name="darkModeDimsWallpaer" type="b" direction="in"/>
     </method>
+    <method name="setContinuousCorners">
+        <arg name="continuousCorners" type="b" direction="in"/>
+    </method>
     <method name="setBackgroundVisible">
         <arg name="BackgroundVisible" type="b" direction="in"/>
     </method>
@@ -49,6 +52,7 @@
 
     <property name="isDarkMode" type="b" access="read"/>
     <property name="darkModeDimsWallpaer" type="b" access="read"/>
+    <property name="continuousCorners" type="b" access="read"/>
     <property name="backgroundVisible" type="b" access="read"/>
     <property name="systemFont" type="s" access="read"/>
     <property name="systemFixedFont" type="s" access="read"/>
@@ -70,6 +74,8 @@
     </signal>
     <signal name="userWallpapersChanged"></signal>
     <signal name="darkModeDimsWallpaerChanged">
+    </signal>
+    <signal name="continuousCornersChanged">
     </signal>
     <signal name="backgroundVisibleChanged">
     </signal>
