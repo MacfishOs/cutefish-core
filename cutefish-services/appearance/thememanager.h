@@ -109,7 +109,7 @@ signals:
     void wallpaperChanged(QString path);
     void userWallpapersChanged();
     void darkModeDimsWallpaerChanged();
-    void continuousCornersChanged();
+    void continuousCornersChanged(bool continuousCorners);
     void accentColorChanged(int accentColor);
     void backgroundVisibleChanged();
     void backgroundTypeChanged();

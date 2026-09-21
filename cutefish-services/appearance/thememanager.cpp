@@ -288,7 +288,7 @@ void ThemeManager::setContinuousCorners(bool value)
     m_continuousCorners = value;
     m_settings->setValue("ContinuousCorners", m_continuousCorners);
 
-    emit continuousCornersChanged();
+    emit continuousCornersChanged(m_continuousCorners);
 }
 
 bool ThemeManager::backgroundVisible() const

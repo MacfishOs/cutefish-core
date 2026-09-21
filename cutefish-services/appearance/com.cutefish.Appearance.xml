@@ -76,6 +76,7 @@
     <signal name="darkModeDimsWallpaerChanged">
     </signal>
     <signal name="continuousCornersChanged">
+        <arg type="b"/>
     </signal>
     <signal name="backgroundVisibleChanged">
     </signal>
