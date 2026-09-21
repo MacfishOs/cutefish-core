@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: Reion Wong <reionwong@gmail.com>
 Build-Depends: cmake,
                debhelper (>= 9),
+               libcutefish,
                pkg-config,
                libwayland-dev,
                wayland-protocols (>= 1.39),
