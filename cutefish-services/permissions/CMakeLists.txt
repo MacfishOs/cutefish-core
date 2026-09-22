@@ -38,4 +38,4 @@ target_include_directories(cutefish-permissions PUBLIC ${CMAKE_CURRENT_SOURCE_DI
 target_compile_definitions(cutefish-permissions PRIVATE CUTEFISH_PERMISSIONS_WAYLAND)
 target_link_libraries(cutefish-permissions
     PUBLIC Qt6::Core Qt6::DBus Qt6::Gui Qt6::Qml Qt6::Quick
-    PRIVATE Qt6::QuickControls2 Qt6::GuiPrivate Cutefish::Applications PkgConfig::PermissionsWayland)
+    PRIVATE Qt6::QuickControls2 Qt6::GuiPrivate Cutefish::Application PkgConfig::PermissionsWayland)

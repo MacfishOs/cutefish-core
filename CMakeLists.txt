@@ -21,7 +21,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH})
 include(GNUInstallDirs)
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 
-find_package(CutefishFramework REQUIRED COMPONENTS Application Applications)
+find_package(CutefishFramework REQUIRED COMPONENTS Application)
 
 add_subdirectory(appruntime)
 add_subdirectory(polkit-agent)

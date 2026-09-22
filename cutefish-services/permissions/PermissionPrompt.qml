@@ -2,12 +2,14 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import FishUI 1.0 as FishUI
+import Cutefish.Application
 
 // The shared frame: who is asking, the kind-specific content, and the three
 // answers. Content components expose `title`, `description`, `ready` and
 // `details()`; see ScreenRecordingContent.qml.
 FishUI.Window {
     id: root
+    WindowHints.skipTaskbar: true
 
     readonly property int contentWidth: 440
     readonly property int contentHeight: mainLayout.implicitHeight + 40

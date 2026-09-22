@@ -19,6 +19,8 @@
 
 #include "dialog.h"
 
+#include <windowhints.h>
+
 #include <QGuiApplication>
 #include <QQmlContext>
 #include <QScreen>
@@ -39,6 +41,7 @@ Dialog::Dialog(const QString &action, const QString &message,
 {
     qDebug() << "Creating ConfirmationDialog";
 
+    Cutefish::WindowHints::forWindow(m_view)->setSkipTaskbar(true);
     m_view->setFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     m_view->rootContext()->setContextProperty("confirmation", this);
     m_view->rootContext()->setContextProperty("rootWindow", m_view);
