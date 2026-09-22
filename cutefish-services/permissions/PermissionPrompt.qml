@@ -65,7 +65,7 @@ FishUI.Window {
                 spacing: 4
                 Layout.fillWidth: true
 
-                Label {
+                FishUI.Label {
                     Layout.fillWidth: true
                     text: content.item ? content.item.title : ""
                     textFormat: Text.PlainText
@@ -74,7 +74,7 @@ FishUI.Window {
                     color: FishUI.Theme.textColor
                 }
 
-                Label {
+                FishUI.Label {
                     Layout.fillWidth: true
                     text: content.item ? content.item.description : ""
                     textFormat: Text.PlainText

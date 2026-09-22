@@ -3,7 +3,6 @@
 
 #include <QDBusServiceWatcher>
 #include <QQmlEngine>
-#include <QQuickStyle>
 
 namespace {
 
@@ -32,8 +31,6 @@ PermissionManager::~PermissionManager()
 QQmlEngine *PermissionManager::engine()
 {
     if (!m_engine) {
-        // Must precede the first QtQuick.Controls import in this process.
-        QQuickStyle::setStyle(QStringLiteral("Fish"));
         m_engine = new QQmlEngine(this);
     }
     return m_engine;

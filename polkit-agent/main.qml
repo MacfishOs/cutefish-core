@@ -60,7 +60,7 @@ Item {
             Layout.fillWidth: true
             spacing: 4
 
-            Label {
+            FishUI.Label {
                 width: root.width - 32
                 text: "Authentication Required"
                 textFormat: Text.PlainText
@@ -69,7 +69,7 @@ Item {
                 color: FishUI.Theme.textColor
             }
 
-            Label {
+            FishUI.Label {
                 width: root.width - 32
                 text: confirmation.message
                 textFormat: Text.PlainText
@@ -81,17 +81,17 @@ Item {
             }
         }
 
-        TextField {
+        FishUI.TextField {
             id: userTextField
             text: confirmation.identity
             enabled: false
             Layout.fillWidth: true
         }
 
-        TextField {
+        FishUI.TextField {
             id: passwordInput
             placeholderText: qsTr("Password")
-            echoMode: TextField.Password
+            echoMode: FishUI.TextField.Password
             Layout.fillWidth: true
             selectByMouse: true
             focus: true

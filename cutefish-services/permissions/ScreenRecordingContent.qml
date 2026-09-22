@@ -55,11 +55,11 @@ ListView {
     currentIndex: 0
     boundsBehavior: Flickable.StopAtBounds
     keyNavigationEnabled: true
-    ScrollBar.vertical: ScrollBar {}
+    FishUI.ScrollBar.vertical: FishUI.ScrollBar {}
 
     section.property: "kind"
     section.criteria: ViewSection.FullString
-    section.delegate: Label {
+    section.delegate: FishUI.Label {
         width: ListView.view.width
         height: 24
         leftPadding: 12
@@ -121,7 +121,7 @@ ListView {
                 spacing: 1
                 Layout.fillWidth: true
 
-                Label {
+                FishUI.Label {
                     Layout.fillWidth: true
                     text: row.label
                     elide: Text.ElideRight
@@ -129,7 +129,7 @@ ListView {
                     color: row.selected ? FishUI.Theme.highlightedTextColor : FishUI.Theme.textColor
                 }
 
-                Label {
+                FishUI.Label {
                     Layout.fillWidth: true
                     visible: text.length > 0
                     text: row.detail
