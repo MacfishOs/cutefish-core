@@ -24,6 +24,8 @@
 #include <QSettings>
 #include <QStringList>
 
+class WallpaperManager;
+
 class ThemeManager : public QObject
 {
     Q_OBJECT
@@ -40,6 +42,7 @@ class ThemeManager : public QObject
                        NOTIFY systemFontPointSizeChanged)
     Q_PROPERTY(QString wallpaper READ wallpaper WRITE setWallpaper NOTIFY wallpaperChanged)
     Q_PROPERTY(QStringList userWallpapers READ userWallpapers NOTIFY userWallpapersChanged)
+    Q_PROPERTY(QStringList wallpaperFolders READ wallpaperFolders NOTIFY wallpaperFoldersChanged)
     Q_PROPERTY(int accentColor READ accentColor WRITE setAccentColor NOTIFY accentColorChanged)
     Q_PROPERTY(int backgroundType READ backgroundType WRITE setBackgroundType NOTIFY
                        backgroundTypeChanged)
@@ -79,6 +82,11 @@ public:
     QStringList userWallpapers() const;
     void removeUserWallpaper(const QString &path);
 
+    QStringList wallpaperFolders() const;
+    void addWallpaperFolder(const QString &path);
+    void removeWallpaperFolder(const QString &path);
+    QStringList wallpaperFolderImages(const QString &path);
+
     int backgroundType();
     void setBackgroundType(int type);
 
@@ -108,6 +116,8 @@ signals:
     void darkModeChanged(bool darkMode);
     void wallpaperChanged(QString path);
     void userWallpapersChanged();
+    void wallpaperFoldersChanged();
+    void wallpaperFolderImagesChanged(QString folder);
     void darkModeDimsWallpaerChanged();
     void continuousCornersChanged(bool continuousCorners);
     void accentColorChanged(int accentColor);
@@ -122,15 +132,11 @@ signals:
 
 private:
     QSettings *m_settings;
+    WallpaperManager *m_wallpaperManager;
 
     bool m_isDarkMode;
     bool m_darkModeDimsWallpaer;
     bool m_continuousCorners;
-    QString m_wallpaperPath;
-    QStringList m_userWallpapers;
-    bool m_backgroundVisible;
-    int m_backgroundType;
-    QString m_backgroundColor;
     int m_accentColor;
 
     QString m_cursorTheme;
