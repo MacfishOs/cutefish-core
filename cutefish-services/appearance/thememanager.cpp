@@ -374,6 +374,8 @@ void ThemeManager::setIconTheme(const QString &iconTheme)
 
     m_iconTheme = iconTheme;
     m_settings->setValue("IconTheme", m_iconTheme);
+    // Listeners re-read the file when the signal arrives.
+    m_settings->sync();
     updateGtk3Config();
     emit iconThemeChanged();
 }
