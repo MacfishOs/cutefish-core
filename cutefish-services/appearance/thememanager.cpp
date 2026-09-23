@@ -325,17 +325,11 @@ void ThemeManager::setBackgroundColor(QString color)
 
 void ThemeManager::updateGtk3Config()
 {
-    // "Cutefish" and the legacy Crule names follow dark mode.
-    const bool iconFollowsDarkMode =
-            m_iconTheme.isEmpty() || m_iconTheme == "Cutefish" || m_iconTheme.startsWith("Crule");
-
     GtkSettings gtk;
     gtk.fontFamily = systemFont();
     gtk.fontPointSize = systemFontPointSize();
     gtk.darkMode = isDarkMode();
-    gtk.iconTheme = iconFollowsDarkMode
-            ? (isDarkMode() ? QStringLiteral("Cutefish-Dark") : QStringLiteral("Cutefish-Light"))
-            : m_iconTheme;
+    gtk.iconTheme = m_iconTheme.isEmpty() ? QStringLiteral("Cutefish") : m_iconTheme;
     gtk.cursorTheme = m_cursorTheme;
     gtk.cursorSize = m_cursorSize;
     writeGtkSettings(gtk);
