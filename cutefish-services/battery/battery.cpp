@@ -51,7 +51,7 @@ void Battery::init()
         QDBusConnection::sessionBus().registerObject(
                 QStringLiteral("/com/cutefish/Services/Battery"), this);
 
-        m_settings = new QSettings(QStringLiteral("cutefish"), QStringLiteral("PrimaryBattery"));
+        m_settings = new QSettings(QStringLiteral("cutefish"), QStringLiteral("battery"));
         m_lastChargedPercent = m_settings->value("LastChargedPercent", 0).toInt();
         m_lastChargedSecs = m_settings->value("LastChargedSecs").toLongLong();
     }
