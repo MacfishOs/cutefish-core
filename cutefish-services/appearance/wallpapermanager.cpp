@@ -223,8 +223,7 @@ QStringList WallpaperManager::userWallpapers() const
 
 void WallpaperManager::removeUserWallpaper(const QString &path)
 {
-    if (path == m_wallpaperPath || !isManagedUserWallpaper(path)
-        || !m_userWallpapers.contains(path)) {
+    if (!isManagedUserWallpaper(path) || !m_userWallpapers.contains(path)) {
         return;
     }
 
@@ -233,6 +232,46 @@ void WallpaperManager::removeUserWallpaper(const QString &path)
 
     m_userWallpapers.removeAll(path);
     m_settings->setValue("UserWallpapers", m_userWallpapers);
+
+    if (path != m_wallpaperPath) {
+        emit userWallpapersChanged();
+        return;
+    }
+
+    QString replacement;
+    for (const QString &candidate : m_userWallpapers) {
+        if (QFileInfo::exists(candidate)) {
+            replacement = candidate;
+            break;
+        }
+    }
+
+    if (replacement.isEmpty()) {
+        const QString userDataPath = QDir::cleanPath(
+                QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+        const QStringList dataPaths =
+                QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
+        for (const QString &dataPath : dataPaths) {
+            if (QDir::cleanPath(dataPath) == userDataPath)
+                continue;
+
+            const QString directory = QDir(dataPath).absoluteFilePath(
+                    QStringLiteral("backgrounds/cutefishos"));
+            const QStringList wallpapers = imagesIn(directory);
+            if (!wallpapers.isEmpty()) {
+                replacement = wallpapers.first();
+                break;
+            }
+        }
+    }
+
+    m_wallpaperPath = replacement;
+    m_settings->setValue("Wallpaper", replacement);
+    emit wallpaperChanged(replacement);
+
+    if (replacement.isEmpty())
+        setBackgroundType(1);
+
     emit userWallpapersChanged();
 }
 
