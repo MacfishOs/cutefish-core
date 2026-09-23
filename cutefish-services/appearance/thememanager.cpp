@@ -19,32 +19,18 @@
 
 #include "thememanager.h"
 #include "appearanceadaptor.h"
+#include "fontconfigwriter.h"
+#include "gtksettings.h"
 #include "wallpapermanager.h"
 
 #include <QDBusInterface>
 #include <QDebug>
-#include <QDir>
 #include <QFile>
-#include <QFontDatabase>
-#include <QProcess>
-#include <QStandardPaths>
 #include <QTextStream>
-#include <QTimer>
 
 static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
 static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
 static const QByteArray s_systemPointFontSize = QByteArrayLiteral("FontSize");
-
-static QString gtkRc2Path()
-{
-    return QDir::homePath() + QLatin1String("/.gtkrc-2.0");
-}
-
-static QString gtk3SettingsIniPath()
-{
-    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-            + QLatin1String("/gtk-3.0/settings.ini");
-}
 
 ThemeManager *ThemeManager::self()
 {
@@ -95,9 +81,6 @@ ThemeManager::ThemeManager(QObject *parent)
     m_cursorSize = m_settings->value("CursorSize", 24).toInt();
     m_iconTheme = m_settings->value("IconTheme", "Cutefish").toString();
 
-    // Synchronize toolkit and compositor cursor settings at session startup.
-    applyCursorSettings();
-
     // Init fonts.
     if (!m_settings->contains(s_systemFixedFontName)) {
         m_settings->setValue(s_systemFixedFontName, "Noto Mono");
@@ -128,33 +111,8 @@ ThemeManager::ThemeManager(QObject *parent)
     // 登陆后更新 fontconfig
     updateFontConfig();
 
-    auto *iconThemeProcess = new QProcess(this);
-    auto *deadline = new QTimer(iconThemeProcess);
-    deadline->setSingleShot(true);
-    connect(iconThemeProcess, &QProcess::finished, this,
-            [iconThemeProcess, deadline](int exitCode, QProcess::ExitStatus status) {
-                deadline->stop();
-                if (status != QProcess::NormalExit || exitCode != 0)
-                    qWarning() << "Cannot set GTK icon theme to Cutefish:"
-                               << iconThemeProcess->readAllStandardError();
-                iconThemeProcess->deleteLater();
-            });
-    connect(iconThemeProcess, &QProcess::errorOccurred, this,
-            [iconThemeProcess, deadline](QProcess::ProcessError error) {
-                if (error == QProcess::FailedToStart) {
-                    deadline->stop();
-                    qWarning() << "Cannot start gsettings:" << iconThemeProcess->errorString();
-                    iconThemeProcess->deleteLater();
-                }
-            });
-    connect(deadline, &QTimer::timeout, iconThemeProcess, [iconThemeProcess] {
-        qWarning() << "GTK icon theme update timed out";
-        iconThemeProcess->kill();
-    });
-    iconThemeProcess->start(QStringLiteral("gsettings"),
-                            {QStringLiteral("set"), QStringLiteral("org.gnome.desktop.interface"),
-                             QStringLiteral("icon-theme"), QStringLiteral("Cutefish")});
-    deadline->start(3000);
+    // GTK on Wayland takes these from gsettings, not settings.ini; sync them at login.
+    updateGtk3Config();
 }
 
 bool ThemeManager::isDarkMode()
@@ -267,10 +225,6 @@ void ThemeManager::setCursorSize(int size)
     }
 }
 
-void ThemeManager::updateGtk2Config()
-{
-}
-
 QString ThemeManager::systemFont()
 {
     return m_settings->value(s_systemFontName, "Noto Sans").toString();
@@ -371,29 +325,20 @@ void ThemeManager::setBackgroundColor(QString color)
 
 void ThemeManager::updateGtk3Config()
 {
-    QSettings settings(gtk3SettingsIniPath(), QSettings::IniFormat);
-    settings.clear();
-    settings.beginGroup("Settings");
-
-    // font
-    settings.setValue("gtk-font-name",
-                      QString("%1 %2").arg(systemFont()).arg(systemFontPointSize()));
-    // dark mode
-    settings.setValue("gtk-application-prefer-dark-theme", isDarkMode());
-    // icon theme
     // "Cutefish" and the legacy Crule names follow dark mode.
     const bool iconFollowsDarkMode =
             m_iconTheme.isEmpty() || m_iconTheme == "Cutefish" || m_iconTheme.startsWith("Crule");
-    settings.setValue("gtk-icon-theme-name",
-                      iconFollowsDarkMode ? (isDarkMode() ? "Cutefish-Dark" : "Cutefish-Light")
-                                          : m_iconTheme);
-    settings.setValue("gtk-cursor-theme-name", m_cursorTheme);
-    settings.setValue("gtk-cursor-theme-size", m_cursorSize);
-    // other
-    settings.setValue("gtk-enable-animations", true);
-    // theme
-    settings.setValue("gtk-theme-name", isDarkMode() ? "Cutefish-dark" : "Cutefish-light");
-    settings.sync();
+
+    GtkSettings gtk;
+    gtk.fontFamily = systemFont();
+    gtk.fontPointSize = systemFontPointSize();
+    gtk.darkMode = isDarkMode();
+    gtk.iconTheme = iconFollowsDarkMode
+            ? (isDarkMode() ? QStringLiteral("Cutefish-Dark") : QStringLiteral("Cutefish-Light"))
+            : m_iconTheme;
+    gtk.cursorTheme = m_cursorTheme;
+    gtk.cursorSize = m_cursorSize;
+    writeGtkSettings(gtk);
 }
 
 void ThemeManager::applyFontSettings()
@@ -412,107 +357,15 @@ void ThemeManager::applyCursorSettings()
 
 void ThemeManager::updateFontConfig()
 {
-    QFontDatabase database;
-    const QStringList families = database.families();
-    const QString familyFont = families.contains(systemFont()) ? systemFont()
-            : families.contains(QStringLiteral("Noto Sans"))   ? QStringLiteral("Noto Sans")
-                                                               : QStringLiteral("DejaVu Sans");
-    const QString fixedFont = families.contains(systemFixedFont()) ? systemFixedFont()
-            : families.contains(QStringLiteral("Noto Sans Mono"))
-            ? QStringLiteral("Noto Sans Mono")
-            : QStringLiteral("DejaVu Sans Mono");
-    const QString familyFallback = familyFont;
-
+    // The settings app writes these keys itself; read the file rather than m_settings' cache.
     QSettings settings(QSettings::UserScope, "cutefish", "theme");
-    bool hinting = settings.value("FontAntialias", true).toBool();
-    QString hintStyle = settings.value("FontHintStyle", "hintslight").toString();
 
-    QString content = QString("<?xml version=\"1.0\"?>"
-                              "<!DOCTYPE fontconfig SYSTEM \"fonts.dtd\">"
-                              "<fontconfig>"
-                              "<match target=\"pattern\">"
-                              "<test qual=\"any\" name=\"family\">"
-                              "<string>serif</string>"
-                              "</test>"
-                              "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
-                              "<string>%1</string>"
-                              "<string>%2</string>"
-                              "</edit>"
-                              "</match>"
-                              "<match target=\"pattern\">"
-                              "<test qual=\"any\" name=\"family\">"
-                              "<string>sans-serif</string>"
-                              "</test>"
-                              "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
-                              "<string>%3</string>"
-                              "<string>%4</string>"
-                              "</edit>"
-                              "</match>"
-                              "<match target=\"pattern\">"
-                              "<test qual=\"any\" name=\"family\">"
-                              "<string>monospace</string>"
-                              "</test>"
-                              "<edit name=\"family\" mode=\"assign\" binding=\"strong\">"
-                              "<string>%5</string>"
-                              "<string>%6</string>"
-                              "<string>%7</string>"
-                              "</edit>"
-                              "</match>"
-                              "<match target=\"font\">"
-                              "<edit name=\"rgba\" mode=\"assign\"><const>rgb</const></edit>"
-                              "</match>"
-                              "<match target=\"font\">"
-                              "<edit name=\"hinting\" mode=\"assign\">"
-                              "<bool>%8</bool>"
-                              "</edit>"
-                              "</match>"
-                              "<match target=\"font\">"
-                              "<edit name=\"hintstyle\" mode=\"assign\">"
-                              "<const>%9</const>"
-                              "</edit>"
-                              "</match>"
-                              "</fontconfig>")
-                              .arg(familyFont)
-                              .arg(familyFallback)
-                              .arg(familyFont)
-                              .arg(familyFallback)
-                              .arg(fixedFont)
-                              .arg(fixedFont)
-                              .arg(familyFont)
-                              .arg(hinting ? "true" : "false")
-                              .arg(hintStyle);
-
-    QString targetPath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                       + QLatin1Char('/') + QLatin1String("fontconfig"));
-
-    if (!QDir(targetPath).exists()) {
-        QDir(targetPath).mkpath(targetPath);
-    }
-
-    targetPath += "/conf.d";
-
-    if (!QDir(targetPath).exists()) {
-        QDir(targetPath).mkpath(targetPath);
-    }
-
-    QString xmlOut;
-    QXmlStreamReader reader(content);
-    QXmlStreamWriter writer(&xmlOut);
-    writer.setAutoFormatting(true);
-
-    while (!reader.atEnd()) {
-        reader.readNext();
-        if (!reader.isWhitespace()) {
-            writer.writeCurrentToken(reader);
-        }
-    }
-
-    QFile file(targetPath + "/99-cutefish.conf");
-    if (file.open(QIODevice::WriteOnly)) {
-        QTextStream s(&file);
-        s << xmlOut.toLatin1();
-        file.close();
-    }
+    FontConfig config;
+    config.family = systemFont();
+    config.fixedFamily = systemFixedFont();
+    config.antialias = settings.value("FontAntialias", true).toBool();
+    config.hintStyle = settings.value("FontHintStyle", "hintslight").toString();
+    writeFontConfig(config);
 }
 
 QString ThemeManager::iconTheme() const

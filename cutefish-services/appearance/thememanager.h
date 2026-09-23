@@ -102,7 +102,6 @@ public:
     int cursorSize() const;
     void setCursorSize(int size);
 
-    void updateGtk2Config();
     void updateGtk3Config();
     void applyFontSettings();
     void applyCursorSettings();

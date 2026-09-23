@@ -155,6 +155,10 @@ void Application::initEnvironments()
     qputenv("XDG_CURRENT_DESKTOP", "Cutefish");
     qputenv("XDG_SESSION_DESKTOP", "Cutefish");
 
+    // GLib's plain-text backend: cutefish-services writes the GTK appearance keys into
+    // ~/.config/glib-2.0/settings/keyfile, and no dconf daemon is needed.
+    qputenv("GSETTINGS_BACKEND", "keyfile");
+
     const QString gsettings = QStandardPaths::findExecutable(QStringLiteral("gsettings"));
     if (!gsettings.isEmpty()) {
         runSync(gsettings,
