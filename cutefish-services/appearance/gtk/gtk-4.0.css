@@ -1,0 +1,112 @@
+/*
+ * Imported from ~/.config/gtk-4.0/gtk.css at login. These rules rely on the user
+ * provider's priority to beat the theme and libadwaita regardless of specificity;
+ * a rule the user writes after the import only wins where its selector is at least
+ * as specific.
+ */
+
+/*
+ * 36px header bar for both plain GTK 4 and libadwaita: the box padding does the
+ * spacing and children fill the remaining 28px, so button margins are cleared.
+ */
+headerbar {
+  min-height: 36px;
+  padding: 0;
+}
+
+/* libadwaita pulls the header bar 1px past each side edge, so give 1px back */
+headerbar > windowhandle > box {
+  padding: 4px 5px;
+}
+
+headerbar entry,
+headerbar spinbutton,
+headerbar separator:not(.sidebar),
+headerbar button,
+headerbar menubutton,
+headerbar switch {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* Only direct header bar buttons; a descendant selector would reach into popovers */
+headerbar box.start > button,
+headerbar box.end > button,
+headerbar box.start > menubutton > button,
+headerbar box.end > menubutton > button,
+headerbar box.start > splitbutton > button,
+headerbar box.end > splitbutton > button,
+headerbar box.start > .linked > button,
+headerbar box.end > .linked > button,
+headerbar box.start > dropdown > button,
+headerbar box.end > dropdown > button,
+headerbar stackswitcher > button {
+  min-height: 18px;
+}
+
+headerbar entry,
+headerbar spinbutton:not(.vertical) {
+  min-height: 26px;
+}
+
+headerbar windowcontrols.start,
+headerbar windowcontrols.end {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+headerbar windowcontrols > button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px;
+  margin: 0;
+}
+
+headerbar windowcontrols > button > image {
+  min-width: 16px;
+  min-height: 16px;
+  padding: 4px;
+  background-color: transparent;
+  transition: none;
+}
+
+/* Restated because the transparent rest state above outranks libadwaita's state rules too */
+headerbar windowcontrols > button:hover > image {
+  background-color: color-mix(in srgb, currentColor 15%, transparent);
+}
+
+headerbar windowcontrols > button:active > image {
+  background-color: color-mix(in srgb, currentColor 30%, transparent);
+}
+
+/*
+ * libadwaita's view switcher asks for 34px and would stretch the bar past 36px.
+ * Its buttons keep the hidden icon-over-label layout in a homogeneous stack, so
+ * that layout's height is pulled in as well.
+ */
+headerbar viewswitcher:not(.narrow) {
+  min-height: 28px;
+}
+
+headerbar viewswitcher:not(.narrow) button.toggle > stack > box.narrow {
+  margin-top: -4px;
+  margin-bottom: -4px;
+}
+
+/* The app icon from the "icon" decoration-layout item keeps a 9px margin otherwise */
+headerbar windowcontrols > .icon {
+  margin: 6px;
+}
+
+/*
+ * With several top bars AdwToolbarView pads their box by 3px above and below,
+ * so the header bar gives that back to stay at 36px overall.
+ */
+toolbarview > .top-bar .collapse-spacing headerbar {
+  min-height: 30px;
+}
+
+toolbarview > .top-bar .collapse-spacing headerbar > windowhandle > box {
+  padding-top: 1px;
+  padding-bottom: 1px;
+}

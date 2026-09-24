@@ -17,4 +17,8 @@ struct GtkSettings
 // GSettings keyfile for Wayland clients.
 void writeGtkSettings(const GtkSettings &settings);
 
+// Puts the Cutefish stylesheet import at the top of the user's gtk.css for GTK 3 and 4, keeping
+// the rest of the file. It is re-added at every login, even after the user removed it.
+void ensureGtkCssImports();
+
 #endif

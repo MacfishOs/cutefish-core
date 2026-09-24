@@ -1,0 +1,54 @@
+/*
+ * Imported from ~/.config/gtk-3.0/gtk.css at login. These rules rely on the user
+ * provider's priority to beat the theme regardless of specificity; a rule the user
+ * writes after the import only wins where its selector is at least as specific.
+ */
+
+/* 36px header bar: 28px controls with 4px above and below */
+headerbar,
+.titlebar:not(headerbar) {
+  min-height: 36px;
+}
+
+headerbar entry,
+headerbar spinbutton,
+headerbar separator:not(.sidebar),
+headerbar button {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+/* User CSS outranks theme specificity, so undo the margin on nested spin buttons */
+headerbar spinbutton button {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+headerbar button:not(.titlebutton) {
+  min-height: 18px;
+}
+
+headerbar button.image-button:not(.titlebutton) {
+  min-width: 16px;
+}
+
+headerbar entry,
+headerbar spinbutton:not(.vertical) {
+  min-height: 26px;
+}
+
+headerbar switch {
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+/*
+ * Window buttons: 24px circles like libadwaita. GtkHeaderBar already puts its
+ * 6px spacing between them, so the theme's 2px side margins only widen the gap.
+ */
+headerbar button.titlebutton:not(.appmenu),
+.titlebar button.titlebutton:not(.appmenu) {
+  padding: 4px;
+  margin: 6px 0;
+  transition: none;
+}

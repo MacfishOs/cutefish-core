@@ -108,11 +108,12 @@ ThemeManager::ThemeManager(QObject *parent)
         m_settings->setValue(s_systemFontName, fontName);
     }
 
-    // 登陆后更新 fontconfig
+    // Update fontconfig after login.
     updateFontConfig();
 
     // GTK on Wayland takes these from gsettings, not settings.ini; sync them at login.
     updateGtk3Config();
+    ensureGtkCssImports();
 }
 
 bool ThemeManager::isDarkMode()

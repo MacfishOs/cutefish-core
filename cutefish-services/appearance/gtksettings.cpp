@@ -8,6 +8,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QVariant>
 
 static QString gtk3SettingsIniPath()
@@ -146,4 +147,48 @@ void writeGtkSettings(const GtkSettings &gtk)
             {QStringLiteral("cursor-size"), gtk.cursorSize},
             {QStringLiteral("enable-animations"), true},
     });
+}
+
+static void ensureGtkCssImport(const QString &gtkDir)
+{
+    const QString importLine = QStringLiteral("@import url(\"%1\");")
+            .arg(QUrl::fromLocalFile(QStringLiteral(CUTEFISH_GTK_CSS_DIR "/%1.css").arg(gtkDir))
+                         .toString());
+
+    QString path = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+            + QLatin1Char('/') + gtkDir + QLatin1String("/gtk.css");
+    // Write through a symlinked gtk.css (dotfile managers) instead of replacing the link.
+    const QFileInfo info(path);
+    if (info.isSymLink() && info.exists())
+        path = info.canonicalFilePath();
+
+    QStringList lines;
+    QFile in(path);
+    if (in.open(QIODevice::ReadOnly | QIODevice::Text))
+        lines = QString::fromUtf8(in.readAll()).split(QLatin1Char('\n'));
+    while (!lines.isEmpty() && lines.last().isEmpty())
+        lines.removeLast();
+
+    // GTK drops an @import that follows any rule, so ours has to lead the file. Rewriting an
+    // unchanged file would make every running GTK client reload its styles.
+    if (!lines.isEmpty() && lines.first() == importLine)
+        return;
+    lines.removeAll(importLine);
+    lines.prepend(importLine);
+
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QSaveFile out(path);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "Cannot write" << path << out.errorString();
+        return;
+    }
+    out.write(lines.join(QLatin1Char('\n')).toUtf8());
+    out.write("\n");
+    out.commit();
+}
+
+void ensureGtkCssImports()
+{
+    ensureGtkCssImport(QStringLiteral("gtk-3.0"));
+    ensureGtkCssImport(QStringLiteral("gtk-4.0"));
 }

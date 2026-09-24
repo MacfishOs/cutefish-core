@@ -37,6 +37,10 @@ set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
 
 add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${HEADERS} ${FORMS} ${RESOURCES})
 
+target_compile_definitions(${TARGET} PRIVATE
+        CUTEFISH_GTK_CSS_DIR="${CMAKE_INSTALL_FULL_DATAROOTDIR}/${TARGET}/gtk"
+)
+
 target_link_libraries(${TARGET}
         Cutefish::Application
         cutefish-clipboard-backend
@@ -56,5 +60,7 @@ add_dependencies(${TARGET} translations)
 
 install(TARGETS ${TARGET} DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${QM_FILES} DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${TARGET}/translations)
+install(FILES appearance/gtk/gtk-3.0.css appearance/gtk/gtk-4.0.css
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${TARGET}/gtk)
 install(FILES brightness/60-cutefish-ddc.rules DESTINATION lib/udev/rules.d)
 install(FILES brightness/cutefish-ddc.conf DESTINATION lib/modules-load.d)
