@@ -1,10 +1,3 @@
-/*
- * Imported from ~/.config/gtk-3.0/gtk.css at login. These rules rely on the user
- * provider's priority to beat the theme regardless of specificity; a rule the user
- * writes after the import only wins where its selector is at least as specific.
- */
-
-/* 36px header bar: 28px controls with 4px above and below */
 headerbar,
 .titlebar:not(headerbar) {
   min-height: 36px;
@@ -42,13 +35,20 @@ headerbar switch {
   margin-bottom: 5px;
 }
 
-/*
- * Window buttons: 24px circles like libadwaita. GtkHeaderBar already puts its
- * 6px spacing between them, so the theme's 2px side margins only widen the gap.
- */
 headerbar button.titlebutton:not(.appmenu),
 .titlebar button.titlebutton:not(.appmenu) {
   padding: 4px;
-  margin: 6px 0;
+  margin: 5px 0;
   transition: none;
+}
+
+headerbar.default-decoration,
+.default-decoration.titlebar:not(headerbar) {
+  padding: 0 6px;
+}
+
+headerbar.default-decoration button.titlebutton,
+.default-decoration.titlebar:not(headerbar) button.titlebutton {
+  min-height: 0;
+  min-width: 0;
 }

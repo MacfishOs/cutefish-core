@@ -1,20 +1,8 @@
-/*
- * Imported from ~/.config/gtk-4.0/gtk.css at login. These rules rely on the user
- * provider's priority to beat the theme and libadwaita regardless of specificity;
- * a rule the user writes after the import only wins where its selector is at least
- * as specific.
- */
-
-/*
- * 36px header bar for both plain GTK 4 and libadwaita: the box padding does the
- * spacing and children fill the remaining 28px, so button margins are cleared.
- */
 headerbar {
   min-height: 36px;
   padding: 0;
 }
 
-/* libadwaita pulls the header bar 1px past each side edge, so give 1px back */
 headerbar > windowhandle > box {
   padding: 4px 5px;
 }
@@ -79,11 +67,6 @@ headerbar windowcontrols > button:active > image {
   background-color: color-mix(in srgb, currentColor 30%, transparent);
 }
 
-/*
- * libadwaita's view switcher asks for 34px and would stretch the bar past 36px.
- * Its buttons keep the hidden icon-over-label layout in a homogeneous stack, so
- * that layout's height is pulled in as well.
- */
 headerbar viewswitcher:not(.narrow) {
   min-height: 28px;
 }
@@ -93,15 +76,10 @@ headerbar viewswitcher:not(.narrow) button.toggle > stack > box.narrow {
   margin-bottom: -4px;
 }
 
-/* The app icon from the "icon" decoration-layout item keeps a 9px margin otherwise */
 headerbar windowcontrols > .icon {
   margin: 6px;
 }
 
-/*
- * With several top bars AdwToolbarView pads their box by 3px above and below,
- * so the header bar gives that back to stay at 36px overall.
- */
 toolbarview > .top-bar .collapse-spacing headerbar {
   min-height: 30px;
 }

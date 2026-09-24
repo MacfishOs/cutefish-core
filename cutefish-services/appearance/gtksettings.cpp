@@ -133,7 +133,7 @@ void writeGtkSettings(const GtkSettings &gtk)
     settings.setValue("gtk-icon-theme-name", gtk.iconTheme);
     settings.setValue("gtk-cursor-theme-name", gtk.cursorTheme);
     settings.setValue("gtk-cursor-theme-size", gtk.cursorSize);
-    settings.setValue("gtk-enable-animations", true);
+    settings.setValue("gtk-enable-animations", false);
     settings.setValue("gtk-theme-name", gtkTheme);
     settings.sync();
 
@@ -145,7 +145,7 @@ void writeGtkSettings(const GtkSettings &gtk)
             {QStringLiteral("icon-theme"), gtk.iconTheme},
             {QStringLiteral("cursor-theme"), gtk.cursorTheme},
             {QStringLiteral("cursor-size"), gtk.cursorSize},
-            {QStringLiteral("enable-animations"), true},
+            {QStringLiteral("enable-animations"), false},
     });
 }
 
