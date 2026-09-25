@@ -17,6 +17,7 @@ enum TimeConstants {
 Battery::Battery(UPowerDevice *device, QObject *parent)
     : QObject(parent)
     , m_device(device)
+    , m_pendingCharge(false)
     , m_settings(nullptr)
     , m_lastChargedPercent(0)
     , m_lastChargedSecs(0)
@@ -30,6 +31,8 @@ Battery::Battery(UPowerDevice *device, QObject *parent)
 void Battery::updateCache()
 {
     m_chargeState = chargeState();
+    m_pendingCharge = m_device->prop("State").toUInt() == 5;
+    m_statusString = statusString();
     m_isPresent = isPresent();
     m_chargePercent = chargePercent();
     m_capacity = capacity();
@@ -153,7 +156,8 @@ Battery::ChargeState Battery::chargeState() const
     case 4:
         result = Battery::FullyCharged;
         break;
-    case 5: // TODO "Pending charge"
+    case 5: // Pending charge: plugged in, held below full by a charge limit
+        result = Battery::NoCharge;
         break;
     case 6: // TODO "Pending discharge"
         break;
@@ -293,6 +297,11 @@ QString Battery::statusString() const
         return tr("%1 remaining").arg(formatDuration(remainingTime()));
     } else if (chargeState() == Battery::FullyCharged) {
         return tr("Fully charged.");
+    } else if (m_device->prop("State").toUInt() == 5) {
+        if (m_device->prop("ChargeThresholdEnabled").toBool())
+            return tr("Charging paused at %1%").arg(chargePercent());
+
+        return tr("Not charging");
     }
 
     return QString();
@@ -328,6 +337,8 @@ void Battery::slotChanged()
         const int old_capacity = m_capacity;
         const bool old_isPowerSupply = m_isPowerSupply;
         const Battery::ChargeState old_chargeState = m_chargeState;
+        const bool old_pendingCharge = m_pendingCharge;
+        const QString old_statusString = m_statusString;
         const qlonglong old_timeToEmpty = m_timeToEmpty;
         const qlonglong old_timeToFull = m_timeToFull;
         const double old_energy = m_energy;
@@ -360,7 +371,8 @@ void Battery::slotChanged()
         }
 
         // Save last charge percentage
-        if ((old_chargeState == Battery::Charging || old_chargeState == Battery::FullyCharged)
+        if ((old_chargeState == Battery::Charging || old_chargeState == Battery::FullyCharged
+             || old_pendingCharge)
             && m_chargeState == Battery::Discharging) {
             m_lastChargedPercent = m_chargePercent;
             m_lastChargedSecs = QDateTime::currentSecsSinceEpoch();
@@ -406,7 +418,9 @@ void Battery::slotChanged()
             emit temperatureChanged(m_temperature);
         }
 
-        if (old_timeToFull != m_timeToFull || old_timeToEmpty != m_timeToEmpty) {
+        // Also the notify signal of statusString, which a state change alone can alter.
+        if (old_timeToFull != m_timeToFull || old_timeToEmpty != m_timeToEmpty
+            || old_statusString != m_statusString) {
             emit remainingTimeChanged(remainingTime());
         }
     }

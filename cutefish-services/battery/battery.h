@@ -168,6 +168,9 @@ private:
     int m_capacity;
     bool m_isPowerSupply;
     Battery::ChargeState m_chargeState;
+    // Plugged in but held from charging, as a charge limit does.
+    bool m_pendingCharge;
+    QString m_statusString;
     qlonglong m_timeToEmpty;
     qlonglong m_timeToFull;
     double m_energy;
