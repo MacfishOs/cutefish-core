@@ -21,6 +21,7 @@
 
 #include <QCoreApplication>
 #include <QDBusConnectionInterface>
+#include <QDBusMessage>
 #include <QDBusReply>
 #include <QDBusServiceWatcher>
 #include <QDebug>
@@ -233,6 +234,26 @@ void ProcessManager::logout()
     m_loggingOut = true;
     m_shellRestartTimer->stop();
 
+    // Under cutefish-dm the login screen comes up on its own VT first, and the
+    // reply comes once it is on screen: this session then ends where nobody sees
+    // it. Another display manager does not answer, and the session ends as before.
+    const QDBusMessage switchToGreeter = QDBusMessage::createMethodCall(
+            QStringLiteral("com.cutefish.DisplayManager"),
+            QStringLiteral("/com/cutefish/DisplayManager"),
+            QStringLiteral("com.cutefish.DisplayManager"), QStringLiteral("SwitchToGreeter"));
+    const QDBusMessage switched = QDBusConnection::systemBus().call(switchToGreeter, QDBus::Block, 15000);
+    if (switched.type() == QDBusMessage::ErrorMessage
+        && switched.errorName() != QLatin1String("org.freedesktop.DBus.Error.ServiceUnknown"))
+        qWarning() << "The login screen did not come up before logout:" << switched.errorMessage();
+
+    endSession(switched.type() == QDBusMessage::ReplyMessage);
+}
+
+void ProcessManager::endSession(bool behindLoginScreen)
+{
+    m_loggingOut = true;
+    m_shellRestartTimer->stop();
+
     // Applications belong to the runtime, so ask it to quit them, then close
     // what we started ourselves.
     ApplicationRuntime *runtime = ApplicationRuntime::instance();
@@ -244,9 +265,12 @@ void ProcessManager::logout()
     m_shellProcess->stop();
     stopProcesses(m_coreProcesses);
 
-    m_compositorProcess->stop();
-
-    QCoreApplication::exit(0);
+    // The kernel takes the compositor's cursor down with it; behind the login
+    // screen it stays until that one's own replaces it.
+    QTimer::singleShot(behindLoginScreen ? 1000 : 0, this, [this] {
+        m_compositorProcess->stop();
+        QCoreApplication::exit(0);
+    });
 }
 
 void ProcessManager::stopProcesses(QMap<QString, QProcess *> &processes)

@@ -43,6 +43,9 @@ public:
 
     void start();
     void logout();
+    // What logout does once the display manager has been told, for when it or
+    // the system is the one ending the session.
+    void endSession(bool behindLoginScreen = false);
 
     void startDesktopProcess();
     void startDaemonProcess();

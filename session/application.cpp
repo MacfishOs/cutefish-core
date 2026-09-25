@@ -31,10 +31,17 @@
 #include <QDir>
 #include <QProcess>
 #include <QSettings>
+#include <QSocketNotifier>
 #include <QStandardPaths>
 
 // STL
 #include <optional>
+
+// System
+#include <cerrno>
+#include <csignal>
+#include <sys/socket.h>
+#include <unistd.h>
 
 std::optional<QStringList> getSystemdEnvironment()
 {
@@ -86,10 +93,21 @@ void setEnvironmentVariable(const QByteArray &name, const QByteArray &value)
     }
 }
 
+static int s_terminationSocket[2] = {-1, -1};
+
+static void onTerminationSignal(int)
+{
+    const int savedErrno = errno;
+    const char byte = 1;
+    [[maybe_unused]] const ssize_t written = ::write(s_terminationSocket[1], &byte, 1);
+    errno = savedErrno;
+}
+
 Application::Application(int &argc, char **argv)
     : QCoreApplication(argc, argv)
     , m_processManager(new ProcessManager(this))
 {
+    endSessionOnTerminationSignals();
     new SessionAdaptor(this);
 
     // connect to D-Bus and register as an object:
@@ -122,6 +140,29 @@ Application::Application(int &argc, char **argv)
 
     QTimer::singleShot(50, this, &Application::updateUserDirs);
     QTimer::singleShot(100, m_processManager, &ProcessManager::start);
+}
+
+void Application::endSessionOnTerminationSignals()
+{
+    // cutefish-dm and systemd end a session with SIGTERM; dying of it would leave
+    // the compositor and services holding the Wayland socket against the next login.
+    // A handler, unlike signalfd's blocked mask, is not inherited by child processes.
+    if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, s_terminationSocket)
+        != 0) {
+        qWarning() << "Cannot handle termination signals";
+        return;
+    }
+    auto *notifier = new QSocketNotifier(s_terminationSocket[0], QSocketNotifier::Read, this);
+    connect(notifier, &QSocketNotifier::activated, this, [this, notifier] {
+        notifier->setEnabled(false);
+        m_processManager->endSession();
+    });
+    struct sigaction action = {};
+    action.sa_handler = onTerminationSignal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    for (const int number : {SIGTERM, SIGINT, SIGHUP})
+        ::sigaction(number, &action, nullptr);
 }
 
 void Application::initEnvironments()

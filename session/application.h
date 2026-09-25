@@ -53,6 +53,7 @@ public slots:
     void startDesktopProcess() { m_processManager->startDesktopProcess(); }
 
 private:
+    void endSessionOnTerminationSignals();
     void initEnvironments();
     void initLanguage();
     bool syncDBusEnvironment();
