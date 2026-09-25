@@ -11,7 +11,6 @@ set(SOURCES
     xwaylandenvironment.cpp
     shellprocess.cpp
     shellconnection.cpp
-    networkproxymanager.cpp
 
     powermanager/power.cpp
     powermanager/powerproviders.cpp

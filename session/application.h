@@ -22,7 +22,6 @@
 
 #include <QCoreApplication>
 
-#include "networkproxymanager.h"
 #include "powermanager/power.h"
 #include "processmanager.h"
 
@@ -53,8 +52,6 @@ public slots:
 
     void startDesktopProcess() { m_processManager->startDesktopProcess(); }
 
-    void updateNetworkProxy() { m_networkProxyManager->update(); }
-
 private:
     void initEnvironments();
     void initLanguage();
@@ -66,7 +63,6 @@ private:
 
 private:
     ProcessManager* m_processManager;
-    NetworkProxyManager* m_networkProxyManager;
     Power m_power;
 };
 

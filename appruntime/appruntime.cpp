@@ -1,6 +1,7 @@
 #include "appruntime.h"
 #include "applicationscope.h"
 #include "languageenvironment.h"
+#include "proxysettings.h"
 
 #include "applicationregistry.h"
 #include "desktopentry.h"
@@ -85,6 +86,7 @@ uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
     process.setArguments(command.mid(1));
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
     LanguageEnvironment::apply(environment);
+    ProxyEnvironment::apply(environment);
     process.setProcessEnvironment(environment);
 
     if (!workingDirectory.isEmpty())

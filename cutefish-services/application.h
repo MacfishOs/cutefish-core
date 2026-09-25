@@ -28,6 +28,7 @@
 #include "permissions/permissionmanager.h"
 #include "power/cpumanagement.h"
 #include "power/powermanager.h"
+#include "proxy/proxyservice.h"
 #include <QApplication>
 
 class Application : public QApplication
@@ -48,6 +49,7 @@ private:
     CPUManagement *m_cpuManagement;
     PowerManager *m_powerManager;
     PermissionManager *m_permissionManager;
+    ProxyService *m_proxyService;
 };
 
 #endif // APPLICATION_H

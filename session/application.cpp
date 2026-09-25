@@ -89,7 +89,6 @@ void setEnvironmentVariable(const QByteArray &name, const QByteArray &value)
 Application::Application(int &argc, char **argv)
     : QCoreApplication(argc, argv)
     , m_processManager(new ProcessManager(this))
-    , m_networkProxyManager(new NetworkProxyManager)
 {
     new SessionAdaptor(this);
 
@@ -120,8 +119,6 @@ Application::Application(int &argc, char **argv)
     // ref plasma
     qunsetenv("LC_ALL");
     importSystemdEnvrionment();
-
-    m_networkProxyManager->update();
 
     QTimer::singleShot(50, this, &Application::updateUserDirs);
     QTimer::singleShot(100, m_processManager, &ProcessManager::start);
