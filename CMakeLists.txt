@@ -28,6 +28,7 @@ add_subdirectory(polkit-agent)
 add_subdirectory(session)
 add_subdirectory(cutefish-services)
 add_subdirectory(cpufreq)
+add_subdirectory(charge-limit)
 add_subdirectory(sddm-helper)
 
 install(FILES cutefish DESTINATION /etc/ COMPONENT Runtime)

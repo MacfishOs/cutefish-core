@@ -4,6 +4,7 @@
 
 #include <QDateTime>
 #include <QDebug>
+#include <QFile>
 
 enum TimeConstants {
     SecsInDay = 86400,
@@ -298,7 +299,11 @@ QString Battery::statusString() const
     } else if (chargeState() == Battery::FullyCharged) {
         return tr("Fully charged.");
     } else if (m_device->prop("State").toUInt() == 5) {
-        if (m_device->prop("ChargeThresholdEnabled").toBool())
+        // The kernel holds the limit, whether Settings or UPower set it.
+        QFile limit(QStringLiteral("/sys/class/power_supply/%1/charge_control_end_threshold")
+                            .arg(m_device->prop("NativePath").toString()));
+
+        if (limit.open(QIODevice::ReadOnly) && limit.readAll().trimmed().toInt() < 100)
             return tr("Charging paused at %1%").arg(chargePercent());
 
         return tr("Not charging");
