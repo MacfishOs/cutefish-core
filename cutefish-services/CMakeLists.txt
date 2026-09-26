@@ -43,6 +43,7 @@ target_compile_definitions(${TARGET} PRIVATE
 
 target_link_libraries(${TARGET}
         Cutefish::Application
+        Cutefish::Display
         cutefish-clipboard-backend
         Qt6::Core
         Qt6::Gui

@@ -21,13 +21,15 @@
 #ifndef DIMDISPLAYACTION_H
 #define DIMDISPLAYACTION_H
 
+#include <tuple>
+
 #include <QDBusInterface>
 #include <QDBusUnixFileDescriptor>
 #include <QElapsedTimer>
-#include <QHash>
 #include <QTimer>
 
 #include "action.h"
+#include "displayclient.h"
 
 class DimDisplayAction : public Action
 {
@@ -50,10 +52,7 @@ private Q_SLOTS:
                                    const QVariantMap &changedProperties,
                                    const QStringList &invalidatedProperties);
     void onSuspendTimerTimeout();
-    void onDisplayOperationFinished(const QString &token, bool succeeded, bool degraded,
-                                    uint errorCode, const QString &message,
-                                    const QStringList &affectedDisplays,
-                                    qulonglong topologyGeneration, qulonglong appliedRevision);
+    void onDisplayStateChanged();
 
 private:
     bool lockSession();
@@ -62,14 +61,15 @@ private:
     void turnDisplayOff();
     void restoreDisplay();
     void startSuspendCountdown();
+    void sleepWithLidClosed(bool waitForLock);
     void inhibitSystemdLidSwitch();
     bool hasNativeDisplayPower() const;
     bool setDisplayPower(bool on);
-    bool requestDockedLid(bool closed);
-    void finishDockedLid(bool succeeded);
+    void requestDockedLid(bool closed);
+    void finishDockedLid(bool closed, bool succeeded, cutefish::display::ipc::ErrorCode error);
 
     QDBusInterface m_iface;
-    QDBusInterface m_displayConfig;
+    DisplayClient m_display;
     int m_dimOnIdleTime = 0;
     int m_suspendDelay = 900;
     int m_oldScreenBrightness = -1;
@@ -83,8 +83,11 @@ private:
     bool m_lidDisplayOff = false;
     bool m_dockedLidPending = false;
     bool m_dockedLidActive = false;
-    QString m_dockedOperationToken;
-    QHash<QString, bool> m_earlyDisplayResults;
+    bool m_dockedLidRecheck = false;
+    int m_dockedLidRetries = 0;
+    quint64 m_dockedLidSerial = 0;
+    QTimer m_dockedLidRetryTimer;
+    std::tuple<QString, qulonglong, qulonglong> m_displayTopology;
 
     QDBusUnixFileDescriptor m_lidSwitchInhibitor;
 

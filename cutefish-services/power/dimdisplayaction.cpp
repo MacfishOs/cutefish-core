@@ -22,10 +22,7 @@
 
 #include <utility>
 
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
 #include <QDebug>
-#include <QGuiApplication>
 #include <QTimer>
 
 namespace {
@@ -40,16 +37,19 @@ constexpr int s_brightnessDimTimeoutNumerator = 1;
 constexpr int s_brightnessDimTimeoutDenominator = 2;
 constexpr int s_brightnessDimTimeoutFinalNumerator = 3;
 constexpr int s_brightnessDimTimeoutFinalDenominator = 4;
+
+// Bounds the wait for a display change to settle, so a closed lid still sleeps.
+constexpr int s_dockedLidRetryInterval = 500;
+constexpr int s_dockedLidRetries = 10;
 } // namespace
+
+using cutefish::display::ipc::ErrorCode;
 
 DimDisplayAction::DimDisplayAction(QObject *parent)
     : Action(parent)
     , m_iface("com.cutefish.Services", "/com/cutefish/Services/Brightness",
               "com.cutefish.Services.Brightness", QDBusConnection::sessionBus())
-    , m_displayConfig(qEnvironmentVariable("CUTEFISH_DISPLAY_CONFIG_SERVICE",
-                                           QStringLiteral("com.cutefish.DisplayConfig")),
-                      QStringLiteral("/com/cutefish/DisplayConfig1"),
-                      QStringLiteral("com.cutefish.DisplayConfig1"), QDBusConnection::sessionBus())
+    , m_display(this)
 {
     QDBusConnection::sessionBus().connect(
             QString::fromLatin1(s_screenSaverService), QString::fromLatin1(s_screenSaverPath),
@@ -61,11 +61,13 @@ DimDisplayAction::DimDisplayAction(QObject *parent)
             this, SLOT(onLogindPropertiesChanged(QString, QVariantMap, QStringList)));
     m_suspendTimer.setSingleShot(true);
     connect(&m_suspendTimer, &QTimer::timeout, this, &DimDisplayAction::onSuspendTimerTimeout);
-    QDBusConnection::sessionBus().connect(
-            m_displayConfig.service(), m_displayConfig.path(), m_displayConfig.interface(),
-            QStringLiteral("OperationFinished"), this,
-            SLOT(onDisplayOperationFinished(QString, bool, bool, uint, QString, QStringList,
-                                            qulonglong, qulonglong)));
+    m_dockedLidRetryTimer.setSingleShot(true);
+    m_dockedLidRetryTimer.setInterval(s_dockedLidRetryInterval);
+    connect(&m_dockedLidRetryTimer, &QTimer::timeout, this, [this] {
+        requestDockedLid(m_lidClosed);
+    });
+    connect(&m_display, &DisplayClient::stateChanged, this,
+            &DimDisplayAction::onDisplayStateChanged);
 }
 
 void DimDisplayAction::setLidPresent(bool present)
@@ -83,15 +85,12 @@ void DimDisplayAction::setLidPresent(bool present)
 
 bool DimDisplayAction::hasNativeDisplayPower() const
 {
-    return m_displayConfig.isValid();
+    return m_display.available();
 }
 
 bool DimDisplayAction::setDisplayPower(bool on)
 {
-    if (!m_displayConfig.isValid())
-        return false;
-    m_displayConfig.asyncCall(QStringLiteral("SetDisplayPower"), QStringList(), uint(on ? 0 : 1));
-    return true;
+    return m_display.setDisplayPower(on);
 }
 
 void DimDisplayAction::onWakeupFromIdle()
@@ -332,23 +331,24 @@ void DimDisplayAction::handleLidClosed()
     if (!m_lidPresent)
         return;
 
-    if (QGuiApplication::screens().size() > 1 && requestDockedLid(true)) {
-        m_dockedLidPending = true;
-        return;
+    // The compositor decides whether an external display stays in use.
+    m_dockedLidRetries = 0;
+    requestDockedLid(true);
+}
+
+void DimDisplayAction::sleepWithLidClosed(bool waitForLock)
+{
+    if (!m_displayOff) {
+        // Suspend even without the lock: the compositor locks as the displays go
+        // off and again before sleep, and logind's own lid handling is inhibited.
+        if (waitForLock && !lockSession())
+            qWarning() << "Suspending with the lid closed before the session is locked";
+
+        turnDisplayOff();
+        m_dimmed = true;
     }
 
-    if (!m_lidDisplayOff) {
-        if (!m_displayOff) {
-            if (!lockSession())
-                return;
-
-            turnDisplayOff();
-            m_dimmed = true;
-        }
-
-        m_lidDisplayOff = true;
-    }
-
+    m_lidDisplayOff = true;
     m_suspendTimer.stop();
     m_displayOffTimer.invalidate();
     if (!m_suspendRequested) {
@@ -364,6 +364,9 @@ void DimDisplayAction::handleLidOpened()
     m_suspendDue = false;
     m_suspendTimer.stop();
     m_displayOffTimer.invalidate();
+    m_dockedLidRecheck = false;
+    m_dockedLidRetries = 0;
+    m_dockedLidRetryTimer.stop();
 
     if (m_dockedLidPending || m_dockedLidActive) {
         m_dockedLidPending = false;
@@ -380,58 +383,75 @@ void DimDisplayAction::handleLidOpened()
     restoreDisplay();
 }
 
-bool DimDisplayAction::requestDockedLid(bool closed)
+void DimDisplayAction::requestDockedLid(bool closed)
 {
-    if (!m_displayConfig.isValid())
-        return false;
-    auto *watcher = new QDBusPendingCallWatcher(
-            m_displayConfig.asyncCall(QStringLiteral("SetDockedLidClosed"), closed), this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, closed] {
-        QDBusPendingReply<QString> reply = *watcher;
-        watcher->deleteLater();
-        if (reply.isError()) {
-            if (closed)
-                finishDockedLid(false);
-            return;
-        }
-        m_dockedOperationToken = reply.value();
-        if (m_earlyDisplayResults.contains(m_dockedOperationToken))
-            finishDockedLid(m_earlyDisplayResults.take(m_dockedOperationToken));
-    });
-    return true;
+    m_dockedLidRetryTimer.stop();
+    const quint64 serial = ++m_dockedLidSerial;
+    const bool sent = m_display.setDockedLidClosed(
+            closed, [this, serial, closed](bool succeeded, ErrorCode error) {
+                // A later lid event has superseded this request.
+                if (serial == m_dockedLidSerial)
+                    finishDockedLid(closed, succeeded, error);
+            });
+
+    m_dockedLidPending = sent && closed;
+    if (!sent && closed)
+        finishDockedLid(true, false, ErrorCode::Unavailable);
 }
 
-void DimDisplayAction::onDisplayOperationFinished(const QString &token, bool succeeded, bool, uint,
-                                                  const QString &, const QStringList &, qulonglong,
-                                                  qulonglong)
+void DimDisplayAction::finishDockedLid(bool closed, bool succeeded, ErrorCode error)
 {
-    if (token == m_dockedOperationToken)
-        finishDockedLid(succeeded);
-    else if (m_dockedLidPending && m_dockedOperationToken.isEmpty())
-        m_earlyDisplayResults.insert(token, succeeded);
-}
-
-void DimDisplayAction::finishDockedLid(bool succeeded)
-{
-    m_dockedOperationToken.clear();
+    const bool recheck = std::exchange(m_dockedLidRecheck, false);
     m_dockedLidPending = false;
-    if (!m_lidClosed)
+
+    // A display change in progress answers Busy; ask again once it settles.
+    if (!succeeded && error == ErrorCode::Busy && m_dockedLidRetries < s_dockedLidRetries) {
+        ++m_dockedLidRetries;
+        m_dockedLidRetryTimer.start();
         return;
+    }
+
+    m_dockedLidRetries = 0;
+    if (!closed)
+        return;
+
     if (succeeded) {
         m_dockedLidActive = true;
         m_lidDisplayOff = true;
+        if (recheck)
+            requestDockedLid(true);
         return;
     }
 
-    if (!m_displayOff) {
-        if (!lockSession())
-            return;
-        turnDisplayOff();
-        m_dimmed = true;
-    }
-    m_lidDisplayOff = true;
-    m_suspendDue = true;
-    trySuspend();
+    // After an undock the internal panel is already off, so a lock would wait for a
+    // frame it never presents; powering every display off locks the session instead.
+    const bool wasDocked = std::exchange(m_dockedLidActive, false);
+    sleepWithLidClosed(!wasDocked);
+}
+
+void DimDisplayAction::onDisplayStateChanged()
+{
+    const auto &state = m_display.state();
+
+    // Nothing is applied while a display change is still in progress.
+    if (state.appliedRevision == 0)
+        return;
+
+    auto topology =
+            std::make_tuple(state.instanceId, state.topologyGeneration, state.appliedRevision);
+    if (topology == m_displayTopology)
+        return;
+    m_displayTopology = std::move(topology);
+
+    // logind's lid handling is inhibited, so losing the external display while
+    // docked would otherwise leave a closed laptop awake.
+    if (!m_lidClosed)
+        return;
+
+    if (m_dockedLidPending)
+        m_dockedLidRecheck = true;
+    else if (m_dockedLidActive)
+        requestDockedLid(true);
 }
 
 void DimDisplayAction::inhibitSystemdLidSwitch()
