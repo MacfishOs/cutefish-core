@@ -22,13 +22,18 @@ void writeGtkSettings(const GtkSettings &gtk)
     // No Cutefish GTK theme ships; Adwaita's dark variant is what gtk-theme can switch to.
     const QString gtkTheme =
             gtk.darkMode ? QStringLiteral("Adwaita-dark") : QStringLiteral("Adwaita");
+    const bool subpixel = gtk.fontAntialias && gtk.fontRgba != QLatin1String("none");
 
-    // Only GTK clients on Xwayland still read this: without an XSETTINGS manager the X11 backend
-    // has nothing else. On Wayland the keyfile below overrides every key the schema covers.
+    // Only GTK clients on Xwayland still read this, for every key the compositor's XSETTINGS
+    // leaves out. On Wayland the keyfile below overrides every key the schema covers.
     QSettings settings(gtk3SettingsIniPath(), QSettings::IniFormat);
     settings.clear();
     settings.beginGroup("Settings");
     settings.setValue("gtk-font-name", fontName);
+    settings.setValue("gtk-xft-antialias", gtk.fontAntialias ? 1 : 0);
+    settings.setValue("gtk-xft-hinting", gtk.fontHintStyle != QLatin1String("hintnone") ? 1 : 0);
+    settings.setValue("gtk-xft-hintstyle", gtk.fontHintStyle);
+    settings.setValue("gtk-xft-rgba", subpixel ? gtk.fontRgba : QStringLiteral("none"));
     settings.setValue("gtk-application-prefer-dark-theme", gtk.darkMode);
     settings.setValue("gtk-icon-theme-name", gtk.iconTheme);
     settings.setValue("gtk-cursor-theme-name", gtk.cursorTheme);
@@ -41,6 +46,15 @@ void writeGtkSettings(const GtkSettings &gtk)
     // changes through GLib's file monitor.
     GSettingsKeyfile::writeGroup(QStringLiteral("org/gnome/desktop/interface"), {
             {QStringLiteral("font-name"), fontName},
+            {QStringLiteral("font-antialiasing"),
+             !gtk.fontAntialias ? QStringLiteral("none")
+                     : subpixel ? QStringLiteral("rgba")
+                                : QStringLiteral("grayscale")},
+            // The schema's nicks are fontconfig's hintstyle constants without "hint".
+            {QStringLiteral("font-hinting"), gtk.fontHintStyle.mid(4)},
+            {QStringLiteral("font-rgba-order"), subpixel ? gtk.fontRgba : QStringLiteral("rgb")},
+            // "automatic" makes GTK 4 ignore the three keys above.
+            {QStringLiteral("font-rendering"), QStringLiteral("manual")},
             {QStringLiteral("gtk-theme"), gtkTheme},
             {QStringLiteral("color-scheme"),
              gtk.darkMode ? QStringLiteral("prefer-dark") : QStringLiteral("default")},

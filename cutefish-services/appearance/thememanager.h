@@ -20,6 +20,8 @@
 #ifndef THEMEMANAGER_H
 #define THEMEMANAGER_H
 
+#include "fontconfigwriter.h"
+
 #include <QObject>
 #include <QSettings>
 #include <QStringList>
@@ -130,6 +132,8 @@ signals:
     void systemFontChanged();
 
 private:
+    FontConfig fontConfig();
+
     QSettings *m_settings;
     WallpaperManager *m_wallpaperManager;
 

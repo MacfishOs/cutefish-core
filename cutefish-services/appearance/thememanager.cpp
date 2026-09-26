@@ -329,6 +329,12 @@ void ThemeManager::updateGtk3Config()
     GtkSettings gtk;
     gtk.fontFamily = systemFont();
     gtk.fontPointSize = systemFontPointSize();
+
+    const FontConfig font = fontConfig();
+    gtk.fontAntialias = font.antialias;
+    gtk.fontHintStyle = font.hintStyle;
+    gtk.fontRgba = font.rgba;
+
     gtk.darkMode = isDarkMode();
     gtk.iconTheme = m_iconTheme.isEmpty() ? QStringLiteral("Cutefish") : m_iconTheme;
     gtk.cursorTheme = m_cursorTheme;
@@ -352,6 +358,11 @@ void ThemeManager::applyCursorSettings()
 
 void ThemeManager::updateFontConfig()
 {
+    writeFontConfig(fontConfig());
+}
+
+FontConfig ThemeManager::fontConfig()
+{
     // The settings app writes these keys itself; read the file rather than m_settings' cache.
     QSettings settings(QSettings::UserScope, "cutefish", "theme");
 
@@ -360,7 +371,7 @@ void ThemeManager::updateFontConfig()
     config.fixedFamily = systemFixedFont();
     config.antialias = settings.value("FontAntialias", true).toBool();
     config.hintStyle = settings.value("FontHintStyle", "hintslight").toString();
-    writeFontConfig(config);
+    return config;
 }
 
 QString ThemeManager::iconTheme() const
