@@ -61,6 +61,7 @@ private:
     void turnDisplayOff();
     void restoreDisplay();
     void startSuspendCountdown();
+    void turnDisplayOffWhenIdle();
     void sleepWithLidClosed(bool waitForLock);
     void inhibitSystemdLidSwitch();
     bool hasNativeDisplayPower() const;
@@ -81,6 +82,9 @@ private:
     bool m_lidClosed = false;
     bool m_lidPresent = false;
     bool m_lidDisplayOff = false;
+    bool m_locked = false;
+    // The user has been away for the locked timeout since their last input.
+    bool m_lockedIdle = false;
     bool m_dockedLidPending = false;
     bool m_dockedLidActive = false;
     bool m_dockedLidRecheck = false;

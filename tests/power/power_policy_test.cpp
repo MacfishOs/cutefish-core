@@ -64,6 +64,9 @@ public slots:
             sendErrorReply(QDBusError::Failed, QStringLiteral("Session is not available"));
     }
 
+signals:
+    void ActiveChanged(bool active);
+
 private:
     Recorder *m_recorder;
 };
@@ -250,18 +253,28 @@ private:
 };
 } // namespace
 
-class PowerLidTest : public QObject
+class PowerPolicyTest : public QObject
 {
     Q_OBJECT
 
     // Lets the action's display client load the compositor's state first.
     static void waitForDisplayState() { QTest::qWait(100); }
 
+    static void setLocked(Services &services, bool locked)
+    {
+        services.run([&] {
+            emit services.screenSaver->ActiveChanged(locked);
+        });
+        QTest::qWait(100);
+    }
+
 private slots:
     void initTestCase()
     {
         // No logind here: the lid inhibitor fails instead of reaching the real one.
         qputenv("DBUS_SYSTEM_BUS_ADDRESS", qgetenv("DBUS_SESSION_BUS_ADDRESS"));
+        // Nor a compositor: idle notifications never arrive, the tests deliver them.
+        qputenv("WAYLAND_DISPLAY", "power-policy-test-none");
         qputenv("CUTEFISH_DISPLAY_CONFIG_SERVICE", displayService.toUtf8());
     }
 
@@ -408,8 +421,77 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(services.recorder.log().suspends, 1, 10000);
         QCOMPARE(services.recorder.log().docked.size(), 11);
     }
+
+    void aLockedScreenGoesDarkSoonAndSleepsEvenWithNever()
+    {
+        Services services;
+        DimDisplayAction action;
+        waitForDisplayState();
+        action.setPolicy(-1, 1);
+        setLocked(services, true);
+
+        action.onIdleTimeout(30000);
+        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+        QTRY_COMPARE(services.recorder.log().suspends, 1);
+    }
+
+    void anUnlockedScreenKeepsTheUsersTimeout()
+    {
+        Services services;
+        DimDisplayAction action;
+        waitForDisplayState();
+        action.setPolicy(1200, 1);
+
+        action.onIdleTimeout(30000);
+        QTest::qWait(200);
+        QVERIFY(services.recorder.log().power.isEmpty());
+    }
+
+    void lockingAfterTheUserLeftGoesDarkAtOnce()
+    {
+        Services services;
+        DimDisplayAction action;
+        waitForDisplayState();
+        action.setPolicy(1200, 900);
+        action.onIdleTimeout(30000);
+        QTest::qWait(100);
+        QVERIFY(services.recorder.log().power.isEmpty());
+
+        setLocked(services, true);
+        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+    }
+
+    void wakingTheLockScreenLightsItAgain()
+    {
+        Services services;
+        DimDisplayAction action;
+        waitForDisplayState();
+        action.setPolicy(1200, 900);
+        setLocked(services, true);
+        action.onIdleTimeout(30000);
+        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+
+        action.onWakeupFromIdle();
+        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0}));
+        action.onIdleTimeout(30000);
+        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0, 1}));
+    }
+
+    void preventingSleepKeepsTheSystemAwake()
+    {
+        Services services;
+        DimDisplayAction action;
+        waitForDisplayState();
+        action.setPolicy(-1, 0);
+        setLocked(services, true);
+
+        action.onIdleTimeout(30000);
+        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+        QTest::qWait(1500);
+        QCOMPARE(services.recorder.log().suspends, 0);
+    }
 };
 
-QTEST_GUILESS_MAIN(PowerLidTest)
+QTEST_GUILESS_MAIN(PowerPolicyTest)
 
-#include "power_lid_test.moc"
+#include "power_policy_test.moc"

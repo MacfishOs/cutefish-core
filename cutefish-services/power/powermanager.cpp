@@ -78,13 +78,18 @@ void PowerManager::loadSettings()
                                      QStringLiteral("CloseScreenTimeout"), 300);
     m_acScreenOff = readTimeout(m_settings, QStringLiteral("ACScreenOff"),
                                 QStringLiteral("CloseScreenTimeout"), 1200);
+    m_settings.beginGroup(QLatin1String(s_powerGroup));
+    m_acPreventSleep = m_settings.value(QStringLiteral("ACPreventSleep"), false).toBool();
+    m_settings.endGroup();
 }
 
 void PowerManager::applyPolicy()
 {
     const int timeout = m_onBattery ? m_batteryScreenOff : m_acScreenOff;
+    // A delay of zero keeps the system awake while the display is off.
+    const int suspendDelay = m_onBattery ? 300 : (m_acPreventSleep ? 0 : 900);
 
-    m_dimDisplayAction->setPolicy(timeout, m_onBattery ? 300 : 900);
+    m_dimDisplayAction->setPolicy(timeout, suspendDelay);
 }
 
 void PowerManager::writePowerSetting(const QString &key, const QVariant &value)
@@ -106,6 +111,13 @@ void PowerManager::setACScreenOff(int timeout)
 {
     m_acScreenOff = normalizedTimeout(timeout);
     writePowerSetting(QStringLiteral("ACScreenOff"), m_acScreenOff);
+    applyPolicy();
+}
+
+void PowerManager::setACPreventSleep(bool prevent)
+{
+    m_acPreventSleep = prevent;
+    writePowerSetting(QStringLiteral("ACPreventSleep"), m_acPreventSleep);
     applyPolicy();
 }
 

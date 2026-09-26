@@ -38,6 +38,9 @@ constexpr int s_brightnessDimTimeoutDenominator = 2;
 constexpr int s_brightnessDimTimeoutFinalNumerator = 3;
 constexpr int s_brightnessDimTimeoutFinalDenominator = 4;
 
+// A locked screen nobody is using goes dark this soon, whatever the user chose.
+constexpr int s_lockedDisplayOffTimeout = 30;
+
 // Bounds the wait for a display change to settle, so a closed lid still sleeps.
 constexpr int s_dockedLidRetryInterval = 500;
 constexpr int s_dockedLidRetries = 10;
@@ -95,6 +98,7 @@ bool DimDisplayAction::setDisplayPower(bool on)
 
 void DimDisplayAction::onWakeupFromIdle()
 {
+    m_lockedIdle = false;
     if (!m_dimmed) {
         return;
     }
@@ -116,17 +120,20 @@ void DimDisplayAction::onWakeupFromIdle()
 
 void DimDisplayAction::onIdleTimeout(int msec)
 {
+    int sec = msec / 1000;
+
+    if (sec == s_lockedDisplayOffTimeout) {
+        m_lockedIdle = true;
+        if (m_locked)
+            turnDisplayOffWhenIdle();
+    }
+
     // Policy changes can invalidate an already queued notification.
     if (m_dimOnIdleTime < 0)
         return;
 
-    int sec = msec / 1000;
-
-    if (sec == m_dimOnIdleTime && !m_displayOff) {
-        turnDisplayOff();
-        m_dimmed = true;
-        startSuspendCountdown();
-        trySuspend();
+    if (sec == m_dimOnIdleTime) {
+        turnDisplayOffWhenIdle();
         return;
     }
 
@@ -153,6 +160,17 @@ void DimDisplayAction::onIdleTimeout(int msec)
     }
 }
 
+void DimDisplayAction::turnDisplayOffWhenIdle()
+{
+    if (m_displayOff)
+        return;
+
+    turnDisplayOff();
+    m_dimmed = true;
+    startSuspendCountdown();
+    trySuspend();
+}
+
 void DimDisplayAction::setTimeout(int timeout)
 {
     setPolicy(timeout, m_suspendDelay);
@@ -168,21 +186,21 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
     if (!m_lidClosed)
         m_suspendDue = false;
 
-    if (timeout < 0) {
-        m_displayOffTimer.invalidate();
-        return;
+    // Registered even for "never": the lock screen still goes dark.
+    registerIdleTimeout(s_lockedDisplayOffTimeout);
+
+    if (timeout >= 0) {
+        const int halfTimeout =
+                timeout * s_brightnessDimTimeoutNumerator / s_brightnessDimTimeoutDenominator;
+        const int finalDimTimeout = timeout * s_brightnessDimTimeoutFinalNumerator
+                / s_brightnessDimTimeoutFinalDenominator;
+
+        if (halfTimeout > 0)
+            registerIdleTimeout(halfTimeout);
+        if (finalDimTimeout > halfTimeout && finalDimTimeout < timeout)
+            registerIdleTimeout(finalDimTimeout);
+        registerIdleTimeout(timeout);
     }
-
-    const int halfTimeout =
-            timeout * s_brightnessDimTimeoutNumerator / s_brightnessDimTimeoutDenominator;
-    const int finalDimTimeout =
-            timeout * s_brightnessDimTimeoutFinalNumerator / s_brightnessDimTimeoutFinalDenominator;
-
-    if (halfTimeout > 0)
-        registerIdleTimeout(halfTimeout);
-    if (finalDimTimeout > halfTimeout && finalDimTimeout < timeout)
-        registerIdleTimeout(finalDimTimeout);
-    registerIdleTimeout(timeout);
 
     if (m_displayOff && !m_lidDisplayOff && m_displayOffTimer.isValid() && m_suspendDelay > 0) {
         const qint64 remaining = qint64(m_suspendDelay) * 1000 - m_displayOffTimer.elapsed();
@@ -197,8 +215,13 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
 
 void DimDisplayAction::onScreenSaverActiveChanged(bool active)
 {
-    if (active)
+    m_locked = active;
+    if (active) {
+        // Locked after the user had already left: nobody is there to see it.
+        if (m_lockedIdle)
+            turnDisplayOffWhenIdle();
         return;
+    }
     m_dimmed = false;
     if (!m_lidClosed) {
         m_suspendTimer.stop();

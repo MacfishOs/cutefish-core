@@ -24,6 +24,7 @@ public:
 public slots:
     void setBatteryScreenOff(int timeout);
     void setACScreenOff(int timeout);
+    void setACPreventSleep(bool prevent);
     void setDimDisplayTimeout(int timeout);
 
 signals:
@@ -45,6 +46,7 @@ private:
 
     int m_batteryScreenOff = 300;
     int m_acScreenOff = 1200;
+    bool m_acPreventSleep = false;
     bool m_onBattery = false;
 };
 
