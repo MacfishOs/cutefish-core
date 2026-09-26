@@ -8,6 +8,13 @@ Install Qt 6, Wayland development libraries, wayland-protocols (>= 1.39),
 Polkit, Fontconfig, FreeType, and the development tools provided by your
 distribution. Core does not depend on KDE Frameworks.
 
+The screen recorder, `cutefish-screenrecorder` in libexec, also needs FFmpeg
+(libavcodec, libavformat, libavutil, libswscale), libva, libdrm and PipeWire.
+The shell starts it with the output and region or the window to record and
+stops it on its standard input. Frames arrive as DMA-BUFs and are converted and
+encoded on the GPU through VA-API; without a VA-API driver they come in shared
+memory and are encoded with x264.
+
 The services daemon consumes `ext_idle_notifier_v1` from the compositor for
 idle timeouts and resume notifications. Cutefish compositor implements this
 protocol; idle detection requires a compositor that advertises it.
