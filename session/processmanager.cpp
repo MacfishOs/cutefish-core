@@ -22,6 +22,8 @@
 #include <QCoreApplication>
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDBusReply>
 #include <QDBusServiceWatcher>
 #include <QDebug>
@@ -30,9 +32,11 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
+#include <limits>
 
 #include "application.h"
 #include "applicationlauncher.h"
+#include "applicationregistry.h"
 #include "applicationruntime.h"
 #include "autostartentries.h"
 #include "compositorprocess.h"
@@ -230,6 +234,74 @@ void ProcessManager::onShellFinished(int code, QProcess::ExitStatus status)
 }
 
 void ProcessManager::logout()
+{
+    endAfterApplications(Ending::Logout, [this] {
+        leave();
+    });
+}
+
+void ProcessManager::endAfterApplications(Ending ending, std::function<void()> then)
+{
+    if (m_ending)
+        return;
+    m_ending = true;
+
+    const QDBusMessage quitAll = QDBusMessage::createMethodCall(
+            QStringLiteral("com.cutefish.Applications1"),
+            QStringLiteral("/com/cutefish/Applications1"),
+            QStringLiteral("com.cutefish.Applications1"), QStringLiteral("QuitAll"));
+    // No timeout: the user may take as long as they like over an unsaved document.
+    auto *watcher = new QDBusPendingCallWatcher(
+            QDBusConnection::sessionBus().asyncCall(quitAll, std::numeric_limits<int>::max()),
+            this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, ending, then] {
+        const QDBusPendingReply<QString, QString> reply = *watcher;
+        watcher->deleteLater();
+        // Without the compositor's answer the session ends as it always did.
+        if (reply.isError() || reply.argumentAt<0>() == QLatin1String("quit")) {
+            then();
+            return;
+        }
+        m_ending = false;
+        notifyEndingStopped(ending, reply.argumentAt<0>(), reply.argumentAt<1>());
+    });
+}
+
+void ProcessManager::notifyEndingStopped(Ending ending, const QString &outcome,
+                                         const QString &applicationId)
+{
+    const DesktopEntry *entry = ApplicationRegistry::instance()->byId(applicationId);
+    QString name = entry ? entry->name() : QString();
+    if (name.isEmpty())
+        name = applicationId.isEmpty() ? tr("An application") : applicationId;
+
+    QString summary;
+    switch (ending) {
+    case Ending::Logout:
+        summary = tr("Log out cancelled");
+        break;
+    case Ending::Restart:
+        summary = tr("Restart cancelled");
+        break;
+    case Ending::Shutdown:
+        summary = tr("Shutdown cancelled");
+        break;
+    }
+    const QString body = outcome == QLatin1String("cancelled") ? tr("%1 cancelled it.").arg(name)
+                                                               : tr("%1 did not quit.").arg(name);
+
+    QDBusMessage notify = QDBusMessage::createMethodCall(
+            QStringLiteral("org.freedesktop.Notifications"),
+            QStringLiteral("/org/freedesktop/Notifications"),
+            QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("Notify"));
+    notify << QStringLiteral("cutefish-session") << uint(0)
+           << (entry && !entry->icon().isEmpty() ? entry->icon()
+                                                 : QStringLiteral("system-log-out"))
+           << summary << body << QStringList() << QVariantMap() << -1;
+    QDBusConnection::sessionBus().asyncCall(notify);
+}
+
+void ProcessManager::leave()
 {
     m_loggingOut = true;
     m_shellRestartTimer->stop();

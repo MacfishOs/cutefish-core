@@ -38,14 +38,18 @@ public slots:
 
     void reboot()
     {
-        if (m_power.reboot())
-            QCoreApplication::exit(0);
+        m_processManager->endAfterApplications(ProcessManager::Ending::Restart, [this] {
+            if (m_power.reboot())
+                QCoreApplication::exit(0);
+        });
     }
 
     void powerOff()
     {
-        if (m_power.shutdown())
-            QCoreApplication::exit(0);
+        m_processManager->endAfterApplications(ProcessManager::Ending::Shutdown, [this] {
+            if (m_power.shutdown())
+                QCoreApplication::exit(0);
+        });
     }
 
     bool suspend() { return m_power.suspend(); }
