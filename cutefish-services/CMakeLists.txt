@@ -16,7 +16,7 @@ add_subdirectory(permissions)
 
 set(HEADERS "")
 set(FORMS "")
-set(RESOURCES "")
+set(RESOURCES appearance/appearance.qrc)
 
 qt6_add_dbus_adaptor(DBUS_SOURCES
                      brightness/com.cutefish.Services.Brightness.xml
@@ -49,7 +49,6 @@ target_link_libraries(${TARGET}
         Qt6::Gui
         Qt6::Widgets
         Qt6::DBus
-        Qt6::Xml
         cutefish-idle-backend
         cutefish-permissions
 )
