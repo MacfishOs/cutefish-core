@@ -291,11 +291,20 @@ QString Battery::formatDuration(qlonglong seconds) const
 
 QString Battery::statusString() const
 {
-    if (chargeState() == Battery::Charging) {
-        return tr("%1 until fully charged").arg(formatDuration(remainingTime()));
-    } else if (chargeState() == Battery::Discharging) {
-        return tr("%1 remaining").arg(formatDuration(remainingTime()));
-    } else if (chargeState() == Battery::FullyCharged) {
+    const Battery::ChargeState state = chargeState();
+
+    if (state == Battery::Charging || state == Battery::Discharging) {
+        // UPower reports 0 for several seconds after the power source changes,
+        // until it trusts the battery's rate again.
+        const qlonglong time = remainingTime();
+        if (time < SecsInMinute)
+            return tr("Calculating…");
+
+        if (state == Battery::Charging)
+            return tr("%1 until fully charged").arg(formatDuration(time));
+
+        return tr("%1 remaining").arg(formatDuration(time));
+    } else if (state == Battery::FullyCharged) {
         return tr("Fully charged.");
     } else if (m_device->prop("State").toUInt() == 5) {
         if (m_device->prop("ChargeThresholdEnabled").toBool())
