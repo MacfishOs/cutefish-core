@@ -142,6 +142,13 @@ Application::Application(int &argc, char **argv)
     QTimer::singleShot(100, m_processManager, &ProcessManager::start);
 }
 
+Application::~Application()
+{
+    // The process manager has no parent. Deleted here, while the application still
+    // runs, it stops what it started and removes its Xwayland readiness directory.
+    delete m_processManager;
+}
+
 void Application::endSessionOnTerminationSignals()
 {
     // cutefish-dm and systemd end a session with SIGTERM; dying of it would leave

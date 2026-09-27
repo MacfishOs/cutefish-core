@@ -31,6 +31,7 @@ class Application : public QCoreApplication
 
 public:
     explicit Application(int& argc, char** argv);
+    ~Application() override;
 
 public slots:
 
