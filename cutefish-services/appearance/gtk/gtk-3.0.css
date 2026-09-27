@@ -1,14 +1,14 @@
 headerbar,
 .titlebar:not(headerbar) {
-  min-height: 36px;
+  min-height: 40px;
 }
 
 headerbar entry,
 headerbar spinbutton,
 headerbar separator:not(.sidebar),
 headerbar button {
-  margin-top: 4px;
-  margin-bottom: 4px;
+  margin-top: 6px;
+  margin-bottom: 6px;
 }
 
 /* User CSS outranks theme specificity, so undo the margin on nested spin buttons */
@@ -31,14 +31,15 @@ headerbar spinbutton:not(.vertical) {
 }
 
 headerbar switch {
-  margin-top: 5px;
-  margin-bottom: 5px;
+  margin-top: 7px;
+  margin-bottom: 7px;
 }
 
+/* A 26px circle, 7px from the next one and centred 20px from the top and right edges */
 headerbar button.titlebutton:not(.appmenu),
 .titlebar button.titlebutton:not(.appmenu) {
   padding: 4px;
-  margin: 5px 0;
+  margin: 7px 1px 7px 0;
   transition: none;
 }
 

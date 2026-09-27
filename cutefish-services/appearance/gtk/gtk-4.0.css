@@ -1,10 +1,13 @@
+/* libadwaita pushes the bar 1px past each window edge; the padding makes up for it */
 headerbar {
-  min-height: 36px;
+  min-height: 40px;
   padding: 0;
+  margin-left: -1px;
+  margin-right: -1px;
 }
 
 headerbar > windowhandle > box {
-  padding: 4px 5px;
+  padding: 6px 6px;
 }
 
 headerbar entry,
@@ -24,6 +27,12 @@ headerbar box.start > menubutton > button,
 headerbar box.end > menubutton > button,
 headerbar box.start > splitbutton > button,
 headerbar box.end > splitbutton > button,
+headerbar box.start > splitbutton > menubutton > button,
+headerbar box.end > splitbutton > menubutton > button,
+headerbar box.start > box > button,
+headerbar box.end > box > button,
+headerbar box.start > box > menubutton > button,
+headerbar box.end > box > menubutton > button,
 headerbar box.start > .linked > button,
 headerbar box.end > .linked > button,
 headerbar box.start > dropdown > button,
@@ -43,17 +52,18 @@ headerbar windowcontrols.end {
   margin-right: 0;
 }
 
+/* A 26px circle, 7px from the next one and centred 20px from the top and right edges */
 headerbar windowcontrols > button {
-  min-width: 24px;
-  min-height: 24px;
+  min-width: 26px;
+  min-height: 26px;
   padding: 2px;
-  margin: 0;
+  margin: -1px 0;
 }
 
 headerbar windowcontrols > button > image {
   min-width: 16px;
   min-height: 16px;
-  padding: 4px;
+  padding: 5px;
   background-color: transparent;
   transition: none;
 }
@@ -77,14 +87,15 @@ headerbar viewswitcher:not(.narrow) button.toggle > stack > box.narrow {
 }
 
 headerbar windowcontrols > .icon {
-  margin: 6px;
+  margin: 6px 7px;
 }
 
+/* With the bar's own 3px above and below, a stacked header bar still totals 40px */
 toolbarview > .top-bar .collapse-spacing headerbar {
-  min-height: 30px;
+  min-height: 34px;
 }
 
 toolbarview > .top-bar .collapse-spacing headerbar > windowhandle > box {
-  padding-top: 1px;
-  padding-bottom: 1px;
+  padding-top: 3px;
+  padding-bottom: 3px;
 }
