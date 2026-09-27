@@ -43,7 +43,7 @@ FishUI.Window {
     // No title bar, so any empty part of the dialog drags it.
     DragHandler {
         target: null
-        onActiveChanged: if (active && root.helper) root.helper.startSystemMove(root)
+        onActiveChanged: if (active && root.controller) root.controller.startSystemMove()
     }
 
     ColumnLayout {

@@ -43,11 +43,13 @@ Item {
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         grabPermissions: TapHandler.CanTakeOverFromAnything
-        onActiveChanged: if (active) { windowHelper.startSystemMove(rootWindow) }
+        onActiveChanged: if (active) { windowController.startSystemMove() }
     }
 
-    FishUI.WindowHelper {
-        id: windowHelper
+    FishUI.WindowController {
+        id: windowController
+        window: rootWindow
+        restoresSize: false
     }
 
     ColumnLayout {
