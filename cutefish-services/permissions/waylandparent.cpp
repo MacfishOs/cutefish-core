@@ -55,6 +55,15 @@ const Globals *foreignGlobals(wl_display *display)
                                                   [](void *, wl_registry *, uint32_t) { }};
     wl_registry_add_listener(registry, &listener, &globals);
     wl_display_roundtrip_queue(display, queue);
+
+    // Nothing dispatches this queue again, so every later event on it would stay
+    // queued; objects made from the globals must land on Qt's queue instead.
+    if (globals.importer)
+        wl_proxy_set_queue(reinterpret_cast<wl_proxy *>(globals.importer), nullptr);
+    if (globals.dialogManager)
+        wl_proxy_set_queue(reinterpret_cast<wl_proxy *>(globals.dialogManager), nullptr);
+    wl_registry_destroy(registry);
+    wl_event_queue_destroy(queue);
     return &globals;
 }
 
@@ -96,11 +105,24 @@ void applyWaylandParent(QWindow *window, const QString &parentWindow, bool modal
 
     // The parent relation stacks the dialog; modality is what blocks input to
     // the application behind it.
+    xdg_dialog_v1 *dialog = nullptr;
     if (modal && globals->dialogManager) {
-        xdg_dialog_v1 *dialog = xdg_wm_dialog_v1_get_xdg_dialog(globals->dialogManager, toplevel);
+        dialog = xdg_wm_dialog_v1_get_xdg_dialog(globals->dialogManager, toplevel);
         xdg_dialog_v1_set_modal(dialog);
     }
-    wl_display_flush(application->display());
+
+    // Qt drops only its own objects with the toplevel; these must follow it.
+    wl_display *display = application->display();
+    QObject::connect(
+            native, &QNativeInterface::Private::QWaylandWindow::surfaceRoleDestroyed, window,
+            [imported, dialog, display] {
+                if (dialog)
+                    xdg_dialog_v1_destroy(dialog);
+                zxdg_imported_v2_destroy(imported);
+                wl_display_flush(display);
+            },
+            Qt::SingleShotConnection);
+    wl_display_flush(display);
 }
 
 #else
