@@ -53,13 +53,11 @@ void PolKitAgentListener::initiateAuthentication(const QString &actionId,
     m_inProgress = true;
 
     m_dialog = new Dialog(actionId, message, cookie, identities.first().toString(), iconName, result);
-    m_session = new PolkitQt1::Agent::Session(identities.first(), cookie, result);
 
     connect(m_dialog.data(), &Dialog::accepted, this, &PolKitAgentListener::onDialogAccepted);
     connect(m_dialog.data(), &Dialog::cancel, this, &PolKitAgentListener::onDialogCanceled);
 
     m_dialog.data()->show();
-    m_session.data()->initiate();
 
     if (!identities.isEmpty()) {
         m_selectedUser = identities[0];
