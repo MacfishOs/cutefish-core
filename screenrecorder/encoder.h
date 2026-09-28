@@ -46,6 +46,9 @@ public slots:
     //! when the GPU cannot take it.
     void encodeDmaBuf(const CaptureSession::DmaBuf &dmabuf, const QString &node,
                       const QRect &crop, qint64 presentedNs, int buffer);
+    //! The capture buffers handed over so far are replaced, after a size change
+    //! or by a new session; their GPU imports go with them.
+    void forgetBuffers();
 
     //! Interleaved float samples whose first one was captured at @p capturedNs.
     void encodeAudio(const QByteArray &samples, qint64 capturedNs);
@@ -62,6 +65,8 @@ signals:
     void finished(bool ok, const QString &error);
 
 private:
+    friend class ScreenRecorderEncoderTest;
+
     bool openVideo(const QSize &size, const QString &node, QString *error);
     bool startVideo(QString *error);
     void closeVideo();

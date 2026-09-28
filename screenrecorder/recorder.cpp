@@ -127,7 +127,12 @@ bool Recorder::startSession(CaptureSession::Memory memory)
     m_memory = memory;
     // Three buffers: one being captured, one being encoded and one to spare.
     m_session = new CaptureSession(m_client, source, m_options.cursor, 3, memory, this);
-    connect(m_session, &CaptureSession::constraintsChanged, this, &Recorder::captureNext);
+    connect(m_session, &CaptureSession::constraintsChanged, this, [this] {
+        // New buffers replace the old ones, which the encoder may still have
+        // imported; queued behind the frames it has yet to encode from them.
+        QMetaObject::invokeMethod(m_encoder, "forgetBuffers");
+        captureNext();
+    });
     connect(m_session, &CaptureSession::frameReady, this, &Recorder::onFrame);
     connect(m_session, &CaptureSession::frameFailed, this, &Recorder::captureNext,
             Qt::QueuedConnection);
@@ -188,18 +193,13 @@ void Recorder::onFrame(const CaptureSession::Frame &frame)
         return;
     }
 
-    QImage image = frame.image;
-    int token = m_generation * kSessionStride + frame.buffer;
-    if (frame.transform != 0) {
-        // A rotated output: the upright copy is the encoder's, the buffer is free.
-        image = CaptureSession::upright(frame.image, frame.transform);
-        m_session->releaseBuffer(frame.buffer);
-        token = -1;
-    }
-
+    // A rotated output gets an upright copy, but its buffer stays held until the
+    // encoder is done, so the pool still bounds the frames in flight.
+    const QImage image = CaptureSession::upright(frame.image, frame.transform);
     QMetaObject::invokeMethod(m_encoder, "encodeVideo", Q_ARG(QImage, image),
                               Q_ARG(QRect, cropFor(image.size())),
-                              Q_ARG(qint64, frame.presentedNs), Q_ARG(int, token));
+                              Q_ARG(qint64, frame.presentedNs),
+                              Q_ARG(int, m_generation * kSessionStride + frame.buffer));
     // The other buffers are free while this one is encoded.
     captureNext();
 }

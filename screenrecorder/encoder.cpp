@@ -174,6 +174,15 @@ void Encoder::encodeDmaBuf(const CaptureSession::DmaBuf &dmabuf, const QString &
     accepted(presentedNs);
 }
 
+void Encoder::forgetBuffers()
+{
+    // An import keeps its buffer's GPU memory alive after the session freed it.
+    // convertDmaBuf waits for the GPU, so no import is in use between frames.
+    for (auto &[buffer, surface] : m_imported)
+        vaDestroySurfaces(m_display, &surface, 1);
+    m_imported.clear();
+}
+
 bool Encoder::sendPending(qint64 presentedNs)
 {
     // A frame lasts until the next one, so the previous frame goes out now.
@@ -276,9 +285,7 @@ bool Encoder::startVideo(QString *error)
 
 void Encoder::closeVideo()
 {
-    for (auto &[buffer, surface] : m_imported)
-        vaDestroySurfaces(m_display, &surface, 1);
-    m_imported.clear();
+    forgetBuffers();
     if (m_vppContext)
         vaDestroyContext(m_display, m_vppContext);
     if (m_vppConfig)

@@ -5,6 +5,13 @@
 #include <QTest>
 
 #include <cmath>
+#include <vector>
+
+#include <drm_fourcc.h>
+#include <fcntl.h>
+#include <gbm.h>
+#include <unistd.h>
+#include <va/va.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -15,6 +22,7 @@ namespace {
 
 constexpr qint64 kOriginNs = 1'000'000'000'000;
 constexpr qint64 kFrameNs = 33'333'333;
+constexpr char kRenderNode[] = "/dev/dri/renderD128";
 
 QImage frame(const QSize &size, int index)
 {
@@ -107,6 +115,68 @@ QImage lastLuma(const QString &path)
     return result;
 }
 
+// DMA-BUFs on a render node, allocated the way the capture session does.
+class RenderNode
+{
+public:
+    RenderNode()
+        : m_fd(open(kRenderNode, O_RDWR | O_CLOEXEC))
+    {
+        if (m_fd >= 0)
+            m_gbm = gbm_create_device(m_fd);
+    }
+
+    ~RenderNode()
+    {
+        freeBuffers();
+        if (m_gbm)
+            gbm_device_destroy(m_gbm);
+        if (m_fd >= 0)
+            close(m_fd);
+    }
+
+    bool isValid() const { return m_gbm != nullptr; }
+
+    CaptureSession::DmaBuf allocate(const QSize &size)
+    {
+        const auto width = uint32_t(size.width());
+        const auto height = uint32_t(size.height());
+        const uint64_t linear = DRM_FORMAT_MOD_LINEAR;
+        gbm_bo *bo = gbm_bo_create_with_modifiers2(m_gbm, width, height, DRM_FORMAT_XRGB8888,
+                                                   &linear, 1, GBM_BO_USE_RENDERING);
+        if (!bo)
+            bo = gbm_bo_create(m_gbm, width, height, DRM_FORMAT_XRGB8888,
+                               GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+        CaptureSession::DmaBuf dmabuf;
+        if (!bo)
+            return dmabuf;
+        dmabuf.fd = gbm_bo_get_fd(bo);
+        dmabuf.format = DRM_FORMAT_XRGB8888;
+        dmabuf.modifier = gbm_bo_get_modifier(bo);
+        dmabuf.offset = gbm_bo_get_offset(bo, 0);
+        dmabuf.stride = gbm_bo_get_stride_for_plane(bo, 0);
+        dmabuf.size = size;
+        m_buffers.emplace_back(bo, dmabuf.fd);
+        return dmabuf;
+    }
+
+    // What the session does with its buffers when the size changes.
+    void freeBuffers()
+    {
+        for (const auto &[bo, fd] : m_buffers) {
+            if (fd >= 0)
+                close(fd);
+            gbm_bo_destroy(bo);
+        }
+        m_buffers.clear();
+    }
+
+private:
+    int m_fd = -1;
+    gbm_device *m_gbm = nullptr;
+    std::vector<std::pair<gbm_bo *, int>> m_buffers;
+};
+
 } // namespace
 
 class ScreenRecorderEncoderTest : public QObject
@@ -118,6 +188,7 @@ private slots:
     void laterSizesAreScaledIntoTheFirst();
     void oddSizesAreTrimmedToEven();
     void aRecordingWithoutFramesFails();
+    void replacedBuffersLoseTheirImports();
 };
 
 void ScreenRecorderEncoderTest::writesVideoAndSoundUntilTheStop()
@@ -214,6 +285,63 @@ void ScreenRecorderEncoderTest::aRecordingWithoutFramesFails()
     QCOMPARE(finished.count(), 1);
     QVERIFY(!finished.first().at(0).toBool());
     QVERIFY(!QFile::exists(path));
+}
+
+void ScreenRecorderEncoderTest::replacedBuffersLoseTheirImports()
+{
+    RenderNode gpu;
+    if (!gpu.isValid())
+        QSKIP("no render node to allocate DMA-BUFs on");
+
+    QTemporaryDir directory;
+    const QString path = directory.filePath(QStringLiteral("resized.mp4"));
+    const QString node = QString::fromLatin1(kRenderNode);
+    Encoder encoder;
+    QSignalSpy shm(&encoder, &Encoder::needsSharedMemory);
+    QSignalSpy done(&encoder, &Encoder::frameDone);
+    QSignalSpy finished(&encoder, &Encoder::finished);
+    encoder.open(path, false);
+
+    // Three buffers taking turns, the way a session hands them out.
+    qint64 presentedNs = kOriginNs;
+    const auto record = [&](const QSize &size, int firstBuffer) {
+        CaptureSession::DmaBuf buffers[3];
+        for (CaptureSession::DmaBuf &buffer : buffers)
+            buffer = gpu.allocate(size);
+        for (int i = 0; i < 6; ++i) {
+            encoder.encodeDmaBuf(buffers[i % 3], node, QRect(QPoint(), size), presentedNs,
+                                 firstBuffer + i % 3);
+            presentedNs += kFrameNs;
+        }
+        return buffers[0].isValid() && buffers[1].isValid() && buffers[2].isValid();
+    };
+
+    QVERIFY(record(QSize(320, 240), 0));
+    if (!shm.isEmpty())
+        QSKIP("this device cannot convert DMA-BUF frames with VA-API");
+    QCOMPARE(encoder.m_imported.size(), size_t(3));
+    std::vector<unsigned int> surfaces;
+    for (const auto &[buffer, surface] : encoder.m_imported)
+        surfaces.push_back(surface);
+
+    // The window was resized: the session frees its buffers for three new ones.
+    gpu.freeBuffers();
+    encoder.forgetBuffers();
+    QVERIFY(encoder.m_imported.empty());
+    for (unsigned int surface : surfaces) {
+        VASurfaceStatus status = VASurfaceReady;
+        QVERIFY(vaQuerySurfaceStatus(encoder.m_display, surface, &status) != VA_STATUS_SUCCESS);
+    }
+
+    QVERIFY(record(QSize(640, 240), 3));
+    QVERIFY(shm.isEmpty());
+    QCOMPARE(encoder.m_imported.size(), size_t(3));
+    encoder.finish(presentedNs);
+
+    QCOMPARE(done.count(), 12);
+    QCOMPARE(finished.count(), 1);
+    QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+    QCOMPARE(probe(path).size, QSize(320, 240));
 }
 
 QTEST_GUILESS_MAIN(ScreenRecorderEncoderTest)
