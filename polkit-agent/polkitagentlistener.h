@@ -47,7 +47,8 @@ public slots:
                                 PolkitQt1::Agent::AsyncResult *result);
 
     bool initiateAuthenticationFinish() { return true; }
-    void cancelAuthentication() {}
+    // polkitd withdrew the request: the dialog and session go with it.
+    void cancelAuthentication();
 
     void request(const QString &request, bool echo);
     void completed(bool gainedAuthorization);

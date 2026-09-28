@@ -36,7 +36,7 @@ Language *Language::self()
 
 Language::Language(QObject *parent)
     : QObject(parent)
-    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("language")))
+    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("language"), this))
 {
     qDBusRegisterMetaType<QMap<QString, QString>>();
     new LanguageAdaptor(this);

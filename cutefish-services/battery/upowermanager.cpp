@@ -76,8 +76,8 @@ UPowerManager::UPowerManager(QObject *parent)
 
         const auto pathList = reply.value();
         for (const QDBusObjectPath &path : pathList) {
-            UPowerDevice *device = new UPowerDevice(path.path());
-            Battery *battery = new Battery(device);
+            UPowerDevice *device = new UPowerDevice(path.path(), this);
+            Battery *battery = new Battery(device, this);
 
             if (battery->type() != Battery::PrimaryBattery) {
                 device->deleteLater();

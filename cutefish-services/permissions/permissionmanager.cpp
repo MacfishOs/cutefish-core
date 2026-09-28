@@ -25,7 +25,10 @@ PermissionManager::PermissionManager(QObject *parent)
 
 PermissionManager::~PermissionManager()
 {
-    qDeleteAll(m_prompts);
+    // Each prompt's handler takes its entry out of the hash as it goes.
+    const auto prompts = m_prompts;
+    m_prompts.clear();
+    qDeleteAll(prompts);
 }
 
 QQmlEngine *PermissionManager::engine()

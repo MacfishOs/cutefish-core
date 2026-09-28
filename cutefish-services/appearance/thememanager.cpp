@@ -40,7 +40,7 @@ ThemeManager *ThemeManager::self()
 
 ThemeManager::ThemeManager(QObject *parent)
     : QObject(parent)
-    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("theme")))
+    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("theme"), this))
 {
     if (!QFile::exists(m_settings->fileName())) {
         QFile file(m_settings->fileName());

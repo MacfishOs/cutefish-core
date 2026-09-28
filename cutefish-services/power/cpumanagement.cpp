@@ -34,7 +34,7 @@ CPUManagement::CPUManagement(QObject *parent)
 
     for (const QString &dirName : dirList) {
         if (dirName.startsWith("cpu") && dirName[3].isNumber()) {
-            m_items.append(new CpuItem(dirName));
+            m_items.append(new CpuItem(dirName, this));
         }
     }
 

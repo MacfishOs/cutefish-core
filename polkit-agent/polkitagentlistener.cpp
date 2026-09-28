@@ -42,6 +42,7 @@ void PolKitAgentListener::initiateAuthentication(const QString &actionId,
 
     if (m_inProgress) {
         result->setCompleted();
+        delete result;
         return;
     }
 
@@ -96,43 +97,67 @@ void PolKitAgentListener::tryAgain()
 
 void PolKitAgentListener::finishObtainPrivilege()
 {
+    if (!m_inProgress)
+        return;
+
     m_numTries++;
 
     if (!m_gainedAuthorization && !m_wasCancelled && !m_dialog.isNull()) {
         m_dialog.data()->authenticationFailure();
 
         if (m_numTries < 3) {
-            m_session.data()->deleteLater();
+            if (!m_session.isNull())
+                m_session.data()->deleteLater();
 
             tryAgain();
             return;
         }
     }
 
-    if (!m_session.isNull()) {
-        m_session.data()->result()->setCompleted();
-    } else {
-        m_result->setCompleted();
-    }
+    // Done before the result is completed, so a cancel that polkitd sends on
+    // completion finds nothing in progress.
+    m_inProgress = false;
 
-    m_session.data()->deleteLater();
+    m_result->setCompleted();
+
+    if (!m_session.isNull()) {
+        m_session.data()->deleteLater();
+    }
 
     if (!m_dialog.isNull()) {
         m_dialog.data()->deleteLater();
     }
 
-    m_inProgress = false;
+    // polkit-qt hands the result over and never frees it.
+    delete m_result;
+    m_result = nullptr;
 }
 
 void PolKitAgentListener::onDialogAccepted()
 {
-    if (!m_dialog.isNull()) {
+    if (!m_dialog.isNull() && !m_session.isNull()) {
         m_session.data()->setResponse(m_dialog.data()->password());
     }
 }
 
 void PolKitAgentListener::onDialogCanceled()
 {
+    m_wasCancelled = true;
+
+    // Session::cancel() completes synchronously, which already finishes the
+    // request through completed(); without a session nothing else will.
+    if (!m_session.isNull()) {
+        m_session.data()->cancel();
+    }
+
+    finishObtainPrivilege();
+}
+
+void PolKitAgentListener::cancelAuthentication()
+{
+    if (!m_inProgress)
+        return;
+
     m_wasCancelled = true;
 
     if (!m_session.isNull()) {

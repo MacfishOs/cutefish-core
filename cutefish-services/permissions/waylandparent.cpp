@@ -122,6 +122,14 @@ void applyWaylandParent(QWindow *window, const QString &parentWindow, bool modal
                 wl_display_flush(display);
             },
             Qt::SingleShotConnection);
+    // A hidden window loses its role with the parent relation; a re-shown one
+    // gets a new role and is parented again.
+    QObject::connect(
+            native, &QNativeInterface::Private::QWaylandWindow::surfaceRoleCreated, window,
+            [window, parentWindow, modal] {
+                applyWaylandParent(window, parentWindow, modal);
+            },
+            Qt::SingleShotConnection);
     wl_display_flush(display);
 }
 

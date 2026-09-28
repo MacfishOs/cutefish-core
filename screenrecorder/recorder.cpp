@@ -120,8 +120,15 @@ bool Recorder::startSession(CaptureSession::Memory memory)
         return false;
 
     if (m_session) {
-        m_session->disconnect(this);
-        m_session->deleteLater();
+        CaptureSession *replaced = m_session;
+        replaced->disconnect(this);
+        // Its DMA-BUF fds close with it, and encodeDmaBuf calls for its
+        // buffers may still be queued: the deletion goes through the encoder's
+        // queue and back, so it lands after every one of them.
+        QMetaObject::invokeMethod(m_encoder, [this, replaced] {
+            QMetaObject::invokeMethod(this, [replaced] { replaced->deleteLater(); },
+                                      Qt::QueuedConnection);
+        }, Qt::QueuedConnection);
     }
     ++m_generation;
     m_memory = memory;

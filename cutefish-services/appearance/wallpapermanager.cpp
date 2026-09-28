@@ -2,6 +2,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QSet>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
@@ -84,6 +85,22 @@ static QStringList imagesIn(const QString &directory)
     return result;
 }
 
+// The copy's name carries a hash of the source path, so the same source always
+// maps to the same copy and a renamed one to a new copy.
+static QString mirroredFileName(const QFileInfo &sourceInfo)
+{
+    const QByteArray pathHash =
+            QCryptographicHash::hash(sourceInfo.absoluteFilePath().toUtf8(),
+                                     QCryptographicHash::Sha256)
+                    .toHex()
+                    .left(12);
+    QString fileName = sourceInfo.completeBaseName() + QLatin1Char('-')
+            + QString::fromLatin1(pathHash);
+    if (!sourceInfo.suffix().isEmpty())
+        fileName += QLatin1Char('.') + sourceInfo.suffix().toLower();
+    return fileName;
+}
+
 static QString copyWallpaperInto(const QString &path, const QString &destinationDirectory)
 {
     const QFileInfo sourceInfo(path);
@@ -97,14 +114,7 @@ static QString copyWallpaperInto(const QString &path, const QString &destination
     if (!QDir().mkpath(destinationDirectory))
         return path;
 
-    const QByteArray pathHash =
-            QCryptographicHash::hash(sourcePath.toUtf8(), QCryptographicHash::Sha256)
-                    .toHex()
-                    .left(12);
-    QString fileName = sourceInfo.completeBaseName() + QLatin1Char('-')
-            + QString::fromLatin1(pathHash);
-    if (!sourceInfo.suffix().isEmpty())
-        fileName += QLatin1Char('.') + sourceInfo.suffix().toLower();
+    const QString fileName = mirroredFileName(sourceInfo);
 
     const QString destinationPath = QDir(destinationDirectory).absoluteFilePath(fileName);
     if (QFileInfo::exists(destinationPath))
@@ -335,8 +345,16 @@ void WallpaperManager::syncWallpaperFolder(const QString &folder)
         const QString store = wallpaperFolderStore(folder);
         const int before = imagesIn(store).count();
         const QStringList sources = imagesIn(folder);
-        for (const QString &source : sources)
+        QSet<QString> expected;
+        for (const QString &source : sources) {
             copyWallpaperInto(source, store);
+            expected.insert(mirroredFileName(QFileInfo(source)));
+        }
+        // A copy whose source was renamed, replaced or removed has no use.
+        for (const QString &copy : imagesIn(store)) {
+            if (!expected.contains(QFileInfo(copy).fileName()))
+                QFile::remove(copy);
+        }
         const bool copied = imagesIn(store).count() != before;
 
         QMetaObject::invokeMethod(
