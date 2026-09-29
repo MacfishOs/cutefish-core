@@ -53,6 +53,7 @@ private:
     static bool isAlive(uint pid);
     static bool isSafeTarget(uint pid);
     static bool isOwnedByUser(uint pid);
+    static uint parentPid(uint pid);
     static qulonglong startTime(uint pid);
 
     ApplicationRegistry *m_registry;

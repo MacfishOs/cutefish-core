@@ -17,6 +17,8 @@
 #include <unistd.h>
 
 static const int kTerminateTimeout = 5000;
+// Taken at start: once the session is gone we belong to whatever adopted us.
+static const uint kSessionPid = static_cast<uint>(::getppid());
 
 AppRuntime::AppRuntime(QObject *parent)
     : QObject(parent)
@@ -224,10 +226,28 @@ bool AppRuntime::isSafeTarget(uint pid)
     if (pid <= 1)
         return false;
 
-    // Refuse anything that would take the session down with the application.
+    // Refuse anything that would take the session down with the application,
+    // including the session's own components: they are its children, as we are.
     return pid != static_cast<uint>(::getpid())
         && pid != static_cast<uint>(::getpgrp())
-        && pid != static_cast<uint>(::getsid(0));
+        && pid != static_cast<uint>(::getsid(0))
+        && parentPid(pid) != kSessionPid;
+}
+
+// Field 4 of /proc/pid/stat.
+uint AppRuntime::parentPid(uint pid)
+{
+    QFile stat(QStringLiteral("/proc/%1/stat").arg(pid));
+    if (!stat.open(QIODevice::ReadOnly))
+        return 0;
+
+    const QByteArray line = stat.readLine();
+    const int commEnd = line.lastIndexOf(')');
+    if (commEnd < 0)
+        return 0;
+
+    const QList<QByteArray> fields = line.mid(commEnd + 2).simplified().split(' ');
+    return fields.size() < 2 ? 0 : fields.at(1).toUInt();
 }
 
 // Field 22 of /proc/pid/stat, in clock ticks since boot.
