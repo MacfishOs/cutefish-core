@@ -370,6 +370,18 @@ void ProcessManager::startDesktopProcess()
 
     startShell();
 
+    // Resident, so every file manager window and dialog of the session, the
+    // dock's included, opens from one warm process.
+    auto *fileManager = new QProcess;
+    fileManager->setProcessChannelMode(QProcess::ForwardedChannels);
+    fileManager->start(QStringLiteral("cutefish-filemanager"), {QStringLiteral("--daemon")});
+    if (fileManager->waitForStarted()) {
+        m_coreProcesses.insert(QStringLiteral("cutefish-filemanager"), fileManager);
+    } else {
+        qWarning() << "Failed to start the file manager daemon:" << fileManager->errorString();
+        fileManager->deleteLater();
+    }
+
     // For CutefishOS. An ordinary application, so the runtime starts it.
     if (QFile("/usr/bin/cutefish-welcome").exists()
         && !QFile("/run/live/medium/live/filesystem.squashfs").exists()) {
