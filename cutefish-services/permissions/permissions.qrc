@@ -2,5 +2,6 @@
     <qresource prefix="/permissions">
         <file>PermissionPrompt.qml</file>
         <file>ScreenRecordingContent.qml</file>
+        <file>ComputerControlContent.qml</file>
     </qresource>
 </RCC>

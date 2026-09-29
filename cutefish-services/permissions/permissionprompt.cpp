@@ -24,6 +24,7 @@ struct Kind {
 
 const Kind kinds[] = {
         {"screen-recording", "ScreenRecordingContent.qml", "video-display"},
+        {"computer-control", "ComputerControlContent.qml", "preferences-desktop-remote-desktop"},
 };
 
 const Kind *findKind(const QString &name)
