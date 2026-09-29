@@ -34,6 +34,16 @@ jobs:
             cmake \
             g++
 
+      - name: Checkout packaging
+        uses: actions/checkout@v4
+        with:
+          repository: cutefishos/packaging
+          ref: main
+          path: packaging
+
+      - name: Add the Debian packaging
+        run: mv packaging/debian/cutefish-core/debian . && rm -rf packaging
+
       - name: Install build dependencies
         run: mk-build-deps -i -t "apt-get --yes" -r
 
