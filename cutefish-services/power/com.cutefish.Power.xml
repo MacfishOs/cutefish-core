@@ -2,12 +2,6 @@
     "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
   <interface name="com.cutefish.Services.Power">
-    <property name="mode" type="i" access="read"/>
-
-    <method name="setMode">
-      <arg name="value" type="i" direction="in"/>
-    </method>
-
     <method name="setBatteryScreenOff">
       <arg name="value" type="i" direction="in"/>
     </method>

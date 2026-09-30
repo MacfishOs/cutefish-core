@@ -27,7 +27,6 @@ add_subdirectory(appruntime)
 add_subdirectory(polkit-agent)
 add_subdirectory(session)
 add_subdirectory(cutefish-services)
-add_subdirectory(cpufreq)
 add_subdirectory(screenrecorder)
 
 install(FILES cutefish DESTINATION /etc/ COMPONENT Runtime)

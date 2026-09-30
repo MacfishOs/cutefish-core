@@ -6,29 +6,19 @@
 
 class DimDisplayAction;
 class UPowerManager;
-class CPUManagement;
 
 class PowerManager : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(int mode READ mode WRITE setMode NOTIFY modeChanged)
 
 public:
-    explicit PowerManager(UPowerManager *upowerManager,
-                          CPUManagement *cpuManagement,
-                          QObject *parent = nullptr);
-
-    int mode() const;
-    void setMode(int mode);
+    explicit PowerManager(UPowerManager *upowerManager, QObject *parent = nullptr);
 
 public slots:
     void setBatteryScreenOff(int timeout);
     void setACScreenOff(int timeout);
     void setACPreventSleep(bool prevent);
     void setDimDisplayTimeout(int timeout);
-
-signals:
-    void modeChanged();
 
 private slots:
     void onBatteryChanged();
@@ -41,7 +31,6 @@ private:
 
     QSettings m_settings;
     UPowerManager *m_upowerManager;
-    CPUManagement *m_cpuManagement;
     DimDisplayAction *m_dimDisplayAction;
 
     int m_batteryScreenOff = 300;
