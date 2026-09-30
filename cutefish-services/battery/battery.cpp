@@ -1,6 +1,7 @@
 #include "battery.h"
 #include "batteryadaptor.h"
 #include "power.h"
+#include "preferences.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -54,7 +55,8 @@ void Battery::init()
         QDBusConnection::sessionBus().registerObject(
                 QStringLiteral("/com/cutefish/Services/Battery"), this);
 
-        m_settings = new QSettings(QStringLiteral("cutefish"), QStringLiteral("battery"));
+        m_settings = new QSettings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat, this);
+        m_settings->beginGroup(QStringLiteral("Battery"));
         m_lastChargedPercent = m_settings->value("LastChargedPercent", 0).toInt();
         m_lastChargedSecs = m_settings->value("LastChargedSecs").toLongLong();
     }

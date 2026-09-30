@@ -21,12 +21,12 @@
 #include "appearanceadaptor.h"
 #include "fontconfigwriter.h"
 #include "gtksettings.h"
+#include "languageenvironment.h"
+#include "preferences.h"
 #include "wallpapermanager.h"
 
 #include <QDBusInterface>
 #include <QDebug>
-#include <QFile>
-#include <QTextStream>
 
 static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
 static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
@@ -40,16 +40,9 @@ ThemeManager *ThemeManager::self()
 
 ThemeManager::ThemeManager(QObject *parent)
     : QObject(parent)
-    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("theme"), this))
+    , m_settings(new QSettings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat, this))
 {
-    if (!QFile::exists(m_settings->fileName())) {
-        QFile file(m_settings->fileName());
-        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream in(&file);
-            in << "";
-            file.close();
-        }
-    }
+    m_settings->beginGroup(QStringLiteral("Appearance"));
 
     m_wallpaperManager = new WallpaperManager(m_settings, this);
     connect(m_wallpaperManager, &WallpaperManager::wallpaperChanged, this,
@@ -87,8 +80,7 @@ ThemeManager::ThemeManager(QObject *parent)
     }
 
     if (!m_settings->contains(s_systemFontName)) {
-        QSettings lanSettings(QStringLiteral("cutefish"), QStringLiteral("language"));
-        QString languageCode = lanSettings.value("language").toString();
+        QString languageCode = LanguageEnvironment::preferredLanguages().first();
         QString fontName;
 
         if (languageCode == "zh_CN") {
@@ -342,8 +334,10 @@ void ThemeManager::updateGtk3Config()
     writeGtkSettings(gtk);
 }
 
-void ThemeManager::applyFontSettings()
+void ThemeManager::setFontRendering(bool antialias, const QString &hintStyle)
 {
+    m_settings->setValue("FontAntialias", antialias);
+    m_settings->setValue("FontHintStyle", hintStyle);
     m_settings->sync();
     updateFontConfig();
     updateGtk3Config();
@@ -363,14 +357,11 @@ void ThemeManager::updateFontConfig()
 
 FontConfig ThemeManager::fontConfig()
 {
-    // The settings app writes these keys itself; read the file rather than m_settings' cache.
-    QSettings settings(QSettings::UserScope, "cutefish", "theme");
-
     FontConfig config;
     config.family = systemFont();
     config.fixedFamily = systemFixedFont();
-    config.antialias = settings.value("FontAntialias", true).toBool();
-    config.hintStyle = settings.value("FontHintStyle", "hintslight").toString();
+    config.antialias = m_settings->value("FontAntialias", true).toBool();
+    config.hintStyle = m_settings->value("FontHintStyle", "hintslight").toString();
     return config;
 }
 

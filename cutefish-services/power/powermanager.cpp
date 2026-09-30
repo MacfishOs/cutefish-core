@@ -2,6 +2,7 @@
 
 #include "../battery/upowermanager.h"
 #include "dimdisplayaction.h"
+#include "preferences.h"
 
 namespace {
 constexpr auto s_powerGroup = "Power";
@@ -11,27 +12,21 @@ int normalizedTimeout(int timeout)
     return timeout < 0 ? -1 : qMax(1, timeout);
 }
 
-int readTimeout(QSettings &settings, const QString &key, const QString &legacyKey, int fallback)
+int readTimeout(QSettings &settings, const QString &key, int fallback)
 {
     settings.beginGroup(QLatin1String(s_powerGroup));
     const bool hasValue = settings.contains(key);
     const int value = hasValue ? settings.value(key).toInt() : fallback;
     settings.endGroup();
 
-    if (hasValue)
-        return normalizedTimeout(value);
-
-    if (!legacyKey.isEmpty() && settings.contains(legacyKey))
-        return normalizedTimeout(settings.value(legacyKey).toInt());
-
-    return fallback;
+    return hasValue ? normalizedTimeout(value) : fallback;
 }
 
 } // namespace
 
 PowerManager::PowerManager(UPowerManager *upowerManager, QObject *parent)
     : QObject(parent)
-    , m_settings(QStringLiteral("cutefish"), QStringLiteral("power"))
+    , m_settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat)
     , m_upowerManager(upowerManager)
     , m_dimDisplayAction(new DimDisplayAction(this))
 {
@@ -56,10 +51,8 @@ PowerManager::PowerManager(UPowerManager *upowerManager, QObject *parent)
 
 void PowerManager::loadSettings()
 {
-    m_batteryScreenOff = readTimeout(m_settings, QStringLiteral("BatteryScreenOff"),
-                                     QStringLiteral("CloseScreenTimeout"), 300);
-    m_acScreenOff = readTimeout(m_settings, QStringLiteral("ACScreenOff"),
-                                QStringLiteral("CloseScreenTimeout"), 1200);
+    m_batteryScreenOff = readTimeout(m_settings, QStringLiteral("BatteryScreenOff"), 300);
+    m_acScreenOff = readTimeout(m_settings, QStringLiteral("ACScreenOff"), 1200);
     m_settings.beginGroup(QLatin1String(s_powerGroup));
     m_acPreventSleep = m_settings.value(QStringLiteral("ACPreventSleep"), false).toBool();
     m_settings.endGroup();

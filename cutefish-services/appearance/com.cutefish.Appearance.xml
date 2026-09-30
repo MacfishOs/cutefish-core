@@ -57,7 +57,10 @@
         <arg name="type" type="s" direction="in"/>
     </method>
 
-    <method name="applyFontSettings"></method>
+    <method name="setFontRendering">
+        <arg name="antialias" type="b" direction="in"/>
+        <arg name="hintStyle" type="s" direction="in"/>
+    </method>
     <method name="updateFontConfig"></method>
 
     <property name="isDarkMode" type="b" access="read"/>

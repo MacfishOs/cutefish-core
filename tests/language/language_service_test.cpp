@@ -1,4 +1,5 @@
 #include "locale/language.h"
+#include "preferences.h"
 
 #include <QDBusConnection>
 #include <QTemporaryDir>
@@ -36,9 +37,12 @@ private slots:
         QVERIFY(bus.registerObject("/org/freedesktop/Notifications", &notifications,
                                    QDBusConnection::ExportAllSlots));
 
-        Language language;
-        QSettings theme("cutefish", "theme");
+        QSettings theme(Preferences::file("services"), QSettings::IniFormat);
+        theme.setValue("Language/language", "en_US");
+        theme.beginGroup("Appearance");
         theme.setValue("Font", "Custom Font");
+        theme.sync();
+        Language language;
         language.setPreferredLanguages({"en_US", "ja_JP", "de_DE"});
         QTest::qWait(30);
         QCOMPARE(notifications.count, 0);

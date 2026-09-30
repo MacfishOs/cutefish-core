@@ -105,7 +105,7 @@ public:
     void setCursorSize(int size);
 
     void updateGtk3Config();
-    void applyFontSettings();
+    void setFontRendering(bool antialias, const QString &hintStyle);
     void applyCursorSettings();
 
     QString iconTheme() const;

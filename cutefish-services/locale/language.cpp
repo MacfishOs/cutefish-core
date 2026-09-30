@@ -19,6 +19,7 @@
 
 #include "language.h"
 #include "languageenvironment.h"
+#include "preferences.h"
 #include "appearance/thememanager.h"
 #include "languageadaptor.h"
 
@@ -36,22 +37,22 @@ Language *Language::self()
 
 Language::Language(QObject *parent)
     : QObject(parent)
-    , m_settings(new QSettings(QStringLiteral("cutefish"), QStringLiteral("language"), this))
+    , m_settings(new QSettings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat, this))
 {
+    m_settings->beginGroup(QStringLiteral("Language"));
+
     qDBusRegisterMetaType<QMap<QString, QString>>();
     new LanguageAdaptor(this);
     QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Language"),
                                                  this);
-
-    if (!m_settings->contains("language"))
-        m_settings->setValue("language", "en_US");
 
     emit languageChanged();
 }
 
 QString Language::languageCode() const
 {
-    return m_settings->value("language").toString();
+    const QString code = m_settings->value("language").toString();
+    return code.isEmpty() ? LanguageEnvironment::systemLanguage() : code;
 }
 
 QStringList Language::preferredLanguages() const
@@ -84,7 +85,8 @@ void Language::setPreferredLanguages(const QStringList &languages)
     m_settings->setValue("preferredLanguages", codes);
 
     if (primaryChanged) {
-        QSettings settings(QStringLiteral("cutefish"), QStringLiteral("theme"));
+        QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
+        settings.beginGroup(QStringLiteral("Appearance"));
 
         const QString localeName = QLocale(code).name();
         if (localeName == "zh_CN") {
