@@ -1,5 +1,5 @@
 /*
-    SPDX-FileCopyrightText: 2020 Reven Martin <revenmartin@gmail.com>
+    SPDX-FileCopyrightText: 2020 Reion Wong <reionwong@gmail.com>
     SPDX-FileCopyrightText: 2010 Michael Zanetti <mzanetti@kde.org>
     SPDX-FileCopyrightText: 2010 Lukas Tinkl <ltinkl@redhat.com>
 
