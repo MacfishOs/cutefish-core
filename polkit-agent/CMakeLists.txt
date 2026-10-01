@@ -19,7 +19,6 @@ add_executable(cutefish-polkit-agent
 target_link_libraries(cutefish-polkit-agent
         Cutefish::Application
         Qt6::Core
-        Qt6::Widgets
         Qt6::Quick
         Qt6::QuickControls2
 

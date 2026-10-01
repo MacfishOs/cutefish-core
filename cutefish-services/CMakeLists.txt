@@ -47,7 +47,6 @@ target_link_libraries(${TARGET}
         cutefish-clipboard-backend
         Qt6::Core
         Qt6::Gui
-        Qt6::Widgets
         Qt6::DBus
         cutefish-idle-backend
         cutefish-permissions

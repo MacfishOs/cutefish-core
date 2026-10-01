@@ -12,9 +12,9 @@
 #include "permissions/permissionmanager.h"
 #include "power/powermanager.h"
 #include "proxy/proxyservice.h"
-#include <QApplication>
+#include <QGuiApplication>
 
-class Application : public QApplication
+class Application : public QGuiApplication
 {
     Q_OBJECT
 
