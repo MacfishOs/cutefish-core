@@ -11,9 +11,7 @@ set(SOURCES
     xwaylandenvironment.cpp
     shellprocess.cpp
     shellconnection.cpp
-
-    powermanager/power.cpp
-    powermanager/powerproviders.cpp
+    power.cpp
 )
 
 qt6_add_dbus_adaptor(DBUS_SOURCES

@@ -6,7 +6,7 @@
 
 #include <QCoreApplication>
 
-#include "powermanager/power.h"
+#include "power.h"
 #include "processmanager.h"
 
 class Application : public QCoreApplication
@@ -24,7 +24,7 @@ public slots:
     void reboot()
     {
         m_processManager->endAfterApplications(ProcessManager::Ending::Restart, [this] {
-            if (m_power.reboot())
+            if (Power::reboot())
                 QCoreApplication::exit(0);
         });
     }
@@ -32,12 +32,12 @@ public slots:
     void powerOff()
     {
         m_processManager->endAfterApplications(ProcessManager::Ending::Shutdown, [this] {
-            if (m_power.shutdown())
+            if (Power::powerOff())
                 QCoreApplication::exit(0);
         });
     }
 
-    bool suspend() { return m_power.suspend(); }
+    bool suspend() { return Power::suspend(); }
 
     void startDesktopProcess() { m_processManager->startDesktopProcess(); }
 
@@ -53,7 +53,6 @@ private:
 
 private:
     ProcessManager* m_processManager;
-    Power m_power;
 };
 
 #endif // APPLICATION_H
