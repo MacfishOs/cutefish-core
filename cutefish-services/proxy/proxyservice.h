@@ -9,7 +9,7 @@
 #include <QTimer>
 
 // Follows org.gnome.system.proxy, which Cutefish Settings and third-party proxy clients write,
-// and republishes it to KIO and to the environment of D-Bus and systemd activated programs.
+// and republishes it to the environment of D-Bus and systemd activated programs.
 // Applications started by AppRuntime read the keyfile themselves at launch.
 class ProxyService : public QObject
 {
@@ -21,7 +21,6 @@ public:
 private:
     void watch();
     void reload();
-    void writeKioConfig();
     void publishEnvironment();
 
     QFileSystemWatcher m_watcher;

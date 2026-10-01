@@ -7,34 +7,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QStandardPaths>
-
-namespace
-{
-QString kioServer(const QString &scheme, const ProxySettings::Server &server)
-{
-    if (!server.isValid())
-        return QString();
-
-    QString host = server.host;
-    if (host.contains(QLatin1Char(':')) && !host.startsWith(QLatin1Char('[')))
-        host = QLatin1Char('[') + host + QLatin1Char(']');
-    // KIO's own format: the port follows the URL after a space.
-    return scheme + QLatin1String("://") + host + QLatin1Char(' ') + QString::number(server.port);
-}
-
-int kioProxyType(ProxySettings::Mode mode)
-{
-    switch (mode) {
-    case ProxySettings::Manual:
-        return 1;
-    case ProxySettings::Auto:
-        return 2;
-    default:
-        return 0;
-    }
-}
-}
 
 ProxyService::ProxyService(QObject *parent)
     : QObject(parent)
@@ -72,36 +44,7 @@ void ProxyService::reload()
 
     m_loaded = true;
     m_settings = settings;
-    writeKioConfig();
     publishEnvironment();
-}
-
-void ProxyService::writeKioConfig()
-{
-    const QString path = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-            + QLatin1String("/kioslaverc");
-    if (m_settings.mode == ProxySettings::None && !QFile::exists(path))
-        return;
-
-    const bool changed = KeyFile::writeGroup(path, QStringLiteral("Proxy Settings"), {
-        {QStringLiteral("ProxyType"), QString::number(kioProxyType(m_settings.mode))},
-        {QStringLiteral("httpProxy"), kioServer(QStringLiteral("http"), m_settings.http)},
-        {QStringLiteral("httpsProxy"),
-         kioServer(QStringLiteral("http"), m_settings.effectiveHttps())},
-        {QStringLiteral("ftpProxy"), kioServer(QStringLiteral("http"), m_settings.ftp)},
-        {QStringLiteral("socksProxy"), kioServer(QStringLiteral("socks"), m_settings.socks)},
-        {QStringLiteral("Proxy Config Script"), m_settings.autoconfigUrl},
-        {QStringLiteral("NoProxyFor"), m_settings.ignoreHosts.join(QLatin1Char(','))},
-        {QStringLiteral("ReversedException"), QStringLiteral("false")},
-    });
-    if (!changed)
-        return;
-
-    QDBusMessage message = QDBusMessage::createSignal(QStringLiteral("/KIO/Scheduler"),
-                                                      QStringLiteral("org.kde.KIO.Scheduler"),
-                                                      QStringLiteral("reparseSlaveConfiguration"));
-    message << QString();
-    QDBusConnection::sessionBus().send(message);
 }
 
 void ProxyService::publishEnvironment()
