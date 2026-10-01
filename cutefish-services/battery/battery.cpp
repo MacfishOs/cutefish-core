@@ -13,7 +13,6 @@ enum TimeConstants {
 };
 
 // ref: https://upower.freedesktop.org/docs/Device.html
-//      kf5solid
 
 Battery::Battery(UPowerDevice *device, QObject *parent)
     : QObject(parent)

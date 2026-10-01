@@ -23,8 +23,7 @@ UPowerDevice::UPowerDevice(const QString &udi, QObject *parent)
                                                  SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
         }
 
-        // TODO port this to Solid::Power, we can't link against kdelibs4support for this signal
-        // older upower versions not affected
+        // UPower 0.99 dropped its Resuming signal; logind reports the wake-up instead.
         QDBusConnection::systemBus().connect("org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", "PrepareForSleep",
                                              this, SLOT(login1Resuming(bool)));
     }
