@@ -20,6 +20,7 @@
 #ifndef PROCESSMANAGER_H
 #define PROCESSMANAGER_H
 
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QMap>
 #include <functional>
@@ -89,6 +90,7 @@ private:
     // Bounded restart policy: a shell that keeps dying must not become a busy
     // loop, and after enough failures the session carries on without it.
     int m_shellRestarts = 0;
+    QElapsedTimer m_shellUptime;
     QString m_waylandSocket;
     QString m_controlSocket;
     QMap<QString, QProcess*> m_coreProcesses;

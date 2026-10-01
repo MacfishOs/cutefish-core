@@ -49,6 +49,8 @@ namespace {
 // either way: a shell that cannot come up leaves the session with applications
 // and no panels, which is recoverable, while a restart loop is not.
 constexpr int kMaxShellRestarts = 5;
+// A shell that stayed up this long was not crash-looping, so it gets a fresh count.
+constexpr qint64 kShellStableUptimeMs = 30000;
 constexpr int kShellRestartDelayMs = 1000;
 constexpr int kShellRestartBackoffMs = 2000;
 } // namespace
@@ -207,6 +209,7 @@ void ProcessManager::startShell()
     if (m_loggingOut || m_shellProcess->state() != QProcess::NotRunning)
         return;
 
+    m_shellUptime.start();
     m_shellProcess->startForSession(qEnvironmentVariable("CUTEFISH_SHELL_BINARY",
                                                          QStringLiteral("/usr/bin/cutefish-shell")),
                                     m_waylandSocket,
@@ -221,6 +224,8 @@ void ProcessManager::onShellFinished(int code, QProcess::ExitStatus status)
     // The compositor and every application it is showing carry on; only the
     // shell surfaces disappear, and the compositor releases the work area it
     // had reserved for them. A new connection repopulates the dock.
+    if (m_shellUptime.isValid() && m_shellUptime.elapsed() >= kShellStableUptimeMs)
+        m_shellRestarts = 0;
     if (m_shellRestarts >= kMaxShellRestarts) {
         qCritical() << "cutefish-shell failed" << m_shellRestarts
                     << "times; not restarting it again";
