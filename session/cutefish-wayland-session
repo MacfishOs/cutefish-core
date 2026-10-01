@@ -1,6 +1,5 @@
 #!/bin/sh
 # Session management stays in core/session; it supervises cutefish-compositor.
-export XDG_MENU_PREFIX=cutefish-
 export XDG_CURRENT_DESKTOP=Cutefish
 export XDG_SESSION_DESKTOP=Cutefish
 export DESKTOP_SESSION=Cutefish

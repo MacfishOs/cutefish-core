@@ -191,9 +191,6 @@ void Application::initEnvironments()
     if (qEnvironmentVariableIsEmpty("XDG_CONFIG_DIRS"))
         qputenv("XDG_CONFIG_DIRS", "/etc/xdg");
 
-    if (qEnvironmentVariableIsEmpty("XDG_MENU_PREFIX"))
-        qputenv("XDG_MENU_PREFIX", "cutefish-");
-
     // Environment
     qputenv("DESKTOP_SESSION", "Cutefish");
     qputenv("XDG_CURRENT_DESKTOP", "Cutefish");
