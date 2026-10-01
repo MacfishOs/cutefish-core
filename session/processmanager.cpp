@@ -442,7 +442,7 @@ void ProcessManager::loadAutoStartProcess()
 
         const auto executable = QFileInfo(command.first()).fileName();
         if (QStringList {"cutefish-services", "cutefish-appruntime", "cutefish-shell",
-                         "cutefish-compositor", "kwin_wayland"}
+                         "cutefish-compositor"}
                     .contains(executable))
             continue;
 

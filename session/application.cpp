@@ -114,10 +114,8 @@ Application::Application(int &argc, char **argv)
         qApp->exit(1);
     }
 
-    // We import systemd environment after we sync the dbus environment here.
-    // Otherwise it may leads to some unwanted order of applying environment
-    // variables (e.g. LANG and LC_*)
-    // ref plasma
+    // Import systemd's environment only after ours reached D-Bus; the other
+    // order applies LANG and LC_* in the wrong order.
     qunsetenv("LC_ALL");
     importSystemdEnvrionment();
 
