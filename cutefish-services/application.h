@@ -9,6 +9,7 @@
 #include "brightness/brightnessmanager.h"
 #include "clipboard/clipboard.h"
 #include "locale/language.h"
+#include "nightlight/nightlight.h"
 #include "permissions/permissionmanager.h"
 #include "power/powermanager.h"
 #include "proxy/proxyservice.h"
@@ -30,6 +31,7 @@ private:
     Language *m_language;
     Clipboard *m_clipboard;
     PowerManager *m_powerManager;
+    NightLight *m_nightLight;
     PermissionManager *m_permissionManager;
     ProxyService *m_proxyService;
 };

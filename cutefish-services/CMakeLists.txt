@@ -33,6 +33,9 @@ qt6_add_dbus_adaptor(DBUS_SOURCES
 qt6_add_dbus_adaptor(DBUS_SOURCES
                      power/com.cutefish.Power.xml
                      power/powermanager.h PowerManager)
+qt6_add_dbus_adaptor(DBUS_SOURCES
+                     nightlight/com.cutefish.Services.NightLight.xml
+                     nightlight/nightlight.h NightLight)
 set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
 
 add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${HEADERS} ${FORMS} ${RESOURCES})

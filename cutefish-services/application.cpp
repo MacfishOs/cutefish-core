@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "application.h"
+#include "nightlightadaptor.h"
 #include "poweradaptor.h"
 #include <QDir>
 #include <QFile>
@@ -23,6 +24,7 @@ Application::Application(int &argc, char **argv)
     , m_language(Language::self())
     , m_clipboard(new Clipboard(this))
     , m_powerManager(new PowerManager(m_upowerManager, this))
+    , m_nightLight(new NightLight(this))
     , m_permissionManager(new PermissionManager(this))
     , m_proxyService(new ProxyService(this))
 {
@@ -32,6 +34,9 @@ Application::Application(int &argc, char **argv)
     new PowerAdaptor(m_powerManager);
     QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Power"),
                                                  m_powerManager);
+    new NightLightAdaptor(m_nightLight);
+    QDBusConnection::sessionBus().registerObject(
+            QStringLiteral("/com/cutefish/Services/NightLight"), m_nightLight);
 
     // Translations
     QLocale locale;
