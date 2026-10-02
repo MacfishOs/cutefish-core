@@ -25,6 +25,7 @@
 #include "compositorprocess.h"
 #include "shellconnection.h"
 #include "shellprocess.h"
+#include "userdirectories.h"
 #include "xwaylandenvironment.h"
 
 namespace {
@@ -362,6 +363,9 @@ void ProcessManager::startDesktopProcess()
         return;
     m_desktopStarted = true;
 
+    // Before the shell and file manager, which read the directories once.
+    UserDirectories::ensure(QDir::homePath(),
+                            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
     startShell();
 
     // Resident, so every file manager window and dialog of the session, the
@@ -440,7 +444,7 @@ void ProcessManager::loadAutoStartProcess()
 
         const auto executable = QFileInfo(command.first()).fileName();
         if (QStringList {"cutefish-services", "cutefish-appruntime", "cutefish-shell",
-                         "cutefish-compositor"}
+                         "cutefish-compositor", "xdg-user-dirs-update"}
                     .contains(executable))
             continue;
 

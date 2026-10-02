@@ -11,6 +11,7 @@ set(SOURCES
     shellprocess.cpp
     shellconnection.cpp
     power.cpp
+    userdirectories.cpp
 )
 
 qt6_add_dbus_adaptor(DBUS_SOURCES

@@ -24,3 +24,8 @@ add_executable(autostart-test autostart_test.cpp ../autostartentries.cpp)
 target_include_directories(autostart-test PRIVATE ..)
 target_link_libraries(autostart-test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME autostart COMMAND autostart-test)
+
+add_executable(user-directories-test user_directories_test.cpp ../userdirectories.cpp)
+target_include_directories(user-directories-test PRIVATE ..)
+target_link_libraries(user-directories-test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME user-directories COMMAND user-directories-test)
