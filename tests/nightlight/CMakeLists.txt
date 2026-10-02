@@ -7,7 +7,9 @@ find_package(Qt6 REQUIRED COMPONENTS Core DBus Test)
 find_package(CutefishFramework REQUIRED COMPONENTS Application Display)
 find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
 set(SERVICE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../cutefish-services)
-add_executable(night_light_test night_light_test.cpp
+qt6_add_dbus_adaptor(ADAPTOR_SOURCES ${SERVICE_DIR}/nightlight/com.cutefish.Services.NightLight.xml
+    ${SERVICE_DIR}/nightlight/nightlight.h NightLight)
+add_executable(night_light_test night_light_test.cpp ${ADAPTOR_SOURCES}
     ${SERVICE_DIR}/nightlight/nightlight.cpp
     ${SERVICE_DIR}/nightlight/nightlightschedule.cpp)
 target_include_directories(night_light_test PRIVATE ${SERVICE_DIR} ${SERVICE_DIR}/nightlight)

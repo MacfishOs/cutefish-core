@@ -22,6 +22,9 @@
     <method name="setCustomEnd">
         <arg name="minutes" type="i" direction="in"/>
     </method>
+    <method name="setPreview">
+        <arg name="preview" type="b" direction="in"/>
+    </method>
     <signal name="enabledChanged">
         <arg name="enabled" type="b"/>
     </signal>

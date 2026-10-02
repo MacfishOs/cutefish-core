@@ -20,6 +20,8 @@ constexpr auto s_group = "NightLight";
 // kManualAnimationDuration and kAutomaticAnimationDuration.
 constexpr std::chrono::milliseconds kManualDuration = 1s;
 constexpr std::chrono::milliseconds kScheduledDuration = 60s;
+// Settings sends a held slider's value every 100 ms; a second would trail it.
+constexpr std::chrono::milliseconds kPreviewDuration = 100ms;
 
 // Ash's defaults: a custom schedule from 6 PM to 6 AM, and the same times for
 // sunset and sunrise where the location is unknown or the sun does not set.
@@ -58,6 +60,10 @@ NightLight::NightLight(QObject *parent, Clock clock)
             minutesOfDay(m_settings.value(QStringLiteral("CustomStart"), kDefaultStart).toInt());
     m_customEnd = minutesOfDay(m_settings.value(QStringLiteral("CustomEnd"), kDefaultEnd).toInt());
     m_settings.endGroup();
+
+    m_previewWatcher.setWatchMode(QDBusServiceWatcher::WatchForUnregistration);
+    connect(&m_previewWatcher, &QDBusServiceWatcher::serviceUnregistered, this,
+            &NightLight::endPreview);
 
     m_timer.setSingleShot(true);
     m_timer.setTimerType(Qt::PreciseTimer);
@@ -100,7 +106,9 @@ void NightLight::setTemperature(double temperature)
         return;
     m_temperature = temperature;
     write(QStringLiteral("Temperature"), temperature);
-    if (m_enabled)
+    if (m_previewing)
+        sendToCompositor(kPreviewDuration);
+    else if (m_enabled)
         sendToCompositor(kManualDuration);
     emit temperatureChanged(temperature);
 }
@@ -137,6 +145,24 @@ void NightLight::setCustomEnd(int minutes)
     emit customEndChanged(minutes);
     if (m_schedule == Custom)
         refresh(Reason::SettingsChanged);
+}
+
+void NightLight::setPreview(bool preview)
+{
+    if (!preview) {
+        endPreview();
+        return;
+    }
+    // A caller that crashes mid-drag must not leave the screen tinted.
+    if (calledFromDBus()) {
+        m_previewWatcher.setConnection(connection());
+        m_previewWatcher.setWatchedServices({message().service()});
+    }
+    if (m_previewing)
+        return;
+    m_previewing = true;
+    if (!m_enabled)
+        sendToCompositor(kManualDuration);
 }
 
 void NightLight::onPrepareForSleep(bool sleeping)
@@ -203,11 +229,21 @@ void NightLight::setEnabledInternal(bool enabled, std::chrono::milliseconds dura
     emit enabledChanged(enabled);
 }
 
+void NightLight::endPreview()
+{
+    m_previewWatcher.setWatchedServices({});
+    if (!m_previewing)
+        return;
+    m_previewing = false;
+    if (!m_enabled)
+        sendToCompositor(kManualDuration);
+}
+
 void NightLight::sendToCompositor(std::chrono::milliseconds duration)
 {
     // Until its state has loaded, availabilityChanged sends it all.
     if (m_display.available())
-        m_display.setNightLight(m_enabled ? m_temperature : 0.0, uint(duration.count()));
+        m_display.setNightLight(m_enabled || m_previewing ? m_temperature : 0.0, uint(duration.count()));
 }
 
 void NightLight::updateAvailable()

@@ -5,6 +5,7 @@
 #include "nightlightschedule.h"
 
 #include <QDBusConnection>
+#include <QDBusMessage>
 #include <QFile>
 #include <QSettings>
 #include <QSignalSpy>
@@ -16,6 +17,7 @@
 #include <memory>
 
 #include "displaytypes.h"
+#include "nightlightadaptor.h"
 #include "preferences.h"
 
 using namespace cutefish::display;
@@ -338,6 +340,81 @@ private slots:
         QCOMPARE(m_display->calls.last().strength, 0.8);
         nightLight->setTemperature(2);
         QCOMPARE(nightLight->temperature(), 1.0);
+    }
+
+    void aPreviewShowsTheTemperatureWhileOff()
+    {
+        auto nightLight = start();
+        QTRY_VERIFY(nightLight->available());
+        QTRY_COMPARE(m_display->calls.size(), 1);
+
+        nightLight->setPreview(true);
+        QTRY_COMPARE(m_display->calls.size(), 2);
+        QCOMPARE(m_display->calls.last().strength, 0.5);
+        QCOMPARE(m_display->calls.last().durationMs, 1000u);
+
+        nightLight->setTemperature(0.8);
+        QTRY_COMPARE(m_display->calls.size(), 3);
+        QCOMPARE(m_display->calls.last().strength, 0.8);
+        QCOMPARE(m_display->calls.last().durationMs, 100u);
+
+        nightLight->setPreview(false);
+        QTRY_COMPARE(m_display->calls.size(), 4);
+        QCOMPARE(m_display->calls.last().strength, 0.0);
+        QCOMPARE(m_display->calls.last().durationMs, 1000u);
+        QVERIFY(!nightLight->enabled());
+        QCOMPARE(saved(QStringLiteral("Temperature")).toDouble(), 0.8);
+        QCOMPARE(saved(QStringLiteral("Enabled")).toBool(), false);
+    }
+
+    void aPreviewWhileOnOnlyQuickensTheSlider()
+    {
+        auto nightLight = start();
+        QTRY_VERIFY(nightLight->available());
+        nightLight->setEnabled(true);
+        QTRY_COMPARE(m_display->calls.size(), 2);
+
+        nightLight->setPreview(true);
+        nightLight->setTemperature(0.8);
+        QTRY_COMPARE(m_display->calls.size(), 3);
+        QCOMPARE(m_display->calls.last().durationMs, 100u);
+        nightLight->setPreview(false);
+        QTest::qWait(100);
+        QCOMPARE(m_display->calls.size(), 3);
+        QCOMPARE(m_display->calls.last().strength, 0.8);
+    }
+
+    void aPreviewEndsWhenItsCallerLeaves()
+    {
+        auto nightLight = start();
+        QTRY_VERIFY(nightLight->available());
+        QTRY_COMPARE(m_display->calls.size(), 1);
+        const QString path = QStringLiteral("/com/cutefish/Services/NightLight");
+        // The service's own route: through the adaptor, which must reach QDBusContext.
+        new NightLightAdaptor(nightLight.get());
+        QDBusConnection service = QDBusConnection::sessionBus();
+        QVERIFY(service.registerObject(path, nightLight.get()));
+
+        const QString name = QStringLiteral("night-light-settings");
+        {
+            // The connection closes only once no handle refers to it.
+            QDBusConnection settings =
+                    QDBusConnection::connectToBus(QDBusConnection::SessionBus, name);
+            QDBusMessage message = QDBusMessage::createMethodCall(
+                    service.baseService(), path, QStringLiteral("com.cutefish.Services.NightLight"),
+                    QStringLiteral("setPreview"));
+            message << true;
+            settings.asyncCall(message);
+        }
+        QTRY_VERIFY(nightLight->previewing());
+        QTRY_COMPARE(m_display->calls.size(), 2);
+        QCOMPARE(m_display->calls.last().strength, 0.5);
+
+        QDBusConnection::disconnectFromBus(name);
+        QTRY_VERIFY(!nightLight->previewing());
+        QTRY_COMPARE(m_display->calls.size(), 3);
+        QCOMPARE(m_display->calls.last().strength, 0.0);
+        service.unregisterObject(path);
     }
 
     void aCustomScheduleTurnsOnWithinItsHours()
