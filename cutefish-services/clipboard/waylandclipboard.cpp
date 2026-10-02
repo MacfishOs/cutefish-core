@@ -4,7 +4,6 @@
 #include <fcntl.h>
 #include <functional>
 #include <memory>
-#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -157,15 +156,13 @@ struct Protocol {
     const wl_interface* manager;
     const wl_interface* device;
     const wl_interface* source;
-    const wl_interface* offer;
     uint32_t version;
 };
 
 const Protocol ext {&ext_data_control_manager_v1_interface, &ext_data_control_device_v1_interface,
-                    &ext_data_control_source_v1_interface, &ext_data_control_offer_v1_interface, 1};
+                    &ext_data_control_source_v1_interface, 1};
 const Protocol wlr {&zwlr_data_control_manager_v1_interface, &zwlr_data_control_device_v1_interface,
-                    &zwlr_data_control_source_v1_interface, &zwlr_data_control_offer_v1_interface,
-                    2};
+                    &zwlr_data_control_source_v1_interface, 2};
 
 void destroyProxy(wl_proxy*& proxy, uint32_t opcode)
 {
@@ -217,6 +214,7 @@ public:
         pending.clear();
         source.reset();
         snapshot.reset();
+        collecting.reset();
         destroyProxy(device, 1);
         destroyProxy(manager, 2);
         if (seat) {
@@ -382,6 +380,7 @@ public:
         ++generation;
         delete reader;
         reader = nullptr;
+        collecting.reset();
         snapshot.reset();
         selection = pending.take(proxy);
         if (!selection || selection->tooManyFormats) {

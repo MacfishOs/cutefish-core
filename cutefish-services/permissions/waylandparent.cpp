@@ -1,10 +1,7 @@
 #include "waylandparent.h"
 
-#include <QWindow>
-
-#ifdef CUTEFISH_PERMISSIONS_WAYLAND
-
 #include <QGuiApplication>
+#include <QWindow>
 #include <qguiapplication_platform.h>
 #include <qpa/qplatformwindow_p.h>
 
@@ -132,11 +129,3 @@ void applyWaylandParent(QWindow *window, const QString &parentWindow, bool modal
             Qt::SingleShotConnection);
     wl_display_flush(display);
 }
-
-#else
-
-void applyWaylandParent(QWindow *, const QString &, bool)
-{
-}
-
-#endif

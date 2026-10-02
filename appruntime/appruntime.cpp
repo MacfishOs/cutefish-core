@@ -102,8 +102,8 @@ uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
 
     // Only an id the registry knows names the scope: portals read the app id
     // back from it, and a bare executable name would pass for one.
-    if (m_registry->byId(appId))
-        ApplicationScope::adopt(appId, static_cast<uint>(pid));
+    if (DesktopEntry *entry = m_registry->byId(appId))
+        ApplicationScope::adopt(entry->id(), static_cast<uint>(pid));
     m_instances.insert(static_cast<uint>(pid),
                        Instance{appId, startTime(static_cast<uint>(pid))});
 
@@ -147,14 +147,15 @@ bool AppRuntime::terminate(uint pid)
     if (!isSafeTarget(pid) || !isAlive(pid) || !isOwnedByUser(pid))
         return false;
 
+    // Read before SIGTERM: an exited process reads as 0, which would let the
+    // delayed SIGKILL hit whatever has recycled the pid.
+    const qulonglong started = startTime(pid);
+
     // Never signal a process group: Qt's detached children are led by an
     // intermediate fork, so the group is not ours to interpret and a wrong
     // one takes down the whole login session.
     ::kill(static_cast<pid_t>(pid), SIGTERM);
 
-    // The pid may be recycled before the timeout fires, so the kill is bound
-    // to this exact process rather than to the number.
-    const qulonglong started = startTime(pid);
     QTimer::singleShot(kTerminateTimeout, this, [pid, started] {
         if (isAlive(pid) && isOwnedByUser(pid) && (started == 0 || startTime(pid) == started))
             ::kill(static_cast<pid_t>(pid), SIGKILL);
@@ -234,36 +235,33 @@ bool AppRuntime::isSafeTarget(uint pid)
         && parentPid(pid) != kSessionPid;
 }
 
-// Field 4 of /proc/pid/stat.
-uint AppRuntime::parentPid(uint pid)
+// The fields after comm, which is parenthesised and may itself contain spaces;
+// index 0 is field 3.
+static QList<QByteArray> statFields(uint pid)
 {
     QFile stat(QStringLiteral("/proc/%1/stat").arg(pid));
     if (!stat.open(QIODevice::ReadOnly))
-        return 0;
+        return {};
 
     const QByteArray line = stat.readLine();
     const int commEnd = line.lastIndexOf(')');
     if (commEnd < 0)
-        return 0;
+        return {};
 
-    const QList<QByteArray> fields = line.mid(commEnd + 2).simplified().split(' ');
+    return line.mid(commEnd + 2).simplified().split(' ');
+}
+
+// Field 4 of /proc/pid/stat.
+uint AppRuntime::parentPid(uint pid)
+{
+    const QList<QByteArray> fields = statFields(pid);
     return fields.size() < 2 ? 0 : fields.at(1).toUInt();
 }
 
 // Field 22 of /proc/pid/stat, in clock ticks since boot.
 qulonglong AppRuntime::startTime(uint pid)
 {
-    QFile stat(QStringLiteral("/proc/%1/stat").arg(pid));
-    if (!stat.open(QIODevice::ReadOnly))
-        return 0;
-
-    const QByteArray line = stat.readLine();
-    // The comm field is parenthesised and may itself contain spaces.
-    const int commEnd = line.lastIndexOf(')');
-    if (commEnd < 0)
-        return 0;
-
-    const QList<QByteArray> fields = line.mid(commEnd + 2).simplified().split(' ');
+    const QList<QByteArray> fields = statFields(pid);
     // stat field 22 is the 20th one after comm.
     if (fields.size() < 20)
         return 0;

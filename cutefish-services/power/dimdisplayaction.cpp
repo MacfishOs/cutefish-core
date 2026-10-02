@@ -33,10 +33,16 @@ constexpr auto s_logindService = "org.freedesktop.login1";
 constexpr auto s_logindPath = "/org/freedesktop/login1";
 constexpr auto s_logindInterface = "org.freedesktop.login1.Manager";
 
-constexpr int s_brightnessDimTimeoutNumerator = 1;
-constexpr int s_brightnessDimTimeoutDenominator = 2;
-constexpr int s_brightnessDimTimeoutFinalNumerator = 3;
-constexpr int s_brightnessDimTimeoutFinalDenominator = 4;
+// Without native display power the screen dims at these steps before it goes off.
+int halfDimTimeout(int timeout)
+{
+    return timeout / 2;
+}
+
+int finalDimTimeout(int timeout)
+{
+    return timeout * 3 / 4;
+}
 
 // A locked screen nobody is using goes dark this soon, whatever the user chose.
 constexpr int s_lockedDisplayOffTimeout = 30;
@@ -105,16 +111,20 @@ void DimDisplayAction::onWakeupFromIdle()
 
     m_dimmed = false;
     m_suspendRequested = false;
-    if (!m_lidClosed) {
-        m_suspendTimer.stop();
-        m_suspendDue = false;
-        m_displayOffTimer.invalidate();
-    }
+    if (!m_lidClosed)
+        stopSuspendCountdown();
 
     // Wait one event loop turn for the screen to wake up before restoring it.
     QTimer::singleShot(0, this, [this]() {
-        if (!m_lidClosed)
+        if (!m_lidClosed) {
             restoreDisplay();
+        } else if (m_dockedLidActive && m_displayPoweredOff) {
+            // Input has already woken the external displays; powering every display
+            // on would also light the closed panel.
+            m_displayPoweredOff = false;
+            m_displayOff = false;
+            m_displayOffTimer.invalidate();
+        }
     });
 }
 
@@ -137,19 +147,16 @@ void DimDisplayAction::onIdleTimeout(int msec)
         return;
     }
 
-    if (!hasNativeDisplayPower()
-        && sec
-                == (m_dimOnIdleTime * s_brightnessDimTimeoutFinalNumerator
-                    / s_brightnessDimTimeoutFinalDenominator)) {
+    if (hasNativeDisplayPower())
+        return;
+
+    if (sec == finalDimTimeout(m_dimOnIdleTime)) {
         if (m_oldScreenBrightness > 0) {
             const int newBrightness = qRound(m_oldScreenBrightness / 8.0);
             m_iface.asyncCall("setValue", QVariant::fromValue(newBrightness));
         }
         m_dimmed = true;
-    } else if (!hasNativeDisplayPower()
-               && sec
-                       == (m_dimOnIdleTime * s_brightnessDimTimeoutNumerator
-                           / s_brightnessDimTimeoutDenominator)) {
+    } else if (sec == halfDimTimeout(m_dimOnIdleTime)) {
         m_oldScreenBrightness = m_iface.property("brightness").toInt();
 
         if (m_oldScreenBrightness > 0) {
@@ -171,14 +178,10 @@ void DimDisplayAction::turnDisplayOffWhenIdle()
     trySuspend();
 }
 
-void DimDisplayAction::setTimeout(int timeout)
-{
-    setPolicy(timeout, m_suspendDelay);
-}
-
 void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
 {
-    unregisterIdleTimeout();
+    for (int identifier : std::exchange(m_policyIdleTimeouts, {}))
+        unregisterIdleTimeout(identifier);
 
     m_dimOnIdleTime = timeout;
     m_suspendDelay = qMax(0, suspendDelay);
@@ -187,19 +190,23 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
         m_suspendDue = false;
 
     // Registered even for "never": the lock screen still goes dark.
-    registerIdleTimeout(s_lockedDisplayOffTimeout);
+    // Recreating restarts its countdown, but a fired one must stay to report the wake.
+    if (m_lockedIdleTimeout >= 0 && !m_lockedIdle) {
+        unregisterIdleTimeout(m_lockedIdleTimeout);
+        m_lockedIdleTimeout = -1;
+    }
+    if (m_lockedIdleTimeout < 0)
+        m_lockedIdleTimeout = registerIdleTimeout(s_lockedDisplayOffTimeout);
 
     if (timeout >= 0) {
-        const int halfTimeout =
-                timeout * s_brightnessDimTimeoutNumerator / s_brightnessDimTimeoutDenominator;
-        const int finalDimTimeout = timeout * s_brightnessDimTimeoutFinalNumerator
-                / s_brightnessDimTimeoutFinalDenominator;
+        const int halfTimeout = halfDimTimeout(timeout);
+        const int finalTimeout = finalDimTimeout(timeout);
 
         if (halfTimeout > 0)
-            registerIdleTimeout(halfTimeout);
-        if (finalDimTimeout > halfTimeout && finalDimTimeout < timeout)
-            registerIdleTimeout(finalDimTimeout);
-        registerIdleTimeout(timeout);
+            m_policyIdleTimeouts.append(registerIdleTimeout(halfTimeout));
+        if (finalTimeout > halfTimeout && finalTimeout < timeout)
+            m_policyIdleTimeouts.append(registerIdleTimeout(finalTimeout));
+        m_policyIdleTimeouts.append(registerIdleTimeout(timeout));
     }
 
     if (m_displayOff && !m_lidDisplayOff && m_displayOffTimer.isValid() && m_suspendDelay > 0) {
@@ -224,9 +231,7 @@ void DimDisplayAction::onScreenSaverActiveChanged(bool active)
     }
     m_dimmed = false;
     if (!m_lidClosed) {
-        m_suspendTimer.stop();
-        m_suspendDue = false;
-        m_displayOffTimer.invalidate();
+        stopSuspendCountdown();
         if (m_displayOff)
             restoreDisplay();
     }
@@ -263,8 +268,8 @@ void DimDisplayAction::onSuspendTimerTimeout()
 bool DimDisplayAction::lockSession()
 {
     QDBusInterface screenSaver(
-            QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/ScreenSaver"),
-            QStringLiteral("org.freedesktop.ScreenSaver"), QDBusConnection::sessionBus());
+            QString::fromLatin1(s_screenSaverService), QString::fromLatin1(s_screenSaverPath),
+            QString::fromLatin1(s_screenSaverInterface), QDBusConnection::sessionBus());
     if (!screenSaver.isValid())
         return false;
 
@@ -314,6 +319,13 @@ void DimDisplayAction::startSuspendCountdown()
         m_suspendTimer.start(m_suspendDelay * 1000);
 }
 
+void DimDisplayAction::stopSuspendCountdown()
+{
+    m_suspendTimer.stop();
+    m_suspendDue = false;
+    m_displayOffTimer.invalidate();
+}
+
 void DimDisplayAction::turnDisplayOff()
 {
     if (m_displayOff)
@@ -339,7 +351,7 @@ void DimDisplayAction::restoreDisplay()
         m_displayPoweredOff = false;
     }
 
-    if (m_oldScreenBrightness >= 0)
+    if (m_oldScreenBrightness > 0)
         m_iface.asyncCall("setValue", QVariant::fromValue(m_oldScreenBrightness));
 
     m_oldScreenBrightness = -1;
@@ -384,9 +396,7 @@ void DimDisplayAction::handleLidOpened()
 {
     m_lidClosed = false;
     m_suspendRequested = false;
-    m_suspendDue = false;
-    m_suspendTimer.stop();
-    m_displayOffTimer.invalidate();
+    stopSuspendCountdown();
     m_dockedLidRecheck = false;
     m_dockedLidRetries = 0;
     m_dockedLidRetryTimer.stop();

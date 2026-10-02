@@ -38,7 +38,6 @@ endforeach()
 add_executable(wayland_parent_test wayland_parent_test.cpp ${PERMISSIONS_DIR}/waylandparent.cpp
     ${PROTOCOL_SOURCES})
 target_include_directories(wayland_parent_test PRIVATE ${PERMISSIONS_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(wayland_parent_test PRIVATE CUTEFISH_PERMISSIONS_WAYLAND)
 target_link_libraries(wayland_parent_test PRIVATE Qt6::Gui Qt6::GuiPrivate Qt6::Test
     PkgConfig::WaylandClient PkgConfig::WaylandServer)
 enable_testing()

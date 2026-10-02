@@ -1,8 +1,6 @@
 #ifndef PROXYSERVICE_H
 #define PROXYSERVICE_H
 
-#include "proxysettings.h"
-
 #include <QFileSystemWatcher>
 #include <QMap>
 #include <QObject>
@@ -25,10 +23,8 @@ private:
 
     QFileSystemWatcher m_watcher;
     QTimer m_reloadTimer;
-    ProxySettings m_settings;
     QMap<QString, QString> m_environment;
     bool m_environmentPublished = false;
-    bool m_loaded = false;
 };
 
 #endif

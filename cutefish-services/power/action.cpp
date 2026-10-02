@@ -20,47 +20,25 @@
 #include "action.h"
 #include "idlemanager.h"
 
-#include <QDebug>
-
-class Action::Private
-{
-public:
-    Private() {}
-    ~Private() {}
-
-    QVector< int > registeredIdleTimeouts;
-};
-
 Action::Action(QObject* parent)
         : QObject(parent)
-        , d(new Private)
 {
 }
 
-Action::~Action()
+Action::~Action() = default;
+
+int Action::registerIdleTimeout(int seconds)
 {
-    delete d;
+    return IdleManager::self()->registerActionTimeout(this, seconds);
 }
 
-void Action::registerIdleTimeout(int msec)
+void Action::unregisterIdleTimeout(int identifier)
 {
-    d->registeredIdleTimeouts.append(msec);
-    IdleManager::self()->registerActionTimeout(this, msec);
-}
-
-void Action::unregisterIdleTimeout()
-{
-    d->registeredIdleTimeouts.clear();
-    IdleManager::self()->unregisterActionTimeouts(this);
+    IdleManager::self()->unregisterActionTimeout(this, identifier);
 }
 
 bool Action::isSupported()
 {
     return true;
-}
-
-void Action::setTimeout(int timeout)
-{
-    Q_UNUSED(timeout)
 }
 

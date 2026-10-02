@@ -166,9 +166,8 @@ void NightLight::refresh(Reason reason)
     const auto position = NightLightSchedule::position(m_clock(), [this](QDate date) {
         return timesFor(date);
     });
-    if (position.enabled != m_enabled)
-        setEnabledInternal(position.enabled,
-                           reason == Reason::Scheduled ? kScheduledDuration : kManualDuration);
+    setEnabledInternal(position.enabled,
+                       reason == Reason::Scheduled ? kScheduledDuration : kManualDuration);
     arm(position.next);
 }
 

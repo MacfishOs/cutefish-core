@@ -6,8 +6,6 @@ import FishUI 1.0 as FishUI
 // The computer-control kind. The request carries `agent_name`, the agent's own
 // name for itself; the compositor asks, so there is no app id to show.
 ColumnLayout {
-    id: root
-
     readonly property string agentName: prompt.request.agent_name || qsTr("An app")
     readonly property string title: qsTr("Let “%1” control this computer?").arg(agentName)
     readonly property string description: qsTr("It will see your screen and use the pointer and keyboard as you would, until you stop it. It cannot answer system dialogs like this one.")

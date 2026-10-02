@@ -19,7 +19,6 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vaapi.h>
-#include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 }
@@ -68,6 +67,23 @@ QSize videoSize(const QRect &crop)
     return size;
 }
 
+AVCodecContext *videoContext(const AVCodec *codec, const QSize &size, const AVFormatContext *format)
+{
+    AVCodecContext *context = avcodec_alloc_context3(codec);
+    context->width = size.width();
+    context->height = size.height();
+    context->time_base = kVideoTimeBase;
+    context->framerate = AVRational {60, 1};
+    context->gop_size = 120;
+    context->color_range = AVCOL_RANGE_MPEG;
+    context->colorspace = AVCOL_SPC_BT709;
+    context->color_primaries = AVCOL_PRI_BT709;
+    context->color_trc = AVCOL_TRC_BT709;
+    if (format->oformat->flags & AVFMT_GLOBALHEADER)
+        context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    return context;
+}
+
 } // namespace
 
 Encoder::Encoder(QObject *parent)
@@ -83,7 +99,6 @@ Encoder::~Encoder()
 void Encoder::open(const QString &path, bool audio)
 {
     m_path = path;
-    m_wantsAudio = audio;
 
     const QByteArray file = QFile::encodeName(path);
     if (avformat_alloc_output_context2(&m_format, nullptr, "mp4", file.constData()) < 0
@@ -93,10 +108,9 @@ void Encoder::open(const QString &path, bool audio)
     }
 
     QString error;
-    if (m_wantsAudio && !openAudio(&error)) {
+    if (audio && !openAudio(&error)) {
         // A recording without sound beats no recording.
         qCWarning(cfRecorder) << "recording without audio:" << error;
-        m_wantsAudio = false;
     }
 }
 
@@ -200,7 +214,7 @@ void Encoder::accepted(qint64 presentedNs)
     if (first) {
         emit started();
         // Whatever the microphone caught before this frame lines up with it now.
-        while (!m_earlyAudio.empty()) {
+        while (!m_failed && !m_earlyAudio.empty()) {
             auto [samples, capturedNs] = std::move(m_earlyAudio.front());
             m_earlyAudio.pop_front();
             queueAudio(samples, capturedNs);
@@ -324,23 +338,12 @@ bool Encoder::openVaapi(const QSize &size, const QString &node)
         return false;
     }
 
-    m_video = avcodec_alloc_context3(codec);
-    m_video->width = size.width();
-    m_video->height = size.height();
-    m_video->time_base = kVideoTimeBase;
-    m_video->framerate = AVRational {60, 1};
+    m_video = videoContext(codec, size, m_format);
     m_video->pix_fmt = AV_PIX_FMT_VAAPI;
     m_video->hw_frames_ctx = frames;
-    m_video->gop_size = 120;
     m_video->max_b_frames = 0;
     m_video->global_quality = kVaapiQp;
     av_opt_set(m_video->priv_data, "rc_mode", "CQP", 0);
-    m_video->color_range = AVCOL_RANGE_MPEG;
-    m_video->colorspace = AVCOL_SPC_BT709;
-    m_video->color_primaries = AVCOL_PRI_BT709;
-    m_video->color_trc = AVCOL_TRC_BT709;
-    if (m_format->oformat->flags & AVFMT_GLOBALHEADER)
-        m_video->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     if (avcodec_open2(m_video, codec, nullptr) < 0) {
         avcodec_free_context(&m_video);
         av_buffer_unref(&m_hwDevice);
@@ -461,7 +464,9 @@ QRect Encoder::fit(QRect source)
     if (source.isEmpty())
         return QRect();
     // Odd sizes were rounded down to what YUV 4:2:0 can hold; trim rather than scale.
-    if (qAbs(source.width() - m_size.width()) <= 1 && qAbs(source.height() - m_size.height()) <= 1)
+    const int extraWidth = source.width() - m_size.width();
+    const int extraHeight = source.height() - m_size.height();
+    if (extraWidth >= 0 && extraWidth <= 1 && extraHeight >= 0 && extraHeight <= 1)
         source.setSize(m_size);
     if (source.size() != m_scaledFrom) {
         QSize fitted = source.size().scaled(m_size, Qt::KeepAspectRatio);
@@ -481,20 +486,9 @@ bool Encoder::openX264(const QSize &size)
     if (!codec)
         return false;
 
-    m_video = avcodec_alloc_context3(codec);
-    m_video->width = size.width();
-    m_video->height = size.height();
-    m_video->time_base = kVideoTimeBase;
-    m_video->framerate = AVRational {60, 1};
+    m_video = videoContext(codec, size, m_format);
     m_video->pix_fmt = AV_PIX_FMT_YUV420P;
-    m_video->gop_size = 120;
     m_video->thread_count = 0;
-    m_video->color_range = AVCOL_RANGE_MPEG;
-    m_video->colorspace = AVCOL_SPC_BT709;
-    m_video->color_primaries = AVCOL_PRI_BT709;
-    m_video->color_trc = AVCOL_TRC_BT709;
-    if (m_format->oformat->flags & AVFMT_GLOBALHEADER)
-        m_video->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     av_opt_set(m_video->priv_data, "preset", "veryfast", 0);
     av_opt_set(m_video->priv_data, "crf", kX264Crf, 0);
     if (avcodec_open2(m_video, codec, nullptr) < 0) {

@@ -7,7 +7,6 @@
 
 #include <QDebug>
 #include <QElapsedTimer>
-#include <QSocketNotifier>
 #include <QThread>
 
 namespace {
@@ -47,7 +46,6 @@ ShellConnection::ShellConnection(QObject* parent)
 
 ShellConnection::~ShellConnection()
 {
-    delete m_notifier;
     if (m_fd >= 0)
         close(m_fd);
 }
@@ -85,18 +83,7 @@ bool ShellConnection::connectToCompositor(const QString& path, int timeoutMs)
         QThread::msleep(50);
     }
 
-    m_notifier = new QSocketNotifier(m_fd, QSocketNotifier::Read, this);
-    connect(m_notifier, &QSocketNotifier::activated, this, &ShellConnection::onReadable);
     return true;
-}
-
-void ShellConnection::onReadable()
-{
-    char discard = 0;
-    if (read(m_fd, &discard, 1) <= 0) {
-        m_notifier->setEnabled(false);
-        emit disconnected();
-    }
 }
 
 int ShellConnection::createShellConnection()

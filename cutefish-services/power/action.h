@@ -23,8 +23,6 @@
 #include <QObject>
 #include <QVariantMap>
 
-class IDleManager;
-
 class Q_DECL_EXPORT Action : public QObject
 {
     Q_OBJECT
@@ -52,13 +50,11 @@ public:
      */
     virtual bool isSupported();
 
-    virtual void setTimeout(int timeout);
-
 protected:
     // Registration uses seconds; onIdleTimeout receives milliseconds.
-    void registerIdleTimeout(int seconds);
+    int registerIdleTimeout(int seconds);
 
-    void unregisterIdleTimeout();
+    void unregisterIdleTimeout(int identifier);
 
 public Q_SLOTS:
     /**
@@ -76,12 +72,6 @@ public Q_SLOTS:
 
 Q_SIGNALS:
     void actionTriggered(bool result, const QString &error = QString());
-
-private:
-    class Private;
-    Private *const d;
-
-    friend class IDleManager;
 };
 
 #endif // CUTEFISH_SETTINGS_DAEMON_ACTION_H

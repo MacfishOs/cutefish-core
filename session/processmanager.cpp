@@ -18,7 +18,6 @@
 #include <QTimer>
 #include <limits>
 
-#include "application.h"
 #include "applicationlauncher.h"
 #include "applicationregistry.h"
 #include "applicationruntime.h"
@@ -39,9 +38,8 @@ constexpr int kShellRestartDelayMs = 1000;
 constexpr int kShellRestartBackoffMs = 2000;
 } // namespace
 
-ProcessManager::ProcessManager(Application *app, QObject *parent)
+ProcessManager::ProcessManager(QObject *parent)
     : QObject(parent)
-    , m_app(app)
     , m_compositorProcess(new CompositorProcess(this))
     , m_shellConnection(new ShellConnection(this))
     , m_shellProcess(new ShellProcess(this))
@@ -54,17 +52,9 @@ ProcessManager::ProcessManager(Application *app, QObject *parent)
 
 ProcessManager::~ProcessManager()
 {
-    m_loggingOut = true;
-    m_shellRestartTimer->stop();
-    m_shellProcess->stop();
-    stopProcesses(m_coreProcesses);
+    stopShellAndDaemons();
     m_compositorProcess->stop();
-    QMapIterator<QString, QProcess *> i(m_coreProcesses);
-    while (i.hasNext()) {
-        i.next();
-        delete i.value();
-        m_coreProcesses[i.key()] = nullptr;
-    }
+    qDeleteAll(m_coreProcesses);
 }
 
 void ProcessManager::start()
@@ -91,19 +81,13 @@ void ProcessManager::start()
     });
     connect(m_compositorProcess, &CompositorProcess::failed, this, [this](const QString &reason) {
         qCritical() << reason;
-        m_loggingOut = true;
-        m_shellRestartTimer->stop();
-        m_shellProcess->stop();
-        stopProcesses(m_coreProcesses);
+        stopShellAndDaemons();
         QCoreApplication::exit(1);
     });
     // A compositor that dies takes the graphical session with it: there is no
     // display left to run on.
     connect(m_compositorProcess, &CompositorProcess::exited, this, [this](int code) {
-        m_loggingOut = true;
-        m_shellRestartTimer->stop();
-        m_shellProcess->stop();
-        stopProcesses(m_coreProcesses);
+        stopShellAndDaemons();
         QCoreApplication::exit(code);
     });
     m_compositorProcess->start(qEnvironmentVariable("CUTEFISH_COMPOSITOR_BINARY",
@@ -226,10 +210,11 @@ void ProcessManager::logout()
 {
     endAfterApplications(Ending::Logout, [this] {
         leave();
+        return true;
     });
 }
 
-void ProcessManager::endAfterApplications(Ending ending, std::function<void()> then)
+void ProcessManager::endAfterApplications(Ending ending, std::function<bool()> then)
 {
     if (m_ending)
         return;
@@ -248,7 +233,7 @@ void ProcessManager::endAfterApplications(Ending ending, std::function<void()> t
         watcher->deleteLater();
         // Without the compositor's answer the session ends as it always did.
         if (reply.isError() || reply.argumentAt<0>() == QLatin1String("quit")) {
-            then();
+            m_ending = then();
             return;
         }
         m_ending = false;
@@ -259,7 +244,19 @@ void ProcessManager::endAfterApplications(Ending ending, std::function<void()> t
 void ProcessManager::notifyEndingStopped(Ending ending, const QString &outcome,
                                          const QString &applicationId)
 {
-    const DesktopEntry *entry = ApplicationRegistry::instance()->byId(applicationId);
+    ApplicationRegistry *registry = ApplicationRegistry::instance();
+    // A registry created here has not scanned yet; the name and icon come from it.
+    if (!applicationId.isEmpty() && registry->loading() && registry->entries().isEmpty()) {
+        connect(
+                registry, &ApplicationRegistry::loadingChanged, this,
+                [this, ending, outcome, applicationId] {
+                    notifyEndingStopped(ending, outcome, applicationId);
+                },
+                Qt::SingleShotConnection);
+        return;
+    }
+
+    const DesktopEntry *entry = registry->byId(applicationId);
     QString name = entry ? entry->name() : QString();
     if (name.isEmpty())
         name = applicationId.isEmpty() ? tr("An application") : applicationId;
@@ -334,6 +331,14 @@ void ProcessManager::endSession(bool behindLoginScreen)
     });
 }
 
+void ProcessManager::stopShellAndDaemons()
+{
+    m_loggingOut = true;
+    m_shellRestartTimer->stop();
+    m_shellProcess->stop();
+    stopProcesses(m_coreProcesses);
+}
+
 void ProcessManager::stopProcesses(QMap<QString, QProcess *> &processes)
 {
     QMapIterator<QString, QProcess *> i(processes);
@@ -341,7 +346,7 @@ void ProcessManager::stopProcesses(QMap<QString, QProcess *> &processes)
         i.next();
         QProcess *p = i.value();
 
-        if (!p || p->state() == QProcess::NotRunning)
+        if (p->state() == QProcess::NotRunning)
             continue;
 
         p->terminate();
@@ -389,29 +394,22 @@ void ProcessManager::startDesktopProcess()
 
 void ProcessManager::startDaemonProcess()
 {
-    QList<QPair<QString, QStringList>> list;
     // The application runtime owns every application start, so it has to be up
     // before anything that may want to launch one.
-    list << qMakePair(QString("cutefish-appruntime"), QStringList());
-    // This daemon provides the services used by the desktop components.
-    list << qMakePair(QString("cutefish-services"), QStringList());
+    const QStringList programs {QStringLiteral("cutefish-appruntime"),
+                                QStringLiteral("cutefish-services")};
 
-    for (QPair<QString, QStringList> pair : list) {
+    for (const QString &program : programs) {
         QProcess *process = new QProcess;
         process->setProcessChannelMode(QProcess::ForwardedChannels);
-        process->setProgram(pair.first);
-        process->setArguments(pair.second);
+        process->setProgram(program);
         process->start();
         process->waitForStarted();
 
-        // Add to map
-        // exitCode() is not a valid way to test a process that is still
-        // running. The old check discarded long-lived daemons immediately
-        // after starting them.
         if (process->state() != QProcess::NotRunning) {
-            m_coreProcesses.insert(pair.first, process);
+            m_coreProcesses.insert(program, process);
         } else {
-            qWarning() << "Failed to start daemon:" << pair.first << process->errorString();
+            qWarning() << "Failed to start daemon:" << program << process->errorString();
             process->deleteLater();
         }
     }

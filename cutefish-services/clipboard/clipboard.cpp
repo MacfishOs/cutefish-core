@@ -49,9 +49,7 @@ void Clipboard::onDataChanged()
 
     if (useWaylandClipboard) {
         m_waylandClipboard->setMimeData(newMimeData);
-    } else if (m_qtClipboard) {
-        m_qtClipboard->setMimeData(newMimeData, QClipboard::Clipboard);
     } else {
-        delete newMimeData;
+        m_qtClipboard->setMimeData(newMimeData, QClipboard::Clipboard);
     }
 }

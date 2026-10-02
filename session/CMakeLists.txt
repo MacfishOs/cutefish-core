@@ -5,7 +5,6 @@ set(SOURCES
     application.cpp
     autostartentries.cpp
     main.cpp
-    process.cpp
     processmanager.cpp
     compositorprocess.cpp
     xwaylandenvironment.cpp

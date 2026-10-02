@@ -23,17 +23,21 @@ public slots:
 
     void reboot()
     {
-        m_processManager->endAfterApplications(ProcessManager::Ending::Restart, [this] {
-            if (Power::reboot())
+        m_processManager->endAfterApplications(ProcessManager::Ending::Restart, [] {
+            const bool rebooting = Power::reboot();
+            if (rebooting)
                 QCoreApplication::exit(0);
+            return rebooting;
         });
     }
 
     void powerOff()
     {
-        m_processManager->endAfterApplications(ProcessManager::Ending::Shutdown, [this] {
-            if (Power::powerOff())
+        m_processManager->endAfterApplications(ProcessManager::Ending::Shutdown, [] {
+            const bool poweringOff = Power::powerOff();
+            if (poweringOff)
                 QCoreApplication::exit(0);
+            return poweringOff;
         });
     }
 
@@ -46,10 +50,9 @@ private:
     void initEnvironments();
     void initLanguage();
     bool syncDBusEnvironment();
-    void importSystemdEnvrionment();
+    void importSystemdEnvironment();
     void createConfigDirectory();
-    void updateUserDirs();
-    int runSync(const QString& program, const QStringList& args, const QStringList& env = {});
+    int runSync(const QString& program, const QStringList& args);
 
 private:
     ProcessManager* m_processManager;

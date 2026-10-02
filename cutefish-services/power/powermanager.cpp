@@ -12,14 +12,9 @@ int normalizedTimeout(int timeout)
     return timeout < 0 ? -1 : qMax(1, timeout);
 }
 
-int readTimeout(QSettings &settings, const QString &key, int fallback)
+int readTimeout(const QSettings &settings, const QString &key, int fallback)
 {
-    settings.beginGroup(QLatin1String(s_powerGroup));
-    const bool hasValue = settings.contains(key);
-    const int value = hasValue ? settings.value(key).toInt() : fallback;
-    settings.endGroup();
-
-    return hasValue ? normalizedTimeout(value) : fallback;
+    return settings.contains(key) ? normalizedTimeout(settings.value(key).toInt()) : fallback;
 }
 
 } // namespace
@@ -51,9 +46,9 @@ PowerManager::PowerManager(UPowerManager *upowerManager, QObject *parent)
 
 void PowerManager::loadSettings()
 {
+    m_settings.beginGroup(QLatin1String(s_powerGroup));
     m_batteryScreenOff = readTimeout(m_settings, QStringLiteral("BatteryScreenOff"), 300);
     m_acScreenOff = readTimeout(m_settings, QStringLiteral("ACScreenOff"), 1200);
-    m_settings.beginGroup(QLatin1String(s_powerGroup));
     m_acPreventSleep = m_settings.value(QStringLiteral("ACPreventSleep"), false).toBool();
     m_settings.endGroup();
 }

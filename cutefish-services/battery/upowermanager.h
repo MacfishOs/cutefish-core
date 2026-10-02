@@ -12,16 +12,12 @@
 #include <QObject>
 #include <QDBusInterface>
 
-class UPowerDevice;
-class Battery;
 class UPowerManager : public QObject
 {
     Q_OBJECT
 
 public:
     explicit UPowerManager(QObject *parent = nullptr);
-
-    QString udiPrefix() const;
 
     bool onBattery() const;
     bool lidIsPresent() const;

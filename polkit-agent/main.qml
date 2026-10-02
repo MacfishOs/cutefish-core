@@ -33,7 +33,6 @@ Item {
     }
 
     Rectangle {
-        id: _background
         anchors.fill: parent
         radius: 16
         color: FishUI.Theme.secondBackgroundColor
@@ -84,7 +83,6 @@ Item {
         }
 
         FishUI.TextField {
-            id: userTextField
             text: confirmation.identity
             enabled: false
             Layout.fillWidth: true

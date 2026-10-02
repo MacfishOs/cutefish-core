@@ -37,10 +37,10 @@ IdleManager::IdleManager(QObject *parent)
     connect(&m_idle, &WaylandIdle::resumed, this, &IdleManager::onResumingFromIdle);
 }
 
-void IdleManager::registerActionTimeout(Action *action, int secs)
+int IdleManager::registerActionTimeout(Action *action, int secs)
 {
     if (secs < 0 || secs > INT_MAX / 1000)
-        return;
+        return -1;
     if (!m_registeredActionTimeouts.contains(action))
         m_destroyConnections.insert(action,
                                     connect(action, &QObject::destroyed, this, [this, action] {
@@ -48,10 +48,18 @@ void IdleManager::registerActionTimeout(Action *action, int secs)
                                     }));
     int identifier = m_idle.addTimeout(secs * 1000);
 
-    QList<int> timeouts = m_registeredActionTimeouts[action];
-    timeouts.append(identifier);
+    m_registeredActionTimeouts[action].append(identifier);
 
-    m_registeredActionTimeouts[action] = timeouts;
+    return identifier;
+}
+
+void IdleManager::unregisterActionTimeout(Action *action, int identifier)
+{
+    auto it = m_registeredActionTimeouts.find(action);
+    if (it == m_registeredActionTimeouts.end() || !it->removeOne(identifier))
+        return;
+
+    m_idle.removeTimeout(identifier);
 }
 
 void IdleManager::unregisterActionTimeouts(Action *action)

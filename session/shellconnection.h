@@ -3,8 +3,6 @@
 #include <QObject>
 #include <QString>
 
-class QSocketNotifier;
-
 /**
  * The session's end of the compositor control channel.
  *
@@ -38,13 +36,6 @@ public:
      */
     int createShellConnection();
 
-signals:
-    //! The compositor closed the channel, which means it is gone.
-    void disconnected();
-
 private:
-    void onReadable();
-
     int m_fd = -1;
-    QSocketNotifier* m_notifier = nullptr;
 };

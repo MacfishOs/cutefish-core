@@ -90,7 +90,6 @@ private:
     void close();
 
     QString m_path;
-    bool m_wantsAudio = false;
     bool m_failed = false;
 
     AVFormatContext *m_format = nullptr;

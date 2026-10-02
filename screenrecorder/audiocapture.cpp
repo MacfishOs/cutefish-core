@@ -1,20 +1,8 @@
 #include "audiocapture.h"
 #include "encoder.h"
-
-#include <ctime>
+#include "monotonic.h"
 
 #include <spa/param/audio/format-utils.h>
-
-namespace {
-
-qint64 monotonicNs()
-{
-    timespec now {};
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return qint64(now.tv_sec) * 1000000000 + now.tv_nsec;
-}
-
-} // namespace
 
 const pw_stream_events AudioCapture::s_events = [] {
     pw_stream_events events {};

@@ -14,7 +14,6 @@ class QQuickWindow;
 class PermissionPrompt : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QString kind MEMBER m_kind CONSTANT)
     Q_PROPERTY(QString content MEMBER m_content CONSTANT)
     Q_PROPERTY(QString icon MEMBER m_icon CONSTANT)
     Q_PROPERTY(QJsonObject application MEMBER m_application CONSTANT)
@@ -47,7 +46,6 @@ private:
 
     QQmlEngine *m_engine;
     QDBusMessage m_message;
-    QString m_kind;
     QString m_content;
     QString m_icon;
     QString m_parentWindow;

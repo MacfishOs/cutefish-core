@@ -40,7 +40,6 @@ public:
 
     void onWakeupFromIdle() override;
     void onIdleTimeout(int msec) override;
-    void setTimeout(int timeout) override;
     void setPolicy(int timeout, int suspendDelay);
     void setLidPresent(bool present);
     void handleLidClosed();
@@ -61,6 +60,7 @@ private:
     void turnDisplayOff();
     void restoreDisplay();
     void startSuspendCountdown();
+    void stopSuspendCountdown();
     void turnDisplayOffWhenIdle();
     void sleepWithLidClosed(bool waitForLock);
     void inhibitSystemdLidSwitch();
@@ -85,6 +85,8 @@ private:
     bool m_locked = false;
     // The user has been away for the locked timeout since their last input.
     bool m_lockedIdle = false;
+    int m_lockedIdleTimeout = -1;
+    QList<int> m_policyIdleTimeouts;
     bool m_dockedLidPending = false;
     bool m_dockedLidActive = false;
     bool m_dockedLidRecheck = false;

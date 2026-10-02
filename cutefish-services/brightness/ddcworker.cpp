@@ -4,7 +4,6 @@
 #include <QFile>
 #include <QThread>
 
-#include <cerrno>
 #include <fcntl.h>
 #include <linux/i2c-dev.h>
 #include <sys/ioctl.h>

@@ -6,13 +6,11 @@
 #include <QDBusVariant>
 #include <QDebug>
 #include <QFile>
-#include <QJsonArray>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickWindow>
 #include <QStandardPaths>
-#include <QTimer>
 
 namespace {
 
@@ -44,13 +42,15 @@ QVariant plain(const QVariant &value)
     if (value.userType() == qMetaTypeId<QDBusArgument>()) {
         const auto argument = value.value<QDBusArgument>();
         const QString signature = argument.currentSignature();
-        if (signature.startsWith(QLatin1String("a{"))) {
+        // Reading any other element as a variant can crash libdbus, so only
+        // these shapes are decoded.
+        if (signature == QLatin1String("a{sv}")) {
             QVariantMap map;
             argument >> map;
             return plain(map);
         }
-        if (signature.startsWith(QLatin1Char('a'))) {
-            const bool maps = signature.mid(1).startsWith(QLatin1String("a{"));
+        if (signature == QLatin1String("aa{sv}") || signature == QLatin1String("av")) {
+            const bool maps = signature == QLatin1String("aa{sv}");
             QVariantList list;
             argument.beginArray();
             while (!argument.atEnd()) {
@@ -120,7 +120,6 @@ PermissionPrompt::PermissionPrompt(QQmlEngine *engine, const QString &kind, cons
     : QObject(parent)
     , m_engine(engine)
     , m_message(message)
-    , m_kind(kind)
     , m_parentWindow(parentWindow)
     , m_application(describeApplication(appId))
     , m_request(QJsonObject::fromVariantMap(plain(options).toMap()))

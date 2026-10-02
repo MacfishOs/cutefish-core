@@ -3,13 +3,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFontDatabase>
+#include <QSaveFile>
 #include <QStandardPaths>
-#include <QTextStream>
 
 void writeFontConfig(const FontConfig &config)
 {
-    QFontDatabase database;
-    const QStringList families = database.families();
+    const QStringList families = QFontDatabase::families();
     const QString familyFont = families.contains(config.family) ? config.family
             : families.contains(QStringLiteral("Noto Sans"))    ? QStringLiteral("Noto Sans")
                                                                 : QStringLiteral("DejaVu Sans");
@@ -30,24 +29,16 @@ void writeFontConfig(const FontConfig &config)
                                          config.hintStyle.toHtmlEscaped(),
                                          config.rgba.toHtmlEscaped());
 
-    QString targetPath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                       + QLatin1Char('/') + QLatin1String("fontconfig"));
+    const QString targetPath =
+            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+            + QLatin1String("/fontconfig/conf.d");
+    QDir().mkpath(targetPath);
 
-    if (!QDir(targetPath).exists()) {
-        QDir(targetPath).mkpath(targetPath);
-    }
-
-    targetPath += "/conf.d";
-
-    if (!QDir(targetPath).exists()) {
-        QDir(targetPath).mkpath(targetPath);
-    }
-
-    QFile file(targetPath + "/99-cutefish.conf");
+    // Atomic replace: a fontconfig reader starting meanwhile must never parse a partial file.
+    QSaveFile file(targetPath + QLatin1String("/99-cutefish.conf"));
     if (file.open(QIODevice::WriteOnly)) {
-        QTextStream s(&file);
-        s << content;
-        file.close();
+        file.write(content.toUtf8());
+        file.commit();
     }
 }
 

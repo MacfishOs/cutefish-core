@@ -25,6 +25,11 @@ QString readSysfs(const QString &path)
     return QString::fromLatin1(file.readAll()).trimmed();
 }
 
+QString brightnessFile(const QString &backlight)
+{
+    return BacklightDir + backlight + QStringLiteral("/brightness");
+}
+
 // Connected DRM connectors, e.g. "card0-eDP-1".
 QStringList connectedConnectors()
 {
@@ -164,12 +169,7 @@ void BrightnessManager::setDisplayBrightness(const QString &connector, int value
         m_ddcWorker->requestValue(display->device, raw);
     }
 
-    const int newPercent = percent(*display);
-    if (newPercent != oldPercent) {
-        emit displayBrightnessChanged(display->connector, newPercent);
-        if (display == &m_displays.first())
-            emit brightnessChanged();
-    }
+    notifyIfChanged(*display, oldPercent);
 }
 
 void BrightnessManager::scheduleRescan()
@@ -180,12 +180,13 @@ void BrightnessManager::scheduleRescan()
 void BrightnessManager::rescan()
 {
     ++m_generation;
-    m_backlights = scanBacklights();
+    const QStringList connected = connectedConnectors();
+    const QList<Display> backlights = scanBacklights(connected);
 
-    const QList<DdcDisplay> candidates = ddcCandidates(m_backlights);
+    const QList<DdcDisplay> candidates = ddcCandidates(connected, backlights);
 
     // Keep known DDC displays until the probe answers so sliders do not flicker.
-    QList<Display> displays = m_backlights;
+    QList<Display> displays = backlights;
     for (const Display &display : std::as_const(m_displays)) {
         if (display.kind != Kind::Ddc)
             continue;
@@ -197,15 +198,14 @@ void BrightnessManager::rescan()
     publish(displays);
 
     if (!candidates.isEmpty()) {
-        QMetaObject::invokeMethod(m_ddcWorker, "probe", Qt::QueuedConnection,
-                                  Q_ARG(quint64, m_generation),
-                                  Q_ARG(QList<DdcDisplay>, candidates));
+        QMetaObject::invokeMethod(m_ddcWorker, &DdcWorker::probe, Qt::QueuedConnection,
+                                  m_generation, candidates);
     }
 }
 
-QList<BrightnessManager::Display> BrightnessManager::scanBacklights() const
+QList<BrightnessManager::Display> BrightnessManager::scanBacklights(
+        const QStringList &connected) const
 {
-    const QStringList connected = connectedConnectors();
     QStringList internal;
     for (const QString &connector : connected) {
         if (isInternalConnector(connector))
@@ -254,10 +254,10 @@ QList<BrightnessManager::Display> BrightnessManager::scanBacklights() const
     return result;
 }
 
-QList<DdcDisplay> BrightnessManager::ddcCandidates(const QList<Display> &backlights) const
+QList<DdcDisplay> BrightnessManager::ddcCandidates(const QStringList &connected,
+                                                   const QList<Display> &backlights) const
 {
     QList<DdcDisplay> result;
-    const QStringList connected = connectedConnectors();
     for (const QString &connector : connected) {
         if (isInternalConnector(connector))
             continue;
@@ -293,7 +293,12 @@ void BrightnessManager::handleDdcProbed(quint64 generation, const QList<DdcDispl
     if (generation != m_generation)
         return;
 
-    QList<Display> displays = m_backlights;
+    // Backlight values may have changed since the scan; m_displays holds the latest.
+    QList<Display> displays;
+    for (const Display &display : std::as_const(m_displays)) {
+        if (display.kind == Kind::Backlight)
+            displays.append(display);
+    }
     for (const DdcDisplay &entry : probed) {
         Display display;
         display.connector = entry.connector;
@@ -320,7 +325,7 @@ void BrightnessManager::publish(QList<Display> displays)
         m_fileWatcher->removePaths(m_fileWatcher->files());
     for (const Display &display : std::as_const(m_displays)) {
         if (display.kind == Kind::Backlight)
-            m_fileWatcher->addPath(BacklightDir + display.device + QStringLiteral("/brightness"));
+            m_fileWatcher->addPath(brightnessFile(display.device));
     }
 
     if (this->displays() != oldConnectors)
@@ -340,7 +345,7 @@ void BrightnessManager::publish(QList<Display> displays)
 
 void BrightnessManager::readBacklight(Display &display) const
 {
-    display.raw = readSysfs(BacklightDir + display.device + QStringLiteral("/brightness")).toInt();
+    display.raw = readSysfs(brightnessFile(display.device)).toInt();
 }
 
 BrightnessManager::Display *BrightnessManager::find(const QString &display)
@@ -362,11 +367,21 @@ int BrightnessManager::percent(const Display &display) const
     return display.maximum > 0 ? qRound(display.raw * 100.0 / display.maximum) : -1;
 }
 
+void BrightnessManager::notifyIfChanged(const Display &display, int oldPercent)
+{
+    const int newPercent = percent(display);
+    if (newPercent == oldPercent)
+        return;
+
+    emit displayBrightnessChanged(display.connector, newPercent);
+    if (&display == &m_displays.first())
+        emit brightnessChanged();
+}
+
 void BrightnessManager::handleFileChanged(const QString &path)
 {
     for (Display &display : m_displays) {
-        if (display.kind != Kind::Backlight
-            || BacklightDir + display.device + QStringLiteral("/brightness") != path)
+        if (display.kind != Kind::Backlight || brightnessFile(display.device) != path)
             continue;
 
         // Some writers replace the file, which drops it from the watcher.
@@ -375,11 +390,7 @@ void BrightnessManager::handleFileChanged(const QString &path)
 
         const int oldPercent = percent(display);
         readBacklight(display);
-        if (percent(display) != oldPercent) {
-            emit displayBrightnessChanged(display.connector, percent(display));
-            if (&display == &m_displays.first())
-                emit brightnessChanged();
-        }
+        notifyIfChanged(display, oldPercent);
         return;
     }
 }

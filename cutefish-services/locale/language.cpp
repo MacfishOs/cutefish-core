@@ -4,10 +4,9 @@
 #include "language.h"
 #include "languageenvironment.h"
 #include "preferences.h"
-#include "appearance/thememanager.h"
 #include "languageadaptor.h"
 
-#include <QDBusInterface>
+#include <QDBusConnection>
 #include <QSettings>
 #include <QDBusMessage>
 #include <QDBusMetaType>
@@ -41,9 +40,10 @@ QString Language::languageCode() const
 
 QStringList Language::preferredLanguages() const
 {
+    const QString primary = languageCode();
     QStringList codes = m_settings->value("preferredLanguages").toStringList();
-    codes.removeAll(languageCode());
-    codes.prepend(languageCode());
+    codes.removeAll(primary);
+    codes.prepend(primary);
     codes.removeDuplicates();
     return codes;
 }
@@ -116,18 +116,12 @@ void Language::setPreferredLanguages(const QStringList &languages)
     if (!primaryChanged)
         return;
 
-    QDBusInterface iface("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-                         "org.freedesktop.Notifications", QDBusConnection::sessionBus());
-    if (iface.isValid()) {
-        QList<QVariant> args;
-        args << "cutefish-settings";
-        args << ((unsigned int)0);
-        args << "preferences-system";
-        args << "";
-        args << tr("Some applications may need to be restarted for the change to take effect.");
-        args << QStringList();
-        args << QVariantMap();
-        args << (int)10;
-        iface.asyncCallWithArgumentList("Notify", args);
-    }
+    auto notification = QDBusMessage::createMethodCall("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications", "Notify");
+    // Only a running notification server shows it; none is started for it.
+    notification.setAutoStartService(false);
+    notification << "cutefish-settings" << 0u << "preferences-system" << ""
+                 << tr("Some applications may need to be restarted for the change to take effect.")
+                 << QStringList() << QVariantMap() << 10;
+    QDBusConnection::sessionBus().asyncCall(notification);
 }

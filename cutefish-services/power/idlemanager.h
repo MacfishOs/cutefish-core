@@ -36,7 +36,8 @@ public:
     static IdleManager *self();
     explicit IdleManager(QObject *parent = nullptr);
 
-    void registerActionTimeout(Action *action, int secs);
+    int registerActionTimeout(Action *action, int secs);
+    void unregisterActionTimeout(Action *action, int identifier);
     void unregisterActionTimeouts(Action *action);
 
 private slots:

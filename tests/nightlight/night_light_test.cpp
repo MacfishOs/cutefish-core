@@ -200,6 +200,27 @@ private slots:
         QCOMPARE(position.next, at(3, 6, 3));
     }
 
+    // Europe/Berlin repeats 02:00 to 03:00 on 2026-10-25: each 02:30 waits for its own 02:45.
+    void aRepeatedHourTurnsAtItsOwnOccurrence()
+    {
+        using Resolution = QDateTime::TransitionResolution;
+        const QTimeZone zone("Europe/Berlin");
+        const QDate date(2026, 10, 25);
+        const auto times = fixed(QTime(18, 0), QTime(2, 45));
+        const QDateTime first(date, QTime(2, 30), zone, Resolution::PreferBefore);
+        const QDateTime second(date, QTime(2, 30), zone, Resolution::PreferAfter);
+        QCOMPARE(first.secsTo(second), 3600);
+
+        auto position = NightLightSchedule::position(first, times);
+        QVERIFY(position.enabled);
+        QCOMPARE(position.next, QDateTime(date, QTime(2, 45), zone, Resolution::PreferBefore));
+
+        position = NightLightSchedule::position(second, times);
+        QVERIFY(position.enabled);
+        QVERIFY(position.next > second);
+        QCOMPARE(position.next, QDateTime(date, QTime(2, 45), zone, Resolution::PreferAfter));
+    }
+
     // Against NOAA's solar calculator and the Julian-date sunrise equation,
     // which agree to a few minutes.
     void sunTimesMatchTheAlmanac()
@@ -328,7 +349,8 @@ private slots:
         nightLight->setSchedule(NightLight::Custom);
         QVERIFY(nightLight->enabled());
         QCOMPARE(nightLight->nextCheckpoint(), at(3, 6));
-        QTRY_COMPARE(m_display->calls.last().strength, 0.5);
+        QTRY_COMPARE(m_display->calls.size(), 2);
+        QCOMPARE(m_display->calls.last().strength, 0.5);
         QCOMPARE(m_display->calls.last().durationMs, 1000u);
 
         // Moving the end before now turns it off at once.
@@ -349,7 +371,8 @@ private slots:
         m_now = at(2, 18);
         nightLight->checkpointForTesting();
         QVERIFY(nightLight->enabled());
-        QTRY_COMPARE(m_display->calls.last().durationMs, 60000u);
+        QTRY_COMPARE(m_display->calls.size(), 2);
+        QCOMPARE(m_display->calls.last().durationMs, 60000u);
         QCOMPARE(nightLight->nextCheckpoint(), at(3, 6));
     }
 

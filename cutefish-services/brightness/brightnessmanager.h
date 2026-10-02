@@ -52,13 +52,15 @@ private:
     };
 
     void rescan();
-    QList<Display> scanBacklights() const;
-    QList<DdcDisplay> ddcCandidates(const QList<Display> &backlights) const;
+    QList<Display> scanBacklights(const QStringList &connected) const;
+    QList<DdcDisplay> ddcCandidates(const QStringList &connected,
+                                    const QList<Display> &backlights) const;
     void publish(QList<Display> displays);
     void readBacklight(Display &display) const;
     Display *find(const QString &display);
     const Display *find(const QString &display) const;
     int percent(const Display &display) const;
+    void notifyIfChanged(const Display &display, int oldPercent);
 
 private slots:
     void scheduleRescan();
@@ -71,7 +73,6 @@ private:
     QThread m_ddcThread;
     DdcWorker *m_ddcWorker;
     quint64 m_generation = 0;
-    QList<Display> m_backlights;
     QList<Display> m_displays;
 };
 

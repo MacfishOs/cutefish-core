@@ -2,20 +2,15 @@
 #define BATTERY_H
 
 #include <QObject>
-#include <QTimer>
 #include <QSettings>
 #include "upowerdevice.h"
 
 class Battery : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(int isPresent READ isPresent)
-    Q_PROPERTY(int type READ type)
     Q_PROPERTY(int chargePercent READ chargePercent NOTIFY chargePercentChanged)
     Q_PROPERTY(int capacity READ capacity NOTIFY capacityChanged)
-    Q_PROPERTY(int voltage READ voltage NOTIFY voltageChanged)
-    Q_PROPERTY(int isRechargeable READ isRechargeable)
-    Q_PROPERTY(int isPowerSupply READ isPowerSupply)
+    Q_PROPERTY(double voltage READ voltage NOTIFY voltageChanged)
     Q_PROPERTY(int chargeState READ chargeState NOTIFY chargeStateChanged)
     Q_PROPERTY(qlonglong remainingTime READ remainingTime NOTIFY remainingTimeChanged)
     Q_PROPERTY(QString statusString READ statusString NOTIFY remainingTimeChanged)
@@ -63,39 +58,16 @@ public:
     enum ChargeState { NoCharge, Charging, Discharging, FullyCharged };
     Q_ENUM(ChargeState)
 
-    /**
-      * Technology used in the battery
-      *
-      * 0: Unknown
-      * 1: Lithium ion
-      * 2: Lithium polymer
-      * 3: Lithium iron phosphate
-      * 4: Lead acid
-      * 5: Nickel cadmium
-      * 6: Nickel metal hydride
-      */
-    enum Technology { UnknownTechnology = 0, LithiumIon, LithiumPolymer, LithiumIronPhosphate,
-                      LeadAcid, NickelCadmium, NickelMetalHydride
-                    };
-    Q_ENUM(Technology)
-
-    // Begin
-
     explicit Battery(UPowerDevice *device, QObject *parent = nullptr);
 
     void updateCache();
     void init();
     void refresh();
 
-    bool isPresent() const;
     Battery::BatteryType type() const;
 
     int chargePercent() const;
     int capacity() const;
-
-    bool isRechargeable() const;
-
-    bool isPowerSupply() const;
 
     Battery::ChargeState chargeState() const;
 
@@ -106,27 +78,7 @@ public:
     // This property is only valid if the property type has the value "battery".
     qlonglong timeToFull() const;
 
-    Battery::Technology technology() const;
-
-    double energy() const;
-
-    double energyFull() const;
-
-    double energyFullDesign() const;
-
-    double energyRate() const;
-
     double voltage() const;
-
-    double temperature() const;
-
-    bool isRecalled() const;
-
-    QString recallVendor() const;
-
-    QString recallUrl() const;
-
-    QString serial() const;
 
     qlonglong remainingTime() const;
 
@@ -140,19 +92,10 @@ public:
     QString udi() const { return m_device->udi(); }
 
 signals:
-    void presentStateChanged(bool newState);
     void chargePercentChanged(int value);
     void capacityChanged(int value);
-    void powerSupplyStateChanged(bool newState);
     void chargeStateChanged(int newState);
-    void timeToEmptyChanged(qlonglong time);
-    void timeToFullChanged(qlonglong time);
-    void energyChanged(double energy);
-    void energyFullChanged(double energyFull);
-    void energyFullDesignChanged(double energyFullDesign);
-    void energyRateChanged(double energyRate);
     void voltageChanged(double voltage);
-    void temperatureChanged(double temperature);
     void remainingTimeChanged(qlonglong time);
     void lastChargedPercentChanged();
     void lastChargedSecsChanged();
@@ -163,28 +106,19 @@ private slots:
 private:
     UPowerDevice *m_device;
 
-    bool m_isPresent;
     int m_chargePercent;
     int m_capacity;
-    bool m_isPowerSupply;
     Battery::ChargeState m_chargeState;
     // Plugged in but held from charging, as a charge limit does.
     bool m_pendingCharge;
     QString m_statusString;
     qlonglong m_timeToEmpty;
     qlonglong m_timeToFull;
-    double m_energy;
-    double m_energyFull;
-    double m_energyFullDesign;
-    double m_energyRate;
     double m_voltage;
-    double m_temperature;
 
     QSettings *m_settings;
     int m_lastChargedPercent;
     quint64 m_lastChargedSecs;
-
-    // QTimer m_refreshTimer;
 };
 
 #endif // BATTERY_H

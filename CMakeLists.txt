@@ -3,20 +3,15 @@ project(core)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake;${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 set(QT Core Gui Quick QuickControls2 DBus LinguistTools)
 find_package(Qt6 REQUIRED ${QT})
-# find_package(FishUI REQUIRED)
 find_package(PkgConfig REQUIRED)
-
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH})
 
 include(GNUInstallDirs)
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")

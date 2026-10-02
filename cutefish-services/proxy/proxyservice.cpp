@@ -1,5 +1,6 @@
 #include "proxyservice.h"
 #include "keyfile.h"
+#include "proxysettings.h"
 
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -38,30 +39,24 @@ void ProxyService::watch()
 
 void ProxyService::reload()
 {
-    const ProxySettings settings = ProxySettings::load();
-    if (m_loaded && settings == m_settings)
-        return;
-
-    m_loaded = true;
-    m_settings = settings;
-    publishEnvironment();
-}
-
-void ProxyService::publishEnvironment()
-{
-    const QMap<QString, QString> variables = ProxyEnvironment::variables(m_settings);
+    const QMap<QString, QString> variables = ProxyEnvironment::variables(ProxySettings::load());
     // The first pass always publishes: systemd keeps what an earlier login exported.
     if (m_environmentPublished && variables == m_environment)
         return;
     m_environmentPublished = true;
     m_environment = variables;
 
+    publishEnvironment();
+}
+
+void ProxyService::publishEnvironment()
+{
     QStringList unset;
     QStringList assignments;
     QMap<QString, QString> activation;
     for (const QString &name : ProxyEnvironment::names()) {
-        const QString value = variables.value(name);
-        if (variables.contains(name))
+        const QString value = m_environment.value(name);
+        if (m_environment.contains(name))
             assignments << name + QLatin1Char('=') + value;
         else
             unset << name;

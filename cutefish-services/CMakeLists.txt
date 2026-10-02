@@ -14,8 +14,6 @@ add_subdirectory(clipboard)
 add_subdirectory(idle)
 add_subdirectory(permissions)
 
-set(HEADERS "")
-set(FORMS "")
 set(RESOURCES appearance/appearance.qrc)
 
 qt6_add_dbus_adaptor(DBUS_SOURCES
@@ -38,7 +36,7 @@ qt6_add_dbus_adaptor(DBUS_SOURCES
                      nightlight/nightlight.h NightLight)
 set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
 
-add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${HEADERS} ${FORMS} ${RESOURCES})
+add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${RESOURCES})
 
 target_compile_definitions(${TARGET} PRIVATE
         CUTEFISH_GTK_CSS_DIR="${CMAKE_INSTALL_FULL_DATAROOTDIR}/${TARGET}/gtk"

@@ -6,7 +6,6 @@
 #define UP_DBUS_PATH              "/org/freedesktop/UPower"
 #define UP_DBUS_INTERFACE         "org.freedesktop.UPower"
 #define UP_DBUS_INTERFACE_DEVICE  UP_DBUS_INTERFACE ".Device"
-#define UP_UDI_PREFIX             "/org/freedesktop/UPower"
 
 typedef enum {
     UP_DEVICE_KIND_UNKNOWN,

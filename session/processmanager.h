@@ -5,14 +5,12 @@
 #define PROCESSMANAGER_H
 
 #include <QElapsedTimer>
-#include <QEventLoop>
 #include <QMap>
 #include <functional>
 #include <QObject>
 #include <QProcess>
 
 class XwaylandEnvironment;
-class Application;
 class QDBusServiceWatcher;
 class CompositorProcess;
 class ShellConnection;
@@ -24,7 +22,7 @@ class ProcessManager : public QObject
     Q_OBJECT
 
 public:
-    explicit ProcessManager(Application* app, QObject* parent = nullptr);
+    explicit ProcessManager(QObject* parent = nullptr);
     ~ProcessManager();
 
     enum class Ending {
@@ -38,8 +36,9 @@ public:
 
     // Asks every application to quit, as Quit asks one, and runs `then` once
     // all have. One that cancels or stops responding keeps the session going,
-    // and the user is told which.
-    void endAfterApplications(Ending ending, std::function<void()> then);
+    // and the user is told which. `then` returns false when the session goes on
+    // after all, as after a refused restart.
+    void endAfterApplications(Ending ending, std::function<bool()> then);
 
     // What logout does once the display manager has been told, for when it or
     // the system is the one ending the session.
@@ -56,11 +55,11 @@ private:
     void publishXwaylandEnvironment(bool startDesktop);
     void startShell();
     void onShellFinished(int code, QProcess::ExitStatus status);
+    void stopShellAndDaemons();
     void stopProcesses(QMap<QString, QProcess*>& processes);
 
 private:
     XwaylandEnvironment* m_xwaylandEnvironment = nullptr;
-    Application* m_app;
     CompositorProcess* m_compositorProcess = nullptr;
     ShellConnection* m_shellConnection = nullptr;
     ShellProcess* m_shellProcess = nullptr;

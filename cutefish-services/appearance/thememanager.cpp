@@ -9,8 +9,7 @@
 #include "preferences.h"
 #include "wallpapermanager.h"
 
-#include <QDBusInterface>
-#include <QDebug>
+#include <QDBusConnection>
 
 static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
 static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
@@ -154,7 +153,7 @@ void ThemeManager::setBackgroundVisible(bool value)
 
 int ThemeManager::accentColor()
 {
-    return m_settings->value("AccentColor", 0).toInt();
+    return m_accentColor;
 }
 
 void ThemeManager::setAccentColor(int accentColor)

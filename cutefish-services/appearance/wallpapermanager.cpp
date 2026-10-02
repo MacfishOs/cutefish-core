@@ -12,20 +12,30 @@
 #include <QStandardPaths>
 #include <QThreadPool>
 
-static bool isSystemWallpaper(const QString &path)
+static QStringList systemWallpaperDirectories()
 {
-    const QString wallpaperPath = QFileInfo(path).absoluteFilePath();
     const QString userDataPath = QDir::cleanPath(
             QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
 
+    QStringList directories;
     const QStringList dataPaths =
             QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
     for (const QString &dataPath : dataPaths) {
         if (QDir::cleanPath(dataPath) == userDataPath)
             continue;
 
-        const QString directory = QDir(dataPath).absoluteFilePath(
-                QStringLiteral("backgrounds/cutefishos"));
+        directories.append(QDir(dataPath).absoluteFilePath(
+                QStringLiteral("backgrounds/cutefishos")));
+    }
+
+    return directories;
+}
+
+static bool isSystemWallpaper(const QString &path)
+{
+    const QString wallpaperPath = QFileInfo(path).absoluteFilePath();
+    const QStringList directories = systemWallpaperDirectories();
+    for (const QString &directory : directories) {
         if (wallpaperPath.startsWith(directory + QDir::separator()))
             return true;
     }
@@ -257,16 +267,8 @@ void WallpaperManager::removeUserWallpaper(const QString &path)
     }
 
     if (replacement.isEmpty()) {
-        const QString userDataPath = QDir::cleanPath(
-                QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
-        const QStringList dataPaths =
-                QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
-        for (const QString &dataPath : dataPaths) {
-            if (QDir::cleanPath(dataPath) == userDataPath)
-                continue;
-
-            const QString directory = QDir(dataPath).absoluteFilePath(
-                    QStringLiteral("backgrounds/cutefishos"));
+        const QStringList directories = systemWallpaperDirectories();
+        for (const QString &directory : directories) {
             const QStringList wallpapers = imagesIn(directory);
             if (!wallpapers.isEmpty()) {
                 replacement = wallpapers.first();
@@ -341,21 +343,28 @@ void WallpaperManager::syncWallpaperFolder(const QString &folder)
         return;
 
     m_syncingFolders.insert(folder);
-    QThreadPool::globalInstance()->start(QRunnable::create([this, folder] {
+    const QString wallpaperInUse = m_wallpaperPath;
+    QThreadPool::globalInstance()->start(QRunnable::create([this, folder, wallpaperInUse] {
         const QString store = wallpaperFolderStore(folder);
-        const int before = imagesIn(store).count();
+        QStringList before = imagesIn(store);
+        before.sort();
         const QStringList sources = imagesIn(folder);
         QSet<QString> expected;
         for (const QString &source : sources) {
             copyWallpaperInto(source, store);
             expected.insert(mirroredFileName(QFileInfo(source)));
         }
-        // A copy whose source was renamed, replaced or removed has no use.
-        for (const QString &copy : imagesIn(store)) {
-            if (!expected.contains(QFileInfo(copy).fileName()))
-                QFile::remove(copy);
+        // A copy whose source was renamed, replaced or removed has no use, unless it is the
+        // wallpaper in use; a source folder that is gone as a whole keeps its copies.
+        if (QFileInfo(folder).isDir()) {
+            for (const QString &copy : imagesIn(store)) {
+                if (copy != wallpaperInUse && !expected.contains(QFileInfo(copy).fileName()))
+                    QFile::remove(copy);
+            }
         }
-        const bool copied = imagesIn(store).count() != before;
+        QStringList after = imagesIn(store);
+        after.sort();
+        const bool copied = after != before;
 
         QMetaObject::invokeMethod(
                 this, [this, folder, copied] { onWallpaperFolderSynced(folder, copied); },

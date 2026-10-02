@@ -22,6 +22,8 @@ void PolKitAgentListener::initiateAuthentication(const QString &actionId,
                                                  const PolkitQt1::Identity::List &identities,
                                                  PolkitQt1::Agent::AsyncResult *result)
 {
+    Q_UNUSED(actionId);
+    Q_UNUSED(iconName);
     Q_UNUSED(details);
 
     if (m_inProgress) {
@@ -30,14 +32,13 @@ void PolKitAgentListener::initiateAuthentication(const QString &actionId,
         return;
     }
 
-    m_identities = identities;
     m_cookie = cookie;
     m_result = result;
     m_session.clear();
 
     m_inProgress = true;
 
-    m_dialog = new Dialog(actionId, message, cookie, identities.first().toString(), iconName, result);
+    m_dialog = new Dialog(message, identities.first().toString());
 
     connect(m_dialog.data(), &Dialog::accepted, this, &PolKitAgentListener::onDialogAccepted);
     connect(m_dialog.data(), &Dialog::cancel, this, &PolKitAgentListener::onDialogCanceled);
@@ -53,17 +54,9 @@ void PolKitAgentListener::initiateAuthentication(const QString &actionId,
     tryAgain();
 }
 
-void PolKitAgentListener::request(const QString &request, bool echo)
-{
-    Q_UNUSED(request);
-    Q_UNUSED(echo);
-}
-
 void PolKitAgentListener::completed(bool gainedAuthorization)
 {
-    m_gainedAuthorization = gainedAuthorization;
-
-    finishObtainPrivilege();
+    finishObtainPrivilege(gainedAuthorization);
 }
 
 void PolKitAgentListener::tryAgain()
@@ -72,21 +65,20 @@ void PolKitAgentListener::tryAgain()
 
     if (m_selectedUser.isValid()) {
         m_session = new PolkitQt1::Agent::Session(m_selectedUser, m_cookie, m_result);
-        connect(m_session.data(), SIGNAL(request(QString, bool)), this, SLOT(request(QString, bool)));
-        connect(m_session.data(), SIGNAL(completed(bool)), this, SLOT(completed(bool)));
+        connect(m_session.data(), &PolkitQt1::Agent::Session::completed, this, &PolKitAgentListener::completed);
 
         m_session.data()->initiate();
     }
 }
 
-void PolKitAgentListener::finishObtainPrivilege()
+void PolKitAgentListener::finishObtainPrivilege(bool gainedAuthorization)
 {
     if (!m_inProgress)
         return;
 
     m_numTries++;
 
-    if (!m_gainedAuthorization && !m_wasCancelled && !m_dialog.isNull()) {
+    if (!gainedAuthorization && !m_wasCancelled && !m_dialog.isNull()) {
         m_dialog.data()->authenticationFailure();
 
         if (m_numTries < 3) {
@@ -134,7 +126,7 @@ void PolKitAgentListener::onDialogCanceled()
         m_session.data()->cancel();
     }
 
-    finishObtainPrivilege();
+    finishObtainPrivilege(false);
 }
 
 void PolKitAgentListener::cancelAuthentication()
@@ -148,5 +140,5 @@ void PolKitAgentListener::cancelAuthentication()
         m_session.data()->cancel();
     }
 
-    finishObtainPrivilege();
+    finishObtainPrivilege(false);
 }

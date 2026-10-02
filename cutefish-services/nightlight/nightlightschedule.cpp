@@ -48,7 +48,11 @@ Position position(const QDateTime &now, const TimesForDate &times)
         return {false, {}};
 
     const auto at = [&now](QDate date, QTime time) {
-        return QDateTime(date, time, now.timeZone());
+        const QDateTime turn(date, time, now.timeZone());
+        // When the clocks go back, the first occurrence of a repeated time may have passed.
+        return turn > now ? turn
+                          : QDateTime(date, time, now.timeZone(),
+                                      QDateTime::TransitionResolution::PreferAfter);
     };
     const QTime time = now.time();
     const QDate tomorrow = today.addDays(1);

@@ -6,20 +6,14 @@
 
 #include <QObject>
 #include <QString>
-#include <QVariant>
 #include <QQuickView>
-
-#include <PolkitQt1/Agent/Listener>
 
 class Dialog : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit Dialog(const QString &action, const QString &message,
-                    const QString &cookie, const QString &identity,
-                    const QString &iconName,
-                    PolkitQt1::Agent::AsyncResult *result);
+    explicit Dialog(const QString &message, const QString &identity);
     ~Dialog();
 
     Q_INVOKABLE void setConfirmationResult(const QString &password = QString());
@@ -28,41 +22,23 @@ public:
 
     Q_INVOKABLE void authenticationFailure();
 
-    Q_PROPERTY(QString message READ message NOTIFY changed)
-    Q_PROPERTY(QString action READ action NOTIFY changed)
-    Q_PROPERTY(QString cookie READ cookie NOTIFY changed)
-    Q_PROPERTY(QString identity READ identity NOTIFY changed)
-    Q_PROPERTY(QString password READ password NOTIFY changed)
-    Q_PROPERTY(QString iconName READ iconName NOTIFY changed)
+    Q_PROPERTY(QString message READ message CONSTANT)
+    Q_PROPERTY(QString identity READ identity CONSTANT)
 
     QString message() { return m_message; }
-    QString action() { return m_action; }
-    QString cookie() { return m_cookie; }
     QString identity() { return m_identity; }
     QString password() { return m_password; }
-    QString iconName() { return m_iconName; }
-
-    PolkitQt1::Agent::AsyncResult *result() { return m_result; }
 
 signals:
-    // This signal is never emitted at the moment, as we don't change the
-    // properties of this window dynamically for now
-    void changed();
-
     void failure();
 
     void cancel();
     void accepted();
 
 private:
-    QString m_action;
     QString m_message;
-    QVariantMap m_details;
-    QString m_cookie;
     QString m_identity;
     QString m_password;
-    QString m_iconName;
-    PolkitQt1::Agent::AsyncResult *m_result;
 
     QQuickView *m_view;
 };

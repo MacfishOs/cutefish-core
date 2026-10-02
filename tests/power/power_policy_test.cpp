@@ -477,6 +477,31 @@ private slots:
         QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0, 1}));
     }
 
+    void wakingWhileDockedLetsTheDisplayGoDarkAgain()
+    {
+        Services services;
+        services.run([&] {
+            services.display->external = true;
+        });
+        DimDisplayAction action;
+        action.setLidPresent(true);
+        waitForDisplayState();
+        action.handleLidClosed();
+        QTRY_COMPARE(services.recorder.log().docked, QList<bool> {true});
+        QTest::qWait(100);
+
+        action.setPolicy(1200, 900);
+        action.onIdleTimeout(1200000);
+        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+
+        action.onWakeupFromIdle();
+        QTest::qWait(100);
+        action.onIdleTimeout(1200000);
+        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 1}));
+        // Powering every display on would light the closed panel.
+        QVERIFY(!services.recorder.log().power.contains(0u));
+    }
+
     void preventingSleepKeepsTheSystemAwake()
     {
         Services services;

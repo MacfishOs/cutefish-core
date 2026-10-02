@@ -46,16 +46,10 @@ UPowerManager::UPowerManager(QObject *parent)
 
     if (serviceFound) {
         if (m_interface.metaObject()->indexOfSignal("DeviceAdded(QDBusObjectPath)") != -1) {
-            // for UPower >= 0.99.0, changed signature :o/
             connect(&m_interface, SIGNAL(DeviceAdded(QDBusObjectPath)),
                     this, SLOT(onDeviceAdded(QDBusObjectPath)));
             connect(&m_interface, SIGNAL(DeviceRemoved(QDBusObjectPath)),
                     this, SLOT(onDeviceRemoved(QDBusObjectPath)));
-        } else {
-            connect(&m_interface, SIGNAL(DeviceAdded(QString)),
-                    this, SIGNAL(deviceAdded(QString)));
-            connect(&m_interface, SIGNAL(DeviceRemoved(QString)),
-                    this, SIGNAL(deviceRemoved(QString)));
         }
 
         // On battery
@@ -85,11 +79,6 @@ UPowerManager::UPowerManager(QObject *parent)
             }
         }
     }
-}
-
-QString UPowerManager::udiPrefix() const
-{
-    return UP_UDI_PREFIX;
 }
 
 bool UPowerManager::onBattery() const

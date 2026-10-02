@@ -4,7 +4,6 @@
 #ifndef NIGHTLIGHT_H
 #define NIGHTLIGHT_H
 
-#include <QDBusMessage>
 #include <QDateTime>
 #include <QObject>
 #include <QSettings>

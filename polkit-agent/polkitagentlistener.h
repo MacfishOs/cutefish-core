@@ -34,12 +34,11 @@ public slots:
     // polkitd withdrew the request: the dialog and session go with it.
     void cancelAuthentication();
 
-    void request(const QString &request, bool echo);
     void completed(bool gainedAuthorization);
 
 private:
     void tryAgain();
-    void finishObtainPrivilege();
+    void finishObtainPrivilege(bool gainedAuthorization);
 
 private slots:
     void onDialogAccepted();
@@ -48,13 +47,11 @@ private slots:
 private:
     QPointer<Dialog> m_dialog;
     QPointer<PolkitQt1::Agent::Session> m_session;
-    PolkitQt1::Identity::List m_identities;
     PolkitQt1::Agent::AsyncResult *m_result;
     PolkitQt1::Identity m_selectedUser;
     QString m_cookie;
 
     bool m_inProgress;
-    bool m_gainedAuthorization;
     bool m_wasCancelled;
 
     int m_numTries;

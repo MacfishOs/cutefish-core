@@ -7,15 +7,15 @@
 #include "sessionadaptor.h"
 
 // Qt
-#include <QCommandLineOption>
+#include <QCommandLineParser>
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
-#include <QDBusServiceWatcher>
 #include <QDebug>
 #include <QDir>
 #include <QProcess>
 #include <QSocketNotifier>
 #include <QStandardPaths>
+#include <QTimer>
 
 // STL
 #include <optional>
@@ -28,7 +28,6 @@
 
 std::optional<QStringList> getSystemdEnvironment()
 {
-    QStringList list;
     auto msg = QDBusMessage::createMethodCall(
             QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
             QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
@@ -88,7 +87,7 @@ static void onTerminationSignal(int)
 
 Application::Application(int &argc, char **argv)
     : QCoreApplication(argc, argv)
-    , m_processManager(new ProcessManager(this))
+    , m_processManager(new ProcessManager)
 {
     endSessionOnTerminationSignals();
     new SessionAdaptor(this);
@@ -117,9 +116,8 @@ Application::Application(int &argc, char **argv)
     // Import systemd's environment only after ours reached D-Bus; the other
     // order applies LANG and LC_* in the wrong order.
     qunsetenv("LC_ALL");
-    importSystemdEnvrionment();
+    importSystemdEnvironment();
 
-    QTimer::singleShot(50, this, &Application::updateUserDirs);
     QTimer::singleShot(100, m_processManager, &ProcessManager::start);
 }
 
@@ -245,7 +243,7 @@ bool Application::syncDBusEnvironment()
 // Import systemd user environment.
 // Systemd read ~/.config/environment.d which applies to all systemd user unit.
 // But it won't work if cutefishDE is not started by systemd.
-void Application::importSystemdEnvrionment()
+void Application::importSystemdEnvironment()
 {
     auto environment = getSystemdEnvironment();
     if (!environment) {
@@ -277,25 +275,9 @@ void Application::createConfigDirectory()
         qDebug() << "Could not create config directory XDG_CONFIG_HOME: " << configDir;
 }
 
-void Application::updateUserDirs()
-{
-    // bool isCutefishOS = QFile::exists("/etc/cutefishos");
-
-    // if (!isCutefishOS)
-    //     return;
-
-    // QProcess p;
-    // p.setEnvironment(QStringList() << "LC_ALL=C");
-    // p.start("xdg-user-dirs-update", QStringList() << "--force");
-    // p.waitForFinished(-1);
-}
-
-int Application::runSync(const QString &program, const QStringList &args, const QStringList &env)
+int Application::runSync(const QString &program, const QStringList &args)
 {
     QProcess p;
-
-    if (!env.isEmpty())
-        p.setEnvironment(QProcess::systemEnvironment() << env);
 
     p.setProcessChannelMode(QProcess::ForwardedChannels);
     p.start(program, args);

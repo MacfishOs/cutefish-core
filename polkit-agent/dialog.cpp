@@ -10,17 +10,10 @@
 #include <QScreen>
 #include <QDebug>
 
-Dialog::Dialog(const QString &action, const QString &message,
-               const QString &cookie, const QString &identity,
-               const QString &iconName,
-               PolkitQt1::Agent::AsyncResult *result)
-    : m_action(action)
-    , m_message(message)
-    , m_cookie(cookie)
+Dialog::Dialog(const QString &message, const QString &identity)
+    : m_message(message)
     , m_identity(identity)
     , m_password(QString())
-    , m_iconName(iconName)
-    , m_result(result)
     , m_view(new QQuickView)
 {
     qDebug() << "Creating ConfirmationDialog";

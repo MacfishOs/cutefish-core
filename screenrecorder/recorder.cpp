@@ -2,6 +2,7 @@
 #include "audiocapture.h"
 #include "captureclient.h"
 #include "encoder.h"
+#include "monotonic.h"
 
 #include <QAbstractEventDispatcher>
 #include <QCoreApplication>
@@ -10,21 +11,12 @@
 #include <QFileInfo>
 #include <QSocketNotifier>
 
-#include <ctime>
-
 #include <wayland-client.h>
 
 namespace {
 
 // Buffer ids travel to the encoder with the session they belong to.
 constexpr int kSessionStride = 1 << 16;
-
-qint64 monotonicNs()
-{
-    timespec now {};
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return qint64(now.tv_sec) * 1000000000 + now.tv_nsec;
-}
 
 } // namespace
 
@@ -42,7 +34,8 @@ Recorder::~Recorder()
         m_audio->stop();
     m_encoderThread.quit();
     m_encoderThread.wait();
-    delete m_session;
+    // Replaced sessions may still be on their way back from the encoder.
+    qDeleteAll(findChildren<CaptureSession *>(Qt::FindDirectChildrenOnly));
     delete m_client;
     if (m_display)
         wl_display_disconnect(m_display);
