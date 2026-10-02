@@ -476,6 +476,30 @@ private slots:
         QVERIFY(nightLight->enabled());
     }
 
+    void aManualToggleHoldsAcrossSessionsUntilItsTurn()
+    {
+        m_now = at(2, 20);
+        auto nightLight = start();
+        nightLight->setSchedule(NightLight::Custom);
+        m_now = at(2, 21);
+        nightLight->setEnabled(false);
+        nightLight.reset();
+
+        m_now = at(2, 23);
+        nightLight = start();
+        QVERIFY(!nightLight->enabled());
+        QCOMPARE(nightLight->nextCheckpoint(), at(3, 6));
+        QTRY_COMPARE(m_display->calls.size(), 1);
+        QCOMPARE(m_display->calls.last().strength, 0.0);
+        nightLight.reset();
+
+        // Once its turn has passed, the schedule decides again.
+        m_now = at(3, 19);
+        nightLight = start();
+        QVERIFY(nightLight->enabled());
+        QVERIFY(!saved(QStringLiteral("HoldUntil")).isValid());
+    }
+
     void aResumeKeepsAToggleUnlessItsTurnPassedDuringTheSleep()
     {
         m_now = at(2, 12);

@@ -87,13 +87,22 @@ NightLight::NightLight(QObject *parent, Clock clock)
             QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("PropertiesChanged"),
             this, SLOT(onTimeDateChanged(QString, QVariantMap, QStringList)));
 
-    // The schedule decides how a session starts.
-    refresh(Reason::SettingsChanged);
+    // The schedule decides how a session starts, unless a manual toggle from
+    // an earlier session still waits for its turn.
+    const QVariant hold = m_settings.value(QStringLiteral("NightLight/HoldUntil"));
+    if (m_schedule != Never && hold.isValid()
+        && m_clock().toMSecsSinceEpoch() < hold.toLongLong())
+        arm(QDateTime::fromMSecsSinceEpoch(hold.toLongLong()));
+    else
+        refresh(Reason::SettingsChanged);
 }
 
 void NightLight::setEnabled(bool enabled)
 {
-    // The schedule keeps its turn: a manual toggle holds until then.
+    // The schedule keeps its turn: a manual toggle holds until then, across
+    // sessions too.
+    if (m_next.isValid() && enabled != m_enabled)
+        write(QStringLiteral("HoldUntil"), m_next.toMSecsSinceEpoch());
     setEnabledInternal(enabled, kManualDuration);
 }
 
@@ -185,6 +194,10 @@ void NightLight::onTimeDateChanged(const QString &, const QVariantMap &changed,
 // it wins; a change of settings takes a second to show, a scheduled turn a minute.
 void NightLight::refresh(Reason reason)
 {
+    if (m_settings.contains(QStringLiteral("NightLight/HoldUntil"))) {
+        m_settings.remove(QStringLiteral("NightLight/HoldUntil"));
+        m_settings.sync();
+    }
     if (m_schedule == Never) {
         arm({});
         return;
