@@ -8,12 +8,27 @@
       <arg name="arguments" type="as" direction="in"/>
       <arg name="pid" type="u" direction="out"/>
     </method>
+    <!-- As above, with the caller's xdg-activation token, which the application
+         receives as XDG_ACTIVATION_TOKEN. -->
+    <method name="launchApplication">
+      <arg name="appId" type="s" direction="in"/>
+      <arg name="arguments" type="as" direction="in"/>
+      <arg name="activationToken" type="s" direction="in"/>
+      <arg name="pid" type="u" direction="out"/>
+    </method>
     <!-- Launch a command that has no desktop entry. appId may be empty, it is
          only the key the runtime tracks the instance under. -->
     <method name="launchCommand">
       <arg name="appId" type="s" direction="in"/>
       <arg name="command" type="as" direction="in"/>
       <arg name="workingDirectory" type="s" direction="in"/>
+      <arg name="pid" type="u" direction="out"/>
+    </method>
+    <method name="launchCommand">
+      <arg name="appId" type="s" direction="in"/>
+      <arg name="command" type="as" direction="in"/>
+      <arg name="workingDirectory" type="s" direction="in"/>
+      <arg name="activationToken" type="s" direction="in"/>
       <arg name="pid" type="u" direction="out"/>
     </method>
     <method name="quitApplication">

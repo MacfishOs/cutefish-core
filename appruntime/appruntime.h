@@ -25,8 +25,12 @@ public:
 
 public slots:
     uint launchApplication(const QString &appId, const QStringList &arguments);
+    uint launchApplication(const QString &appId, const QStringList &arguments,
+                           const QString &activationToken);
     uint launchCommand(const QString &appId, const QStringList &command,
                        const QString &workingDirectory);
+    uint launchCommand(const QString &appId, const QStringList &command,
+                       const QString &workingDirectory, const QString &activationToken);
     bool quitApplication(const QString &appId);
     bool quitAll();
     bool quitByPid(uint pid);
@@ -46,7 +50,7 @@ private:
     };
 
     uint startProcess(const QString &appId, const QStringList &command,
-                      const QString &workingDirectory);
+                      const QString &workingDirectory, const QString &activationToken);
     bool terminate(uint pid);
     void reap();
 

@@ -31,6 +31,12 @@ AppRuntime::AppRuntime(QObject *parent)
 
 uint AppRuntime::launchApplication(const QString &appId, const QStringList &arguments)
 {
+    return launchApplication(appId, arguments, QString());
+}
+
+uint AppRuntime::launchApplication(const QString &appId, const QStringList &arguments,
+                                   const QString &activationToken)
+{
     if (appId.isEmpty())
         return 0;
 
@@ -64,11 +70,17 @@ uint AppRuntime::launchApplication(const QString &appId, const QStringList &argu
             command = QStringList{terminal, QStringLiteral("-e")} + command;
     }
 
-    return startProcess(entry->id(), command, entry->workingDirectory());
+    return startProcess(entry->id(), command, entry->workingDirectory(), activationToken);
 }
 
 uint AppRuntime::launchCommand(const QString &appId, const QStringList &command,
                                const QString &workingDirectory)
+{
+    return launchCommand(appId, command, workingDirectory, QString());
+}
+
+uint AppRuntime::launchCommand(const QString &appId, const QStringList &command,
+                               const QString &workingDirectory, const QString &activationToken)
 {
     if (command.isEmpty() || command.first().isEmpty())
         return 0;
@@ -77,11 +89,11 @@ uint AppRuntime::launchCommand(const QString &appId, const QStringList &command,
     if (id.isEmpty())
         id = QFileInfo(command.first()).fileName();
 
-    return startProcess(id, command, workingDirectory);
+    return startProcess(id, command, workingDirectory, activationToken);
 }
 
 uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
-                              const QString &workingDirectory)
+                              const QString &workingDirectory, const QString &activationToken)
 {
     QProcess process;
     process.setProgram(command.first());
@@ -89,6 +101,9 @@ uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
     LanguageEnvironment::apply(environment);
     ProxyEnvironment::apply(environment);
+    environment.remove(QStringLiteral("XDG_ACTIVATION_TOKEN"));
+    if (!activationToken.isEmpty())
+        environment.insert(QStringLiteral("XDG_ACTIVATION_TOKEN"), activationToken);
     process.setProcessEnvironment(environment);
 
     if (!workingDirectory.isEmpty())
