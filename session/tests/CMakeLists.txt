@@ -29,3 +29,8 @@ add_executable(user-directories-test user_directories_test.cpp ../userdirectorie
 target_include_directories(user-directories-test PRIVATE ..)
 target_link_libraries(user-directories-test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME user-directories COMMAND user-directories-test)
+
+add_executable(restart-policy-test restart_policy_test.cpp ../restartpolicy.cpp)
+target_include_directories(restart-policy-test PRIVATE ..)
+target_link_libraries(restart-policy-test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME restart-policy COMMAND restart-policy-test)

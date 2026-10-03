@@ -6,6 +6,7 @@ set(SOURCES
     autostartentries.cpp
     main.cpp
     processmanager.cpp
+    restartpolicy.cpp
     compositorprocess.cpp
     xwaylandenvironment.cpp
     shellprocess.cpp

@@ -4,7 +4,6 @@
 #ifndef PROCESSMANAGER_H
 #define PROCESSMANAGER_H
 
-#include <QElapsedTimer>
 #include <QMap>
 #include <functional>
 #include <QObject>
@@ -15,7 +14,7 @@ class QDBusServiceWatcher;
 class CompositorProcess;
 class ShellConnection;
 class ShellProcess;
-class QTimer;
+class RestartPolicy;
 
 class ProcessManager : public QObject
 {
@@ -55,6 +54,9 @@ private:
     void publishXwaylandEnvironment(bool startDesktop);
     void startShell();
     void onShellFinished(int code, QProcess::ExitStatus status);
+    // Started once and restarted by the same bounded rule as the shell.
+    void startCoreProcess(const QString& program, const QStringList& arguments = {});
+    void stopRestarts();
     void stopShellAndDaemons();
     void stopProcesses(QMap<QString, QProcess*>& processes);
 
@@ -63,20 +65,17 @@ private:
     CompositorProcess* m_compositorProcess = nullptr;
     ShellConnection* m_shellConnection = nullptr;
     ShellProcess* m_shellProcess = nullptr;
-    QTimer* m_shellRestartTimer = nullptr;
+    RestartPolicy* m_shellRestart = nullptr;
     QDBusServiceWatcher* m_servicesWatcher = nullptr;
     bool m_started = false;
     bool m_compositorReady = false;
     bool m_desktopStarted = false;
     bool m_loggingOut = false;
     bool m_ending = false;
-    // Bounded restart policy: a shell that keeps dying must not become a busy
-    // loop, and after enough failures the session carries on without it.
-    int m_shellRestarts = 0;
-    QElapsedTimer m_shellUptime;
     QString m_waylandSocket;
     QString m_controlSocket;
     QMap<QString, QProcess*> m_coreProcesses;
+    QMap<QString, RestartPolicy*> m_restartPolicies;
 };
 
 #endif // PROCESSMANAGER_H

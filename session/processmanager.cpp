@@ -23,31 +23,20 @@
 #include "applicationruntime.h"
 #include "autostartentries.h"
 #include "compositorprocess.h"
+#include "restartpolicy.h"
 #include "shellconnection.h"
 #include "shellprocess.h"
 #include "userdirectories.h"
 #include "xwaylandenvironment.h"
-
-namespace {
-// Bounded restart policy for cutefish-shell. The compositor keeps running
-// either way: a shell that cannot come up leaves the session with applications
-// and no panels, which is recoverable, while a restart loop is not.
-constexpr int kMaxShellRestarts = 5;
-// A shell that stayed up this long was not crash-looping, so it gets a fresh count.
-constexpr qint64 kShellStableUptimeMs = 30000;
-constexpr int kShellRestartDelayMs = 1000;
-constexpr int kShellRestartBackoffMs = 2000;
-} // namespace
 
 ProcessManager::ProcessManager(QObject *parent)
     : QObject(parent)
     , m_compositorProcess(new CompositorProcess(this))
     , m_shellConnection(new ShellConnection(this))
     , m_shellProcess(new ShellProcess(this))
-    , m_shellRestartTimer(new QTimer(this))
+    , m_shellRestart(new RestartPolicy(QStringLiteral("cutefish-shell"), [this] { startShell(); },
+                                       this))
 {
-    m_shellRestartTimer->setSingleShot(true);
-    connect(m_shellRestartTimer, &QTimer::timeout, this, &ProcessManager::startShell);
     connect(m_shellProcess, &QProcess::finished, this, &ProcessManager::onShellFinished);
 }
 
@@ -178,7 +167,7 @@ void ProcessManager::startShell()
     if (m_loggingOut || m_shellProcess->state() != QProcess::NotRunning)
         return;
 
-    m_shellUptime.start();
+    m_shellRestart->started();
     m_shellProcess->startForSession(qEnvironmentVariable("CUTEFISH_SHELL_BINARY",
                                                          QStringLiteral("/usr/bin/cutefish-shell")),
                                     m_waylandSocket,
@@ -193,18 +182,7 @@ void ProcessManager::onShellFinished(int code, QProcess::ExitStatus status)
     // The compositor and every application it is showing carry on; only the
     // shell surfaces disappear, and the compositor releases the work area it
     // had reserved for them. A new connection repopulates the dock.
-    if (m_shellUptime.isValid() && m_shellUptime.elapsed() >= kShellStableUptimeMs)
-        m_shellRestarts = 0;
-    if (m_shellRestarts >= kMaxShellRestarts) {
-        qCritical() << "cutefish-shell failed" << m_shellRestarts
-                    << "times; not restarting it again";
-        return;
-    }
-
-    const int delay = kShellRestartDelayMs + m_shellRestarts * kShellRestartBackoffMs;
-    ++m_shellRestarts;
-    qWarning() << "cutefish-shell exited" << code << status << "- restarting in" << delay << "ms";
-    m_shellRestartTimer->start(delay);
+    m_shellRestart->exited(code, status);
 }
 
 void ProcessManager::logout()
@@ -291,7 +269,7 @@ void ProcessManager::notifyEndingStopped(Ending ending, const QString &outcome,
 void ProcessManager::leave()
 {
     m_loggingOut = true;
-    m_shellRestartTimer->stop();
+    stopRestarts();
 
     // Under cutefish-dm the login screen comes up on its own VT first, and the
     // reply comes once it is on screen: this session then ends where nobody sees
@@ -311,7 +289,7 @@ void ProcessManager::leave()
 void ProcessManager::endSession(bool behindLoginScreen)
 {
     m_loggingOut = true;
-    m_shellRestartTimer->stop();
+    stopRestarts();
 
     // Applications belong to the runtime, so ask it to quit them, then close
     // what we started ourselves.
@@ -335,7 +313,7 @@ void ProcessManager::endSession(bool behindLoginScreen)
 void ProcessManager::stopShellAndDaemons()
 {
     m_loggingOut = true;
-    m_shellRestartTimer->stop();
+    stopRestarts();
     m_shellProcess->stop();
     stopProcesses(m_coreProcesses);
 }
@@ -370,15 +348,7 @@ void ProcessManager::startDesktopProcess()
 
     // Resident, so every file manager window and dialog of the session, the
     // dock's included, opens from one warm process.
-    auto *fileManager = new QProcess;
-    fileManager->setProcessChannelMode(QProcess::ForwardedChannels);
-    fileManager->start(QStringLiteral("cutefish-filemanager"), {QStringLiteral("--daemon")});
-    if (fileManager->waitForStarted()) {
-        m_coreProcesses.insert(QStringLiteral("cutefish-filemanager"), fileManager);
-    } else {
-        qWarning() << "Failed to start the file manager daemon:" << fileManager->errorString();
-        fileManager->deleteLater();
-    }
+    startCoreProcess(QStringLiteral("cutefish-filemanager"), {QStringLiteral("--daemon")});
 
     // For CutefishOS. An ordinary application, so the runtime starts it.
     if (QFile("/usr/bin/cutefish-welcome").exists()
@@ -400,23 +370,46 @@ void ProcessManager::startDaemonProcess()
 {
     // The application runtime owns every application start, so it has to be up
     // before anything that may want to launch one.
-    const QStringList programs {QStringLiteral("cutefish-appruntime"),
-                                QStringLiteral("cutefish-services")};
+    startCoreProcess(QStringLiteral("cutefish-appruntime"));
+    startCoreProcess(QStringLiteral("cutefish-services"));
+}
 
-    for (const QString &program : programs) {
-        QProcess *process = new QProcess;
+void ProcessManager::startCoreProcess(const QString &program, const QStringList &arguments)
+{
+    if (m_loggingOut)
+        return;
+
+    QProcess *process = m_coreProcesses.value(program);
+    RestartPolicy *restart = m_restartPolicies.value(program);
+    if (!process) {
+        process = new QProcess;
         process->setProcessChannelMode(QProcess::ForwardedChannels);
-        process->setProgram(program);
-        process->start();
-        process->waitForStarted();
-
-        if (process->state() != QProcess::NotRunning) {
-            m_coreProcesses.insert(program, process);
-        } else {
-            qWarning() << "Failed to start daemon:" << program << process->errorString();
-            process->deleteLater();
-        }
+        restart = new RestartPolicy(program, [this, program, arguments] {
+            startCoreProcess(program, arguments);
+        }, this);
+        // A process that failed to start emits errorOccurred only.
+        connect(process, &QProcess::finished, restart, &RestartPolicy::exited);
+        connect(process, &QProcess::errorOccurred, restart, [process, restart](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart)
+                restart->exited(-1, process->exitStatus());
+        });
+        m_coreProcesses.insert(program, process);
+        m_restartPolicies.insert(program, restart);
     }
+    if (process->state() != QProcess::NotRunning)
+        return;
+
+    restart->started();
+    process->start(program, arguments);
+    if (!process->waitForStarted())
+        qWarning() << "Failed to start" << program << process->errorString();
+}
+
+void ProcessManager::stopRestarts()
+{
+    m_shellRestart->stop();
+    for (RestartPolicy *restart : std::as_const(m_restartPolicies))
+        restart->stop();
 }
 
 void ProcessManager::loadAutoStartProcess()
