@@ -73,9 +73,9 @@ ThemeManager::ThemeManager(QObject *parent)
         } else if (languageCode == "zh_TW") {
             fontName = "Noto Sans CJK TC";
         } else if (languageCode == "zh_HK") {
-            fontName = "Noto Serif CJK HK";
+            fontName = "Noto Sans CJK HK";
         } else if (languageCode == "ja_JP") {
-            fontName = "Noto Serif CJK JP";
+            fontName = "Noto Sans CJK JP";
         } else {
             fontName = "Noto Sans";
         }
