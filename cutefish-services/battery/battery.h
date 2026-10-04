@@ -82,7 +82,7 @@ public:
 
     qlonglong remainingTime() const;
 
-    QString formatDuration(qlonglong seconds) const;
+    static QString formatDuration(qlonglong seconds);
     QString statusString() const;
     int lastChargedPercent() const;
     quint64 lastChargedSecs() const;

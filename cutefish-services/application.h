@@ -5,6 +5,7 @@
 #define APPLICATION_H
 
 #include "appearance/thememanager.h"
+#include "battery/batterywarning.h"
 #include "battery/upowermanager.h"
 #include "brightness/brightnessmanager.h"
 #include "clipboard/clipboard.h"
@@ -28,6 +29,7 @@ private:
     ThemeManager *m_themeManager;
     BrightnessManager *m_brightnessManager;
     UPowerManager *m_upowerManager;
+    BatteryWarning *m_batteryWarning;
     Language *m_language;
     Clipboard *m_clipboard;
     PowerManager *m_powerManager;

@@ -175,7 +175,7 @@ qlonglong Battery::remainingTime() const
     return -1;
 }
 
-QString Battery::formatDuration(qlonglong seconds) const
+QString Battery::formatDuration(qlonglong seconds)
 {
     QString result;
     quint64 secs = seconds;
