@@ -3,6 +3,7 @@
 
 #include "batterywarning.h"
 #include "battery.h"
+#include "cutefishnotification.h"
 #include "power.h"
 
 #include <QDBusConnection>
@@ -12,24 +13,26 @@
 
 namespace {
 const QString displayDevice = QStringLiteral("/org/freedesktop/UPower/devices/DisplayDevice");
-const QString notificationsService = QStringLiteral("org.freedesktop.Notifications");
-const QString notificationsPath = QStringLiteral("/org/freedesktop/Notifications");
 }
 
 BatteryWarning::BatteryWarning(QObject *parent)
     : QObject(parent)
+    , m_notification(new Cutefish::Notification(this))
     , m_criticalActionKnown(false)
-    , m_pending(false)
+    , m_fetchingAction(false)
     , m_shownLevel(None)
-    , m_notificationId(0)
 {
+    m_notification->setDesktopEntry(QStringLiteral("cutefish-settings"));
+    m_notification->setIconName(QStringLiteral("battery-caution"));
+    // No notification server yet, as early in a session: the next battery change retries.
+    connect(m_notification, &Cutefish::Notification::failed, this, [this] {
+        m_shownLevel = None;
+    });
+
     QDBusConnection::systemBus().connect(UP_DBUS_SERVICE, displayDevice,
                                          QStringLiteral("org.freedesktop.DBus.Properties"),
                                          QStringLiteral("PropertiesChanged"), this,
                                          SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
-    QDBusConnection::sessionBus().connect(notificationsService, notificationsPath,
-                                          notificationsService, QStringLiteral("NotificationClosed"),
-                                          this, SLOT(onNotificationClosed(uint, uint)));
 
     fetchProperties();
 }
@@ -47,15 +50,6 @@ void BatteryWarning::onPropertiesChanged(const QString &interface, const QVarian
 
     m_properties.insert(changed);
     update();
-}
-
-void BatteryWarning::onNotificationClosed(uint id, uint reason)
-{
-    Q_UNUSED(reason);
-
-    // Dismissed or expired: a later level gets a banner of its own.
-    if (id == m_notificationId)
-        m_notificationId = 0;
 }
 
 void BatteryWarning::fetchProperties()
@@ -82,7 +76,7 @@ void BatteryWarning::fetchCriticalAction()
     QDBusMessage message = QDBusMessage::createMethodCall(UP_DBUS_SERVICE, UP_DBUS_PATH,
             UP_DBUS_INTERFACE, QStringLiteral("GetCriticalAction"));
 
-    m_pending = true;
+    m_fetchingAction = true;
 
     auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *watcher) {
@@ -91,35 +85,30 @@ void BatteryWarning::fetchCriticalAction()
         QDBusPendingReply<QString> reply = *watcher;
         m_criticalAction = reply.isValid() ? reply.value() : QString();
         m_criticalActionKnown = true;
-        m_pending = false;
+        m_fetchingAction = false;
         update();
     });
 }
 
 void BatteryWarning::update()
 {
-    if (m_pending)
+    if (m_fetchingAction)
         return;
 
     const uint level = m_properties.value(QStringLiteral("WarningLevel")).toUInt();
 
     if (level < Low) {
-        if (m_notificationId) {
-            QDBusMessage message = QDBusMessage::createMethodCall(notificationsService,
-                    notificationsPath, notificationsService, QStringLiteral("CloseNotification"));
-            message.setAutoStartService(false);
-            message << m_notificationId;
-            QDBusConnection::sessionBus().asyncCall(message);
-        }
+        if (m_shownLevel != None)
+            m_notification->close();
 
-        m_notificationId = 0;
         m_shownLevel = None;
         // logind may allow hibernation by the next discharge.
         m_criticalActionKnown = false;
         return;
     }
 
-    // Each level is announced once per discharge; a dismissed warning stays dismissed.
+    // Each level is announced once per discharge; a dismissed warning stays dismissed,
+    // and the next level after it is a banner of its own.
     if (level <= m_shownLevel)
         return;
 
@@ -133,48 +122,18 @@ void BatteryWarning::update()
 
 void BatteryWarning::notify(uint level)
 {
-    QString summary;
     if (level == Low)
-        summary = tr("Low Battery");
+        m_notification->setSummary(tr("Low Battery"));
     else if (level == Critical)
-        summary = tr("Battery Critically Low");
+        m_notification->setSummary(tr("Battery Critically Low"));
     else
-        summary = tr("Battery Empty");
+        m_notification->setSummary(tr("Battery Empty"));
 
-    QVariantMap hints;
-    // Critical urgency keeps the banner up until it is dismissed.
-    hints.insert(QStringLiteral("urgency"), QVariant::fromValue<uchar>(level == Low ? 1 : 2));
-    hints.insert(QStringLiteral("desktop-entry"), QStringLiteral("cutefish-settings"));
-
-    QDBusMessage message = QDBusMessage::createMethodCall(notificationsService, notificationsPath,
-            notificationsService, QStringLiteral("Notify"));
-    // Only a running notification server shows it; none is started for it.
-    message.setAutoStartService(false);
-    // No app name: the shell titles it with the desktop entry's localized name.
-    message << QString() << m_notificationId
-            << QStringLiteral("battery-caution") << summary << body(level) << QStringList()
-            << hints << -1;
-
-    const uint shownLevel = m_shownLevel;
-    m_pending = true;
+    m_notification->setBody(body(level));
+    m_notification->setUrgency(level == Low ? Cutefish::Notification::Normal
+                                            : Cutefish::Notification::Critical);
     m_shownLevel = level;
-
-    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message), this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this,
-            [this, shownLevel](QDBusPendingCallWatcher *watcher) {
-        watcher->deleteLater();
-        m_pending = false;
-
-        QDBusPendingReply<uint> reply = *watcher;
-        // No notification server yet, as early in a session: the next battery change retries.
-        if (reply.isError()) {
-            m_shownLevel = shownLevel;
-            return;
-        }
-
-        m_notificationId = reply.value();
-        update();
-    });
+    m_notification->show();
 }
 
 QString BatteryWarning::body(uint level) const

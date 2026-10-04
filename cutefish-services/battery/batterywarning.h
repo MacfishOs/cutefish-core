@@ -7,6 +7,10 @@
 #include <QObject>
 #include <QVariantMap>
 
+namespace Cutefish {
+class Notification;
+}
+
 // Warns at the levels UPower.conf sets, before UPower's critical power action.
 class BatteryWarning : public QObject
 {
@@ -21,7 +25,6 @@ public:
 private slots:
     void onPropertiesChanged(const QString &interface, const QVariantMap &changed,
                              const QStringList &invalidated);
-    void onNotificationClosed(uint id, uint reason);
 
 private:
     void fetchProperties();
@@ -30,13 +33,13 @@ private:
     void notify(uint level);
     QString body(uint level) const;
 
+    Cutefish::Notification *m_notification;
     QVariantMap m_properties;
     QString m_criticalAction;
     bool m_criticalActionKnown;
-    // A Notify or GetCriticalAction call is in flight; its reply runs update() again.
-    bool m_pending;
+    // GetCriticalAction is in flight; its reply runs update() again.
+    bool m_fetchingAction;
     uint m_shownLevel;
-    uint m_notificationId;
 };
 
 #endif // BATTERYWARNING_H

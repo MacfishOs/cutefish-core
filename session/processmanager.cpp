@@ -23,6 +23,7 @@
 #include "applicationruntime.h"
 #include "autostartentries.h"
 #include "compositorprocess.h"
+#include "cutefishnotification.h"
 #include "restartpolicy.h"
 #include "shellconnection.h"
 #include "shellprocess.h"
@@ -255,15 +256,15 @@ void ProcessManager::notifyEndingStopped(Ending ending, const QString &outcome,
     const QString body = outcome == QLatin1String("cancelled") ? tr("%1 cancelled it.").arg(name)
                                                                : tr("%1 did not quit.").arg(name);
 
-    QDBusMessage notify = QDBusMessage::createMethodCall(
-            QStringLiteral("org.freedesktop.Notifications"),
-            QStringLiteral("/org/freedesktop/Notifications"),
-            QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("Notify"));
-    notify << QStringLiteral("cutefish-session") << uint(0)
-           << (entry && !entry->icon().isEmpty() ? entry->icon()
-                                                 : QStringLiteral("system-log-out"))
-           << summary << body << QStringList() << QVariantMap() << -1;
-    QDBusConnection::sessionBus().asyncCall(notify);
+    auto *notification = new Cutefish::Notification(this);
+    // The session has no desktop entry to title it.
+    notification->setAppName(tr("System"));
+    notification->setIconName(entry && !entry->icon().isEmpty() ? entry->icon()
+                                                                : QStringLiteral("system-log-out"));
+    notification->setSummary(summary);
+    notification->setBody(body);
+    notification->setAutoDelete(true);
+    notification->show();
 }
 
 void ProcessManager::leave()

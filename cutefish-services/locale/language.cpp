@@ -3,6 +3,7 @@
 
 #include "language.h"
 #include "languageenvironment.h"
+#include "cutefishnotification.h"
 #include "preferences.h"
 #include "languageadaptor.h"
 
@@ -116,15 +117,11 @@ void Language::setPreferredLanguages(const QStringList &languages)
     if (!primaryChanged)
         return;
 
-    auto notification = QDBusMessage::createMethodCall("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
-        "org.freedesktop.Notifications", "Notify");
-    // Only a running notification server shows it; none is started for it.
-    notification.setAutoStartService(false);
-    // No app name: the shell titles it with the desktop entry's localized name.
-    notification << QString() << 0u << "preferences-system" << ""
-                 << tr("Some applications may need to be restarted for the change to take effect.")
-                 << QStringList()
-                 << QVariantMap {{QStringLiteral("desktop-entry"), QStringLiteral("cutefish-settings")}}
-                 << 10;
-    QDBusConnection::sessionBus().asyncCall(notification);
+    auto *notification = new Cutefish::Notification(this);
+    notification->setDesktopEntry(QStringLiteral("cutefish-settings"));
+    notification->setIconName(QStringLiteral("preferences-system"));
+    notification->setBody(tr("Some applications may need to be restarted for the change to take effect."));
+    notification->setTimeout(10);
+    notification->setAutoDelete(true);
+    notification->show();
 }
