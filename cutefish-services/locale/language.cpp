@@ -120,8 +120,11 @@ void Language::setPreferredLanguages(const QStringList &languages)
         "org.freedesktop.Notifications", "Notify");
     // Only a running notification server shows it; none is started for it.
     notification.setAutoStartService(false);
-    notification << "cutefish-settings" << 0u << "preferences-system" << ""
+    // No app name: the shell titles it with the desktop entry's localized name.
+    notification << QString() << 0u << "preferences-system" << ""
                  << tr("Some applications may need to be restarted for the change to take effect.")
-                 << QStringList() << QVariantMap() << 10;
+                 << QStringList()
+                 << QVariantMap {{QStringLiteral("desktop-entry"), QStringLiteral("cutefish-settings")}}
+                 << 10;
     QDBusConnection::sessionBus().asyncCall(notification);
 }
