@@ -6,17 +6,17 @@
     <message>
         <location filename="../battery/battery.cpp" line="+269"/>
         <source>%1d</source>
-        <translation>%1&#xa0;d</translation>
+        <translation>%1d</translation>
     </message>
     <message>
         <location line="+6"/>
         <source>%1h</source>
-        <translation>%1&#xa0;h</translation>
+        <translation>%1h</translation>
     </message>
     <message>
         <location line="+7"/>
         <source>%1m</source>
-        <translation>%1&#xa0;min</translation>
+        <translation>%1m</translation>
     </message>
     <message>
         <location line="+9"/>
