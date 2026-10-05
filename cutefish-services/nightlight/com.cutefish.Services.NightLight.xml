@@ -7,6 +7,8 @@
     <property name="customStart" type="i" access="read"/>
     <property name="customEnd" type="i" access="read"/>
     <property name="available" type="b" access="read"/>
+    <property name="sunset" type="i" access="read"/>
+    <property name="sunrise" type="i" access="read"/>
     <method name="setEnabled">
         <arg name="enabled" type="b" direction="in"/>
     </method>
@@ -42,6 +44,12 @@
     </signal>
     <signal name="availableChanged">
         <arg name="available" type="b"/>
+    </signal>
+    <signal name="sunsetChanged">
+        <arg name="minutes" type="i"/>
+    </signal>
+    <signal name="sunriseChanged">
+        <arg name="minutes" type="i"/>
     </signal>
   </interface>
 </node>

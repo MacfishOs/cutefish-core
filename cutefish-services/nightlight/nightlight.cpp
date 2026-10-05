@@ -41,6 +41,11 @@ int minutesOfDay(int minutes)
     return (minutes % kMinutesPerDay + kMinutesPerDay) % kMinutesPerDay;
 }
 
+int minutesOfDay(QTime time)
+{
+    return time.hour() * 60 + time.minute();
+}
+
 } // namespace
 
 NightLight::NightLight(QObject *parent, Clock clock)
@@ -198,6 +203,7 @@ void NightLight::refresh(Reason reason)
         m_settings.remove(QStringLiteral("NightLight/HoldUntil"));
         m_settings.sync();
     }
+    updateSunTimes();
     if (m_schedule == Never) {
         arm({});
         return;
@@ -268,11 +274,32 @@ void NightLight::updateAvailable()
     emit availableChanged(available);
 }
 
+void NightLight::updateSunTimes()
+{
+    const QDateTime now = m_clock();
+    const NightLightSchedule::Times today = sunTimesFor(now.date());
+    const NightLightSchedule::Times tomorrow = sunTimesFor(now.date().addDays(1));
+    const int sunset = minutesOfDay(today.start > now.time() ? today.start : tomorrow.start);
+    const int sunrise = minutesOfDay(today.end > now.time() ? today.end : tomorrow.end);
+    if (sunset != m_sunset) {
+        m_sunset = sunset;
+        emit sunsetChanged(sunset);
+    }
+    if (sunrise != m_sunrise) {
+        m_sunrise = sunrise;
+        emit sunriseChanged(sunrise);
+    }
+}
+
 NightLightSchedule::Times NightLight::timesFor(QDate date)
 {
     if (m_schedule == Custom)
         return {timeOfDay(m_customStart), timeOfDay(m_customEnd)};
+    return sunTimesFor(date);
+}
 
+NightLightSchedule::Times NightLight::sunTimesFor(QDate date)
+{
     const QByteArray zone = QTimeZone::systemTimeZoneId();
     if (zone != m_zone) {
         m_zone = zone;

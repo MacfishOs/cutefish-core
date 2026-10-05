@@ -519,6 +519,25 @@ private slots:
         QCOMPARE(nightLight->nextCheckpoint(), at(3, 18));
     }
 
+    void theSunTimesAreTheScheduleTurnsToCome()
+    {
+        const auto minutes = [](const QDateTime &turn) {
+            return turn.time().hour() * 60 + turn.time().minute();
+        };
+        m_now = at(2, 12);
+        auto nightLight = start();
+        nightLight->setSchedule(NightLight::SunsetToSunrise);
+        QVERIFY(!nightLight->enabled());
+        QCOMPARE(nightLight->sunset(), minutes(nightLight->nextCheckpoint()));
+
+        m_now = nightLight->nextCheckpoint();
+        nightLight->checkpointForTesting();
+        QVERIFY(nightLight->enabled());
+        QCOMPARE(nightLight->sunrise(), minutes(nightLight->nextCheckpoint()));
+        // Today's sunset has passed; tomorrow's is a minute or two away from it.
+        QVERIFY(std::abs(nightLight->sunset() - minutes(m_now)) <= 3);
+    }
+
     void theSessionStartsWhereTheScheduleIs()
     {
         {

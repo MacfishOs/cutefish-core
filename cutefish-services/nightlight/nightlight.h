@@ -32,6 +32,8 @@ class NightLight : public QObject, protected QDBusContext
     Q_PROPERTY(int customStart READ customStart NOTIFY customStartChanged)
     Q_PROPERTY(int customEnd READ customEnd NOTIFY customEndChanged)
     Q_PROPERTY(bool available READ available NOTIFY availableChanged)
+    Q_PROPERTY(int sunset READ sunset NOTIFY sunsetChanged)
+    Q_PROPERTY(int sunrise READ sunrise NOTIFY sunriseChanged)
 
 public:
     // Ash's ScheduleType.
@@ -58,6 +60,12 @@ public:
     int customStart() const { return m_customStart; }
 
     int customEnd() const { return m_customEnd; }
+
+    // The next sunset and sunrise the schedule turns at, in minutes after
+    // midnight; shown by Settings for the sunset to sunrise schedule.
+    int sunset() const { return m_sunset; }
+
+    int sunrise() const { return m_sunrise; }
 
     // Whether a display the compositor shows can be tinted.
     bool available() const { return m_available; }
@@ -90,6 +98,8 @@ signals:
     void customStartChanged(int minutes);
     void customEndChanged(int minutes);
     void availableChanged(bool available);
+    void sunsetChanged(int minutes);
+    void sunriseChanged(int minutes);
 
 private slots:
     void onPrepareForSleep(bool sleeping);
@@ -116,7 +126,9 @@ private:
     void endPreview();
     void sendToCompositor(std::chrono::milliseconds duration);
     void updateAvailable();
+    void updateSunTimes();
     NightLightSchedule::Times timesFor(QDate date);
+    NightLightSchedule::Times sunTimesFor(QDate date);
     void write(const QString &key, const QVariant &value);
 
     QSettings m_settings;
@@ -130,6 +142,8 @@ private:
     int m_schedule = Never;
     int m_customStart = 18 * 60;
     int m_customEnd = 6 * 60;
+    int m_sunset = 18 * 60;
+    int m_sunrise = 6 * 60;
     bool m_available = false;
     bool m_previewing = false;
     QByteArray m_zone;
