@@ -17,9 +17,9 @@
 #include <xdg-foreign-unstable-v2-server-protocol.h>
 #include <xdg-shell-server-protocol.h>
 
-namespace {
+static const char socketName[] = "wayland-parent-test";
 
-const char socketName[] = "wayland-parent-test";
+namespace {
 
 // A compositor that accepts every request: it makes the objects a request
 // creates, drops an object on its destroy request and counts the objects that

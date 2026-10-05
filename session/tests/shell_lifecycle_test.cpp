@@ -13,14 +13,15 @@
 #include "shellconnection.h"
 #include "shellprocess.h"
 
-namespace {
-QString controlSocketPath()
+static QString controlSocketPath()
 {
     return QStringLiteral("%1/cutefish-shell-lifecycle-test.control")
         .arg(QString::fromLocal8Bit(qgetenv("XDG_RUNTIME_DIR").isEmpty()
                                         ? QByteArray("/tmp")
                                         : qgetenv("XDG_RUNTIME_DIR")));
 }
+
+namespace {
 
 // A stand-in for the compositor's control channel: accepts one connection and
 // collects the descriptors sent over it.
@@ -99,6 +100,7 @@ private:
     int m_listenFd = -1;
     int m_clientFd = -1;
 };
+
 } // namespace
 
 class ShellLifecycleTest : public QObject
@@ -193,11 +195,10 @@ private slots:
     }
 };
 
-namespace {
 // Runs as the shell: verifies its own privileged environment, then starts a
 // grandchild the way ApplicationRuntime starts an application and verifies that
 // nothing privileged came along.
-int runPrivilegedChild(QCoreApplication& app)
+static int runPrivilegedChild(QCoreApplication& app)
 {
     if (qgetenv("WAYLAND_DISPLAY") != "shell-test-socket")
         return 3;
@@ -233,7 +234,7 @@ int runPrivilegedChild(QCoreApplication& app)
 }
 
 // Runs as an application the shell launched.
-int runGrandchild()
+static int runGrandchild()
 {
     if (qEnvironmentVariableIsSet("WAYLAND_SOCKET"))
         return 20;
@@ -247,7 +248,6 @@ int runGrandchild()
 
     return 0;
 }
-} // namespace
 
 int main(int argc, char** argv)
 {

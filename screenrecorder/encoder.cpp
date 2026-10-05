@@ -25,39 +25,37 @@ extern "C" {
 
 Q_LOGGING_CATEGORY(cfRecorder, "cutefish.recorder", QtInfoMsg)
 
-namespace {
-
-constexpr AVRational kVideoTimeBase {1, 90000};
+static constexpr AVRational kVideoTimeBase {1, 90000};
 // H.264 levels and the GPU encoders stop around here.
-constexpr int kMaximumDimension = 4096;
+static constexpr int kMaximumDimension = 4096;
 // No more than this is held back waiting for the first frame.
-constexpr qint64 kEarlyAudioLimitNs = 5'000'000'000;
+static constexpr qint64 kEarlyAudioLimitNs = 5'000'000'000;
 // Constant quality: screen text stays sharp, and a still screen costs nothing.
-constexpr int kVaapiQp = 18;
-constexpr char kX264Crf[] = "18";
+static constexpr int kVaapiQp = 18;
+static constexpr char kX264Crf[] = "18";
 // Enough surfaces for what the encoder holds on to, the frame waiting for its
 // duration and the one being converted.
-constexpr int kSurfacePool = 16;
+static constexpr int kSurfacePool = 16;
 
-QString avError(int code)
+static QString avError(int code)
 {
     char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
     av_strerror(code, buffer, sizeof(buffer));
     return QString::fromUtf8(buffer);
 }
 
-int evenFloor(int value)
+static int evenFloor(int value)
 {
     return qMax(2, value & ~1);
 }
 
-qint64 toVideoPts(qint64 ns)
+static qint64 toVideoPts(qint64 ns)
 {
     return av_rescale_q(ns, AVRational {1, 1000000000}, kVideoTimeBase);
 }
 
 // The size a video of this crop gets: even, and within what encoders take.
-QSize videoSize(const QRect &crop)
+static QSize videoSize(const QRect &crop)
 {
     QSize size(evenFloor(crop.width()), evenFloor(crop.height()));
     if (size.width() > kMaximumDimension || size.height() > kMaximumDimension) {
@@ -67,7 +65,7 @@ QSize videoSize(const QRect &crop)
     return size;
 }
 
-AVCodecContext *videoContext(const AVCodec *codec, const QSize &size, const AVFormatContext *format)
+static AVCodecContext *videoContext(const AVCodec *codec, const QSize &size, const AVFormatContext *format)
 {
     AVCodecContext *context = avcodec_alloc_context3(codec);
     context->width = size.width();
@@ -83,8 +81,6 @@ AVCodecContext *videoContext(const AVCodec *codec, const QSize &size, const AVFo
         context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     return context;
 }
-
-} // namespace
 
 Encoder::Encoder(QObject *parent)
     : QObject(parent)

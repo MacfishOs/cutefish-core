@@ -56,7 +56,9 @@ const QDBusArgument &operator>>(const QDBusArgument &arg, AuxiliaryUnit &value)
     return arg;
 }
 
-void registerTypes()
+} // namespace
+
+static void registerTypes()
 {
     static const bool registered = [] {
         qDBusRegisterMetaType<UnitProperty>();
@@ -70,7 +72,7 @@ void registerTypes()
 
 // systemd's unit name escaping: [a-zA-Z0-9:_.] pass, a leading '.' and
 // everything else become \xNN of the UTF-8 byte.
-QString escape(const QString &text)
+static QString escape(const QString &text)
 {
     const QByteArray bytes = text.toUtf8();
     QString result;
@@ -85,8 +87,6 @@ QString escape(const QString &text)
     }
     return result;
 }
-
-} // namespace
 
 Q_DECLARE_METATYPE(UnitProperty)
 Q_DECLARE_METATYPE(AuxiliaryUnit)

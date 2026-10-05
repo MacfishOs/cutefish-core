@@ -20,12 +20,14 @@ struct Kind {
     const char *icon;
 };
 
-const Kind kinds[] = {
+} // namespace
+
+static const Kind kinds[] = {
         {"screen-recording", "ScreenRecordingContent.qml", "video-display"},
         {"computer-control", "ComputerControlContent.qml", "preferences-desktop-remote-desktop"},
 };
 
-const Kind *findKind(const QString &name)
+static const Kind *findKind(const QString &name)
 {
     for (const auto &kind : kinds) {
         if (name == QLatin1String(kind.name))
@@ -37,7 +39,7 @@ const Kind *findKind(const QString &name)
 // D-Bus containers arrive as QDBusArgument; QML wants plain values. Nested
 // dictionaries are pulled out as maps explicitly: QtDBus does not turn an
 // element of an `aa{sv}` into anything usable on its own.
-QVariant plain(const QVariant &value)
+static QVariant plain(const QVariant &value)
 {
     if (value.userType() == qMetaTypeId<QDBusArgument>()) {
         const auto argument = value.value<QDBusArgument>();
@@ -89,7 +91,7 @@ QVariant plain(const QVariant &value)
 
 // The application shown to the user comes from the caller's app id; an app
 // without a desktop file is still named, just by its id.
-QJsonObject describeApplication(const QString &appId)
+static QJsonObject describeApplication(const QString &appId)
 {
     QJsonObject result {{"id", appId}, {"name", appId}, {"icon", QString()}};
     if (appId.isEmpty())
@@ -106,8 +108,6 @@ QJsonObject describeApplication(const QString &appId)
     result.insert("icon", data.icon);
     return result;
 }
-
-} // namespace
 
 bool PermissionPrompt::supports(const QString &kind)
 {

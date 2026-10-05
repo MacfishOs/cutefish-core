@@ -9,8 +9,9 @@
 
 using namespace cutefish::display;
 
+static const QString displayService = QStringLiteral("com.cutefish.DisplayConfig.PowerTest");
+
 namespace {
-const QString displayService = QStringLiteral("com.cutefish.DisplayConfig.PowerTest");
 
 // What the fakes were asked, read from the test thread.
 struct Log {
@@ -251,6 +252,7 @@ private:
     QThread m_thread;
     std::unique_ptr<QDBusConnection> m_bus;
 };
+
 } // namespace
 
 class PowerPolicyTest : public QObject

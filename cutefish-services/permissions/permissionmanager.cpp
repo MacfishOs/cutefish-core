@@ -4,15 +4,11 @@
 #include <QDBusServiceWatcher>
 #include <QQmlEngine>
 
-namespace {
-
-void error(const QDBusMessage &message, const QString &name, const QString &description)
+static void error(const QDBusMessage &message, const QString &name, const QString &description)
 {
     message.setDelayedReply(true);
     QDBusConnection::sessionBus().send(message.createErrorReply(name, description));
 }
-
-} // namespace
 
 PermissionManager::PermissionManager(QObject *parent)
     : QObject(parent)

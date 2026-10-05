@@ -9,12 +9,12 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-namespace {
+static constexpr int DdcAddress = 0x37;
+static constexpr quint8 HostAddress = 0x51;
+static constexpr quint8 BrightnessCode = 0x10;
+static constexpr int Attempts = 3;
 
-constexpr int DdcAddress = 0x37;
-constexpr quint8 HostAddress = 0x51;
-constexpr quint8 BrightnessCode = 0x10;
-constexpr int Attempts = 3;
+namespace {
 
 class I2cDevice
 {

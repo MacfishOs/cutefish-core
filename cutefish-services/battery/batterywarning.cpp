@@ -11,9 +11,7 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 
-namespace {
-const QString displayDevice = QStringLiteral("/org/freedesktop/UPower/devices/DisplayDevice");
-}
+static const QString displayDevice = QStringLiteral("/org/freedesktop/UPower/devices/DisplayDevice");
 
 BatteryWarning::BatteryWarning(QObject *parent)
     : QObject(parent)

@@ -9,18 +9,16 @@
 
 namespace NightLightSchedule {
 
-namespace {
+static constexpr double kPi = 3.14159265358979323846;
 
-constexpr double kPi = 3.14159265358979323846;
-
-double radians(double degrees)
+static double radians(double degrees)
 {
     return degrees * kPi / 180.0;
 }
 
 // One ISO 6709 angle of zone.tab: a sign, the degrees in `degreeDigits`
 // digits, then minutes and optionally seconds.
-std::optional<double> parseAngle(const QByteArray &text, int degreeDigits)
+static std::optional<double> parseAngle(const QByteArray &text, int degreeDigits)
 {
     if (text.isEmpty() || (text[0] != '+' && text[0] != '-'))
         return std::nullopt;
@@ -37,8 +35,6 @@ std::optional<double> parseAngle(const QByteArray &text, int degreeDigits)
     const double value = degrees + minutes / 60.0 + seconds / 3600.0;
     return text[0] == '-' ? -value : value;
 }
-
-} // namespace
 
 Position position(const QDateTime &now, const TimesForDate &times)
 {

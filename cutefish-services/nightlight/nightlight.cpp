@@ -13,40 +13,36 @@
 
 using namespace std::chrono_literals;
 
-namespace {
-
-constexpr auto s_group = "NightLight";
+static constexpr auto s_group = "NightLight";
 
 // kManualAnimationDuration and kAutomaticAnimationDuration.
-constexpr std::chrono::milliseconds kManualDuration = 1s;
-constexpr std::chrono::milliseconds kScheduledDuration = 60s;
+static constexpr std::chrono::milliseconds kManualDuration = 1s;
+static constexpr std::chrono::milliseconds kScheduledDuration = 60s;
 // Settings sends a held slider's value every 100 ms; a second would trail it.
-constexpr std::chrono::milliseconds kPreviewDuration = 100ms;
+static constexpr std::chrono::milliseconds kPreviewDuration = 100ms;
 
 // Ash's defaults: a custom schedule from 6 PM to 6 AM, and the same times for
 // sunset and sunrise where the location is unknown or the sun does not set.
-constexpr int kDefaultStart = 18 * 60;
-constexpr int kDefaultEnd = 6 * 60;
-constexpr double kDefaultTemperature = 0.5;
+static constexpr int kDefaultStart = 18 * 60;
+static constexpr int kDefaultEnd = 6 * 60;
+static constexpr double kDefaultTemperature = 0.5;
 
-constexpr int kMinutesPerDay = 24 * 60;
+static constexpr int kMinutesPerDay = 24 * 60;
 
-QTime timeOfDay(int minutes)
+static QTime timeOfDay(int minutes)
 {
     return QTime(0, 0).addSecs(minutes * 60);
 }
 
-int minutesOfDay(int minutes)
+static int minutesOfDay(int minutes)
 {
     return (minutes % kMinutesPerDay + kMinutesPerDay) % kMinutesPerDay;
 }
 
-int minutesOfDay(QTime time)
+static int minutesOfDay(QTime time)
 {
     return time.hour() * 60 + time.minute();
 }
-
-} // namespace
 
 NightLight::NightLight(QObject *parent, Clock clock)
     : QObject(parent)

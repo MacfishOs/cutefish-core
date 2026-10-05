@@ -13,12 +13,8 @@
 
 #include <wayland-client.h>
 
-namespace {
-
 // Buffer ids travel to the encoder with the session they belong to.
-constexpr int kSessionStride = 1 << 16;
-
-} // namespace
+static constexpr int kSessionStride = 1 << 16;
 
 Recorder::Recorder(const Options &options, QObject *parent)
     : QObject(parent)

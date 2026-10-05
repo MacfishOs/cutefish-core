@@ -4,20 +4,17 @@
 #include "dimdisplayaction.h"
 #include "preferences.h"
 
-namespace {
-constexpr auto s_powerGroup = "Power";
+static constexpr auto s_powerGroup = "Power";
 
-int normalizedTimeout(int timeout)
+static int normalizedTimeout(int timeout)
 {
     return timeout < 0 ? -1 : qMax(1, timeout);
 }
 
-int readTimeout(const QSettings &settings, const QString &key, int fallback)
+static int readTimeout(const QSettings &settings, const QString &key, int fallback)
 {
     return settings.contains(key) ? normalizedTimeout(settings.value(key).toInt()) : fallback;
 }
-
-} // namespace
 
 PowerManager::PowerManager(UPowerManager *upowerManager, QObject *parent)
     : QObject(parent)

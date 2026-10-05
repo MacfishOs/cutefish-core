@@ -9,9 +9,8 @@
 #include <QElapsedTimer>
 #include <QThread>
 
-namespace {
 // One byte of payload so the ancillary data has a datagram to ride on.
-bool sendFd(int socket, int fd)
+static bool sendFd(int socket, int fd)
 {
     char payload = 'S';
     iovec iov {};
@@ -37,7 +36,6 @@ bool sendFd(int socket, int fd)
 
     return sendmsg(socket, &message, MSG_NOSIGNAL) == 1;
 }
-} // namespace
 
 ShellConnection::ShellConnection(QObject* parent)
     : QObject(parent)

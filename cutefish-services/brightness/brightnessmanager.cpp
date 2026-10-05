@@ -12,12 +12,10 @@
 
 #include <algorithm>
 
-namespace {
+static const QString BacklightDir = QStringLiteral("/sys/class/backlight/");
+static const QString DrmDir = QStringLiteral("/sys/class/drm/");
 
-const QString BacklightDir = QStringLiteral("/sys/class/backlight/");
-const QString DrmDir = QStringLiteral("/sys/class/drm/");
-
-QString readSysfs(const QString &path)
+static QString readSysfs(const QString &path)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
@@ -25,13 +23,13 @@ QString readSysfs(const QString &path)
     return QString::fromLatin1(file.readAll()).trimmed();
 }
 
-QString brightnessFile(const QString &backlight)
+static QString brightnessFile(const QString &backlight)
 {
     return BacklightDir + backlight + QStringLiteral("/brightness");
 }
 
 // Connected DRM connectors, e.g. "card0-eDP-1".
-QStringList connectedConnectors()
+static QStringList connectedConnectors()
 {
     QStringList result;
     const QStringList entries = QDir(DrmDir).entryList(
@@ -43,14 +41,14 @@ QStringList connectedConnectors()
     return result;
 }
 
-bool isInternalConnector(const QString &connector)
+static bool isInternalConnector(const QString &connector)
 {
     const QString type = connector.section(QLatin1Char('-'), 1, 1);
     return type == QLatin1String("eDP") || type == QLatin1String("LVDS")
             || type == QLatin1String("DSI");
 }
 
-int typeRank(const QString &type)
+static int typeRank(const QString &type)
 {
     if (type == QLatin1String("firmware"))
         return 0;
@@ -58,8 +56,6 @@ int typeRank(const QString &type)
         return 1;
     return 2;
 }
-
-} // namespace
 
 BrightnessManager::BrightnessManager(QObject *parent)
     : QObject(parent)

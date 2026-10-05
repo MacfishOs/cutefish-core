@@ -18,20 +18,18 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-namespace {
+static constexpr qint64 kOriginNs = 1'000'000'000'000;
+static constexpr qint64 kFrameNs = 33'333'333;
+static constexpr char kRenderNode[] = "/dev/dri/renderD128";
 
-constexpr qint64 kOriginNs = 1'000'000'000'000;
-constexpr qint64 kFrameNs = 33'333'333;
-constexpr char kRenderNode[] = "/dev/dri/renderD128";
-
-QImage frame(const QSize &size, int index)
+static QImage frame(const QSize &size, int index)
 {
     QImage image(size, QImage::Format_ARGB32_Premultiplied);
     image.fill(QColor::fromHsv((index * 12) % 360, 200, 220));
     return image;
 }
 
-QByteArray tone(int frames, int offset)
+static QByteArray tone(int frames, int offset)
 {
     QByteArray samples(frames * Encoder::kChannels * int(sizeof(float)), Qt::Uninitialized);
     auto *data = reinterpret_cast<float *>(samples.data());
@@ -44,6 +42,8 @@ QByteArray tone(int frames, int offset)
     return samples;
 }
 
+namespace {
+
 struct Probe {
     int videoStreams = 0;
     int audioStreams = 0;
@@ -54,7 +54,9 @@ struct Probe {
     AVCodecID audioCodec = AV_CODEC_ID_NONE;
 };
 
-Probe probe(const QString &path)
+} // namespace
+
+static Probe probe(const QString &path)
 {
     Probe result;
     AVFormatContext *format = nullptr;
@@ -79,7 +81,7 @@ Probe probe(const QString &path)
 }
 
 // The luma plane of the last frame in the file.
-QImage lastLuma(const QString &path)
+static QImage lastLuma(const QString &path)
 {
     QImage result;
     AVFormatContext *format = nullptr;
@@ -114,6 +116,8 @@ QImage lastLuma(const QString &path)
     avformat_close_input(&format);
     return result;
 }
+
+namespace {
 
 // DMA-BUFs on a render node, allocated the way the capture session does.
 class RenderNode

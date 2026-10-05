@@ -20,8 +20,10 @@ struct Globals {
     xdg_wm_dialog_v1 *dialogManager = nullptr;
 };
 
-void registryGlobal(void *data, wl_registry *registry, uint32_t name, const char *interface,
-                    uint32_t version)
+} // namespace
+
+static void registryGlobal(void *data, wl_registry *registry, uint32_t name, const char *interface,
+                           uint32_t version)
 {
     auto *globals = static_cast<Globals *>(data);
     if (std::strcmp(interface, zxdg_importer_v2_interface.name) == 0) {
@@ -34,7 +36,7 @@ void registryGlobal(void *data, wl_registry *registry, uint32_t name, const char
 }
 
 // Binds on a queue of our own, so this never steals events from Qt's.
-const Globals *foreignGlobals(wl_display *display)
+static const Globals *foreignGlobals(wl_display *display)
 {
     static Globals globals;
     static bool bound = false;
@@ -63,8 +65,6 @@ const Globals *foreignGlobals(wl_display *display)
     wl_event_queue_destroy(queue);
     return &globals;
 }
-
-} // namespace
 
 void applyWaylandParent(QWindow *window, const QString &parentWindow, bool modal)
 {

@@ -7,9 +7,7 @@
 #include <QDBusMessage>
 #include <QDebug>
 
-namespace {
-
-bool callLogind(const QString& method)
+static bool callLogind(const QString& method)
 {
     QDBusMessage message = QDBusMessage::createMethodCall(
             QStringLiteral("org.freedesktop.login1"), QStringLiteral("/org/freedesktop/login1"),
@@ -25,8 +23,6 @@ bool callLogind(const QString& method)
 
     return true;
 }
-
-} // namespace
 
 namespace Power {
 

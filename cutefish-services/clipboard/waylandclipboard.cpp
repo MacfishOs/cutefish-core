@@ -19,11 +19,11 @@
 #include "ext-data-control-v1-client-protocol.h"
 #include "wlr-data-control-unstable-v1-client-protocol.h"
 
-namespace {
+static constexpr qsizetype kMaxClipboardBytes = 64 * 1024 * 1024;
+static constexpr int kMaxFormats = 128;
+static constexpr int kTransferTimeoutMs = 5000;
 
-constexpr qsizetype kMaxClipboardBytes = 64 * 1024 * 1024;
-constexpr int kMaxFormats = 128;
-constexpr int kTransferTimeoutMs = 5000;
+namespace {
 
 class PipeTransfer : public QObject
 {
@@ -159,12 +159,14 @@ struct Protocol {
     uint32_t version;
 };
 
-const Protocol ext {&ext_data_control_manager_v1_interface, &ext_data_control_device_v1_interface,
-                    &ext_data_control_source_v1_interface, 1};
-const Protocol wlr {&zwlr_data_control_manager_v1_interface, &zwlr_data_control_device_v1_interface,
-                    &zwlr_data_control_source_v1_interface, 2};
+} // namespace
 
-void destroyProxy(wl_proxy*& proxy, uint32_t opcode)
+static const Protocol ext {&ext_data_control_manager_v1_interface, &ext_data_control_device_v1_interface,
+                           &ext_data_control_source_v1_interface, 1};
+static const Protocol wlr {&zwlr_data_control_manager_v1_interface, &zwlr_data_control_device_v1_interface,
+                           &zwlr_data_control_source_v1_interface, 2};
+
+static void destroyProxy(wl_proxy*& proxy, uint32_t opcode)
 {
     if (!proxy)
         return;
@@ -172,8 +174,6 @@ void destroyProxy(wl_proxy*& proxy, uint32_t opcode)
                            WL_MARSHAL_FLAG_DESTROY);
     proxy = nullptr;
 }
-
-} // namespace
 
 class WaylandClipboard::Private : public QObject
 {

@@ -23,26 +23,26 @@
 using namespace cutefish::display;
 using namespace NightLightSchedule;
 
-namespace {
+static const QString displayService = QStringLiteral("com.cutefish.DisplayConfig.NightLightTest");
 
-const QString displayService = QStringLiteral("com.cutefish.DisplayConfig.NightLightTest");
-
-QDateTime at(int day, int hour, int minute = 0)
+static QDateTime at(int day, int hour, int minute = 0)
 {
     return QDateTime(QDate(2026, 10, day), QTime(hour, minute), QTimeZone::UTC);
 }
 
-TimesForDate fixed(QTime start, QTime end)
+static TimesForDate fixed(QTime start, QTime end)
 {
     return [start, end](QDate) {
         return Times {start, end};
     };
 }
 
-int minutesBetween(const QDateTime &a, const QTime &b)
+static int minutesBetween(const QDateTime &a, const QTime &b)
 {
     return std::abs(a.time().secsTo(b)) / 60;
 }
+
+namespace {
 
 struct SetNightLightCall {
     double strength;

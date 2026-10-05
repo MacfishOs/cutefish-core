@@ -9,32 +9,30 @@
 #include <QDebug>
 #include <QTimer>
 
-namespace {
-constexpr auto s_screenSaverService = "org.freedesktop.ScreenSaver";
-constexpr auto s_screenSaverPath = "/ScreenSaver";
-constexpr auto s_screenSaverInterface = "org.freedesktop.ScreenSaver";
-constexpr auto s_logindService = "org.freedesktop.login1";
-constexpr auto s_logindPath = "/org/freedesktop/login1";
-constexpr auto s_logindInterface = "org.freedesktop.login1.Manager";
+static constexpr auto s_screenSaverService = "org.freedesktop.ScreenSaver";
+static constexpr auto s_screenSaverPath = "/ScreenSaver";
+static constexpr auto s_screenSaverInterface = "org.freedesktop.ScreenSaver";
+static constexpr auto s_logindService = "org.freedesktop.login1";
+static constexpr auto s_logindPath = "/org/freedesktop/login1";
+static constexpr auto s_logindInterface = "org.freedesktop.login1.Manager";
 
 // Without native display power the screen dims at these steps before it goes off.
-int halfDimTimeout(int timeout)
+static int halfDimTimeout(int timeout)
 {
     return timeout / 2;
 }
 
-int finalDimTimeout(int timeout)
+static int finalDimTimeout(int timeout)
 {
     return timeout * 3 / 4;
 }
 
 // A locked screen nobody is using goes dark this soon, whatever the user chose.
-constexpr int s_lockedDisplayOffTimeout = 30;
+static constexpr int s_lockedDisplayOffTimeout = 30;
 
 // Bounds the wait for a display change to settle, so a closed lid still sleeps.
-constexpr int s_dockedLidRetryInterval = 500;
-constexpr int s_dockedLidRetries = 10;
-} // namespace
+static constexpr int s_dockedLidRetryInterval = 500;
+static constexpr int s_dockedLidRetries = 10;
 
 using cutefish::display::ipc::ErrorCode;
 

@@ -8,15 +8,16 @@
 #include <QDBusMessage>
 #include <QTest>
 
-namespace {
-const QString displayDevice = QStringLiteral("/org/freedesktop/UPower/devices/DisplayDevice");
-const QString deviceInterface = QStringLiteral("org.freedesktop.UPower.Device");
+static const QString displayDevice = QStringLiteral("/org/freedesktop/UPower/devices/DisplayDevice");
+static const QString deviceInterface = QStringLiteral("org.freedesktop.UPower.Device");
 
 // The fakes live on a connection of their own, so every call crosses the bus.
-QDBusConnection fakeBus()
+static QDBusConnection fakeBus()
 {
     return QDBusConnection::connectToBus(QDBusConnection::SessionBus, QStringLiteral("fakes"));
 }
+
+namespace {
 
 struct Notice {
     uint replacesId;
@@ -24,7 +25,8 @@ struct Notice {
     QString body;
     int urgency;
 };
-}
+
+} // namespace
 
 class FakeUPower : public QObject
 {
