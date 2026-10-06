@@ -16,6 +16,7 @@ Item {
         function onFailure() {
             doneButton.enabled = true
             passwordInput.enabled = true
+            passwordInput.forceActiveFocus()
         }
     }
 
@@ -29,7 +30,18 @@ Item {
 
     Keys.enabled: true
     Keys.onEscapePressed: {
-        confirmation.setConfirmationResult("")
+        confirmation.rejected()
+    }
+
+    // An empty response would still count as an attempt, and pass on an
+    // account without a password.
+    function submit() {
+        if (!passwordInput.text)
+            return
+
+        doneButton.enabled = false
+        passwordInput.enabled = false
+        confirmation.setConfirmationResult(passwordInput.text)
     }
 
     Rectangle {
@@ -96,13 +108,10 @@ Item {
             selectByMouse: true
             focus: true
 
-            onAccepted: {
-                if (passwordInput.text)
-                    confirmation.setConfirmationResult(passwordInput.text)
-            }
+            onAccepted: root.submit()
 
             Keys.onEscapePressed: {
-                confirmation.setConfirmationResult("")
+                confirmation.rejected()
             }
         }
 
@@ -119,11 +128,7 @@ Item {
                 id: doneButton
                 text: "Authenticate"
                 primary: true
-                onClicked: {
-                    doneButton.enabled = false
-                    passwordInput.enabled = false
-                    confirmation.setConfirmationResult(passwordInput.text)
-                }
+                onClicked: root.submit()
             }
         }
     }
