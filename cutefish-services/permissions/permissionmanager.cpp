@@ -2,7 +2,6 @@
 #include "permissionprompt.h"
 
 #include <QDBusServiceWatcher>
-#include <QQmlEngine>
 
 static void error(const QDBusMessage &message, const QString &name, const QString &description)
 {
@@ -10,8 +9,9 @@ static void error(const QDBusMessage &message, const QString &name, const QStrin
     QDBusConnection::sessionBus().send(message.createErrorReply(name, description));
 }
 
-PermissionManager::PermissionManager(QObject *parent)
+PermissionManager::PermissionManager(std::function<QQmlEngine *()> engine, QObject *parent)
     : QObject(parent)
+    , m_engine(std::move(engine))
 {
     // The QML lives in this static library's resources.
     Q_INIT_RESOURCE(permissions);
@@ -25,14 +25,6 @@ PermissionManager::~PermissionManager()
     const auto prompts = m_prompts;
     m_prompts.clear();
     qDeleteAll(prompts);
-}
-
-QQmlEngine *PermissionManager::engine()
-{
-    if (!m_engine) {
-        m_engine = new QQmlEngine(this);
-    }
-    return m_engine;
 }
 
 void PermissionManager::Prompt(const QString &token, const QString &kind, const QString &appId,
@@ -49,7 +41,7 @@ void PermissionManager::Prompt(const QString &token, const QString &kind, const 
               QStringLiteral("Unknown permission kind"));
         return;
     }
-    auto *prompt = new PermissionPrompt(engine(), kind, appId, parentWindow, options, message, this);
+    auto *prompt = new PermissionPrompt(m_engine(), kind, appId, parentWindow, options, message, this);
     m_prompts.insert(token, prompt);
     connect(prompt, &PermissionPrompt::finished, this, [this, token, prompt] {
         m_prompts.remove(token);

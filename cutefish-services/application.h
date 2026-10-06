@@ -9,6 +9,7 @@
 #include "battery/upowermanager.h"
 #include "brightness/brightnessmanager.h"
 #include "clipboard/clipboard.h"
+#include "crash/crashmanager.h"
 #include "locale/language.h"
 #include "nightlight/nightlight.h"
 #include "permissions/permissionmanager.h"
@@ -26,6 +27,11 @@ public:
     void initTrash();
 
 private:
+    // One engine for every window of this process: FishUI sets up only the
+    // first engine that imports it.
+    QQmlEngine *engine();
+
+    QQmlEngine *m_engine = nullptr;
     ThemeManager *m_themeManager;
     BrightnessManager *m_brightnessManager;
     UPowerManager *m_upowerManager;
@@ -35,6 +41,7 @@ private:
     PowerManager *m_powerManager;
     NightLight *m_nightLight;
     PermissionManager *m_permissionManager;
+    CrashManager *m_crashManager;
     ProxyService *m_proxyService;
 };
 

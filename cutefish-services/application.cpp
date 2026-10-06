@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QLocale>
+#include <QQmlEngine>
 #include <QTranslator>
 
 #include <sys/stat.h>
@@ -23,7 +24,9 @@ Application::Application(int &argc, char **argv)
     , m_clipboard(new Clipboard(this))
     , m_powerManager(new PowerManager(m_upowerManager, this))
     , m_nightLight(new NightLight(this))
-    , m_permissionManager(new PermissionManager(this))
+    , m_permissionManager(new PermissionManager([this] { return engine(); }, this))
+    , m_crashManager(new CrashManager([this] { return engine(); },
+                                      [this] { return m_themeManager->systemFixedFont(); }, this))
     , m_proxyService(new ProxyService(this))
 {
     initTrash();
@@ -51,6 +54,13 @@ Application::Application(int &argc, char **argv)
     }
 
     QDBusConnection::sessionBus().registerService(QStringLiteral("com.cutefish.Services"));
+}
+
+QQmlEngine *Application::engine()
+{
+    if (!m_engine)
+        m_engine = new QQmlEngine(this);
+    return m_engine;
 }
 
 void Application::initTrash()

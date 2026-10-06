@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QObject>
 #include <QVariantMap>
+#include <functional>
 
 class PermissionPrompt;
 class QQmlEngine;
@@ -18,7 +19,7 @@ class PermissionManager : public QObject
     Q_CLASSINFO("D-Bus Interface", "com.cutefish.Services.Permissions")
 
 public:
-    explicit PermissionManager(QObject *parent = nullptr);
+    explicit PermissionManager(std::function<QQmlEngine *()> engine, QObject *parent = nullptr);
     ~PermissionManager() override;
 
 public slots:
@@ -30,8 +31,6 @@ public slots:
     void Dismiss(const QString &token, const QDBusMessage &message);
 
 private:
-    QQmlEngine *engine();
-
-    QQmlEngine *m_engine = nullptr;
+    std::function<QQmlEngine *()> m_engine;
     QHash<QString, PermissionPrompt *> m_prompts;
 };

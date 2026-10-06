@@ -8,9 +8,11 @@ file(GLOB_RECURSE SOURCES
 )
 
 list(FILTER SOURCES EXCLUDE REGEX "/clipboard/")
+list(FILTER SOURCES EXCLUDE REGEX "/crash/")
 list(FILTER SOURCES EXCLUDE REGEX "/idle/")
 list(FILTER SOURCES EXCLUDE REGEX "/permissions/")
 add_subdirectory(clipboard)
+add_subdirectory(crash)
 add_subdirectory(idle)
 add_subdirectory(permissions)
 
@@ -46,6 +48,7 @@ target_link_libraries(${TARGET}
         Cutefish::Application
         Cutefish::Display
         cutefish-clipboard-backend
+        cutefish-crash
         Qt6::Core
         Qt6::Gui
         Qt6::DBus
