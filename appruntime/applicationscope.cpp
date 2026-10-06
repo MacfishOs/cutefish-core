@@ -11,6 +11,8 @@
 #include <QDebug>
 #include <QList>
 
+#include <signal.h>
+
 namespace {
 
 // (sv) and (sa(sv)): unit properties and auxiliary units.
@@ -120,4 +122,13 @@ void ApplicationScope::adopt(const QString &appId, uint pid)
                                         << reply.error().message();
                          watcher->deleteLater();
                      });
+}
+
+void ApplicationScope::killAll(const QString &unitName)
+{
+    auto call = QDBusMessage::createMethodCall(
+            QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
+            QStringLiteral("org.freedesktop.systemd1.Manager"), QStringLiteral("KillUnit"));
+    call.setArguments({unitName, QStringLiteral("all"), int(SIGKILL)});
+    QDBusConnection::sessionBus().asyncCall(call);
 }

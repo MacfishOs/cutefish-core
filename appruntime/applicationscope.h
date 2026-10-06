@@ -14,4 +14,8 @@ QString unitName(const QString &appId, uint pid);
 // logged and otherwise ignored: the application runs either way.
 void adopt(const QString &appId, uint pid);
 
+// Sends SIGKILL to every process left in the scope. A scope that already went
+// with its last process is no failure.
+void killAll(const QString &unitName);
+
 } // namespace ApplicationScope

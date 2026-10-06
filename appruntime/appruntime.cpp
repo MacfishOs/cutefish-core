@@ -157,6 +157,21 @@ bool AppRuntime::quitByPid(uint pid)
     return terminate(pid);
 }
 
+// The compositor has already ended the process itself; what is left is the
+// rest of its application, such as helpers it started.
+bool AppRuntime::forceQuitByPid(uint pid)
+{
+    const auto it = m_instances.constFind(pid);
+    if (it == m_instances.constEnd())
+        return false;
+    // The scope exists only for an id the registry knows; see startProcess().
+    DesktopEntry *entry = m_registry->byId(it.value().appId);
+    if (!entry)
+        return false;
+    ApplicationScope::killAll(ApplicationScope::unitName(entry->id(), pid));
+    return true;
+}
+
 bool AppRuntime::terminate(uint pid)
 {
     if (!isSafeTarget(pid) || !isAlive(pid) || !isOwnedByUser(pid))

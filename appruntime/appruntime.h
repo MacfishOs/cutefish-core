@@ -34,6 +34,7 @@ public slots:
     bool quitApplication(const QString &appId);
     bool quitAll();
     bool quitByPid(uint pid);
+    bool forceQuitByPid(uint pid);
     bool isRunning(const QString &appId) const;
     QStringList runningApplications() const;
     QList<uint> pidsForApplication(const QString &appId) const;

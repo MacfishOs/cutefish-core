@@ -42,6 +42,13 @@
       <arg name="pid" type="u" direction="in"/>
       <arg name="result" type="b" direction="out"/>
     </method>
+    <!-- Force quit of an application that stopped responding: SIGKILL to
+         everything in the scope the runtime started pid in. False when it
+         started no such process. -->
+    <method name="forceQuitByPid">
+      <arg name="pid" type="u" direction="in"/>
+      <arg name="result" type="b" direction="out"/>
+    </method>
     <method name="isRunning">
       <arg name="appId" type="s" direction="in"/>
       <arg name="result" type="b" direction="out"/>
