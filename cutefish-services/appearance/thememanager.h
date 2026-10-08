@@ -16,8 +16,6 @@ class ThemeManager : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool isDarkMode READ isDarkMode WRITE setDarkMode NOTIFY darkModeChanged)
-    Q_PROPERTY(bool darkModeDimsWallpaer READ darkModeDimsWallpaer WRITE setDarkModeDimsWallpaer
-                       NOTIFY darkModeDimsWallpaerChanged)
     Q_PROPERTY(bool backgroundVisible READ backgroundVisible WRITE setBackgroundVisible NOTIFY
                        backgroundVisibleChanged)
     Q_PROPERTY(bool continuousCorners READ continuousCorners WRITE setContinuousCorners NOTIFY
@@ -45,9 +43,6 @@ public:
 
     bool isDarkMode();
     void setDarkMode(bool darkMode);
-
-    bool darkModeDimsWallpaer() const;
-    void setDarkModeDimsWallpaer(bool value);
 
     bool continuousCorners() const;
     void setContinuousCorners(bool value);
@@ -103,7 +98,6 @@ signals:
     void userWallpapersChanged();
     void wallpaperFoldersChanged();
     void wallpaperFolderImagesChanged(QString folder);
-    void darkModeDimsWallpaerChanged();
     void continuousCornersChanged(bool continuousCorners);
     void accentColorChanged(int accentColor);
     void backgroundVisibleChanged();
@@ -122,7 +116,6 @@ private:
     WallpaperManager *m_wallpaperManager;
 
     bool m_isDarkMode;
-    bool m_darkModeDimsWallpaer;
     bool m_continuousCorners;
     int m_accentColor;
 

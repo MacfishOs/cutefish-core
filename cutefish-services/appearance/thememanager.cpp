@@ -50,7 +50,6 @@ ThemeManager::ThemeManager(QObject *parent)
 
     // init value
     m_isDarkMode = m_settings->value("DarkMode", false).toBool();
-    m_darkModeDimsWallpaer = m_settings->value("DarkModeDimsWallpaer", false).toBool();
     m_continuousCorners = m_settings->value("ContinuousCorners", true).toBool();
     m_accentColor = m_settings->value("AccentColor", 0).toInt();
     m_cursorTheme = m_settings->value("CursorTheme", "default").toString();
@@ -107,22 +106,6 @@ void ThemeManager::setDarkMode(bool darkMode)
     updateGtk3Config();
 
     emit darkModeChanged(m_isDarkMode);
-}
-
-bool ThemeManager::darkModeDimsWallpaer() const
-{
-    return m_darkModeDimsWallpaer;
-}
-
-void ThemeManager::setDarkModeDimsWallpaer(bool value)
-{
-    if (m_darkModeDimsWallpaer == value)
-        return;
-
-    m_darkModeDimsWallpaer = value;
-    m_settings->setValue("DarkModeDimsWallpaer", m_darkModeDimsWallpaer);
-
-    emit darkModeDimsWallpaerChanged();
 }
 
 bool ThemeManager::continuousCorners() const
