@@ -50,6 +50,10 @@ DimDisplayAction::DimDisplayAction(QObject *parent)
             QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
             QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("PropertiesChanged"),
             this, SLOT(onLogindPropertiesChanged(QString, QVariantMap, QStringList)));
+    QDBusConnection::systemBus().connect(
+            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
+            QString::fromLatin1(s_logindInterface), QStringLiteral("PrepareForSleep"),
+            this, SLOT(onPrepareForSleep(bool)));
     m_suspendTimer.setSingleShot(true);
     connect(&m_suspendTimer, &QTimer::timeout, this, &DimDisplayAction::onSuspendTimerTimeout);
     m_dockedLidRetryTimer.setSingleShot(true);
@@ -108,6 +112,15 @@ void DimDisplayAction::onWakeupFromIdle()
             m_displayOffTimer.invalidate();
         }
     });
+}
+
+// A wake with the lid still closed (power button, wake-on-LAN) reaches neither
+// onWakeupFromIdle nor handleLidOpened; without this every later suspend would
+// be refused as still requested.
+void DimDisplayAction::onPrepareForSleep(bool sleeping)
+{
+    if (!sleeping)
+        m_suspendRequested = false;
 }
 
 void DimDisplayAction::onIdleTimeout(int msec)

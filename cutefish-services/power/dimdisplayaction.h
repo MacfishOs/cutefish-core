@@ -30,6 +30,7 @@ public:
     void handleLidOpened();
 
 private Q_SLOTS:
+    void onPrepareForSleep(bool sleeping);
     void onScreenSaverActiveChanged(bool active);
     void onLogindPropertiesChanged(const QString &interfaceName,
                                    const QVariantMap &changedProperties,
