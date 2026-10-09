@@ -63,6 +63,9 @@ void writeGtkSettings(const GtkSettings &gtk)
             {QStringLiteral("cursor-size"), gtk.cursorSize},
             {QStringLiteral("enable-animations"), false},
     });
+    GSettingsKeyfile::writeGroup(QStringLiteral("org/gnome/desktop/wm/preferences"), {
+            {QStringLiteral("button-layout"), QStringLiteral("menu:minimize,maximize,close")},
+    });
 }
 
 static void ensureGtkCssImport(const QString &gtkDir)

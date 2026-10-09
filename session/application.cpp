@@ -180,13 +180,6 @@ void Application::initEnvironments()
     // ~/.config/glib-2.0/settings/keyfile, and no dconf daemon is needed.
     qputenv("GSETTINGS_BACKEND", "keyfile");
 
-    const QString gsettings = QStandardPaths::findExecutable(QStringLiteral("gsettings"));
-    if (!gsettings.isEmpty()) {
-        runSync(gsettings,
-                {QStringLiteral("set"), QStringLiteral("org.gnome.desktop.wm.preferences"),
-                 QStringLiteral("button-layout"), QStringLiteral("menu:minimize,maximize,close")});
-    }
-
     // Qt
     qputenv("QT_QPA_PLATFORM", "wayland");
     qputenv("GDK_BACKEND", "wayland");
