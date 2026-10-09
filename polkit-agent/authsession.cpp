@@ -3,10 +3,13 @@
 
 #include "authsession.h"
 
+#include <QFile>
+#include <QLocalSocket>
 #include <QProcess>
 #include <QDebug>
 
 static const QString helperPath = QStringLiteral("/usr/lib/polkit-1/polkit-agent-helper-1");
+static const QString helperSocketPath = QStringLiteral("/run/polkit/agent-helper.socket");
 
 // The helper escapes each message the way g_strescape() does: C escapes and
 // octal for control and non-ASCII bytes.
@@ -54,11 +57,83 @@ static QString unescape(const QByteArray &text)
 
 AuthSession::AuthSession(QObject *parent)
     : QObject(parent)
-    , m_process(new QProcess(this))
+    , m_socket(nullptr)
+    , m_process(nullptr)
+    , m_channel(nullptr)
     , m_succeeded(false)
     , m_finished(false)
 {
+}
+
+AuthSession::~AuthSession()
+{
+    m_finished = true;
+
+    if (m_socket) {
+        m_socket->disconnect(this);
+        m_socket->abort();
+    }
+
+    if (m_process) {
+        m_process->disconnect(this);
+
+        if (m_process->state() != QProcess::NotRunning) {
+            m_process->kill();
+            m_process->waitForFinished(1000);
+        }
+    }
+}
+
+void AuthSession::start(const QString &user, const QString &cookie)
+{
+    if (!QFile::exists(helperSocketPath) || !connectSocket(user))
+        startProcess(user);
+
+    // The cookie goes through the channel so other processes cannot read it.
+    m_channel->write(cookie.toUtf8() + '\n');
+}
+
+void AuthSession::respond(const QString &response)
+{
+    QByteArray line = response.toUtf8();
+    line.replace('\n', ' ');
+
+    m_channel->write(line + '\n');
+}
+
+bool AuthSession::connectSocket(const QString &user)
+{
+    m_socket = new QLocalSocket(this);
+    m_socket->connectToServer(helperSocketPath);
+
+    if (!m_socket->waitForConnected(1000)) {
+        qWarning() << "Cannot connect to" << helperSocketPath << m_socket->errorString()
+                   << "- falling back to" << helperPath;
+        delete m_socket;
+        m_socket = nullptr;
+        return false;
+    }
+
+    m_channel = m_socket;
+
+    connect(m_socket, &QLocalSocket::readyRead, this, &AuthSession::readOutput);
+    connect(m_socket, &QLocalSocket::disconnected, this, [this] {
+        readOutput();
+        finish(m_succeeded);
+    });
+
+    // The service learns who is asking from the socket, and whom to
+    // authenticate from this first line.
+    m_socket->write(user.toUtf8() + '\n');
+
+    return true;
+}
+
+void AuthSession::startProcess(const QString &user)
+{
+    m_process = new QProcess(this);
     m_process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
+    m_channel = m_process;
 
     connect(m_process, &QProcess::readyReadStandardOutput, this, &AuthSession::readOutput);
     connect(m_process, &QProcess::finished, this, [this] {
@@ -71,38 +146,13 @@ AuthSession::AuthSession(QObject *parent)
             finish(false);
         }
     });
-}
 
-AuthSession::~AuthSession()
-{
-    m_process->disconnect(this);
-    m_finished = true;
-
-    if (m_process->state() != QProcess::NotRunning) {
-        m_process->kill();
-        m_process->waitForFinished(1000);
-    }
-}
-
-void AuthSession::start(const QString &user, const QString &cookie)
-{
     m_process->start(helperPath, { user });
-
-    // The cookie goes through stdin so other processes cannot read it.
-    m_process->write(cookie.toUtf8() + '\n');
-}
-
-void AuthSession::respond(const QString &response)
-{
-    QByteArray line = response.toUtf8();
-    line.replace('\n', ' ');
-
-    m_process->write(line + '\n');
 }
 
 void AuthSession::readOutput()
 {
-    m_buffer.append(m_process->readAllStandardOutput());
+    m_buffer.append(m_channel->readAll());
 
     int newline;
 
@@ -134,8 +184,11 @@ void AuthSession::processLine(const QByteArray &line)
         m_succeeded = true;
     } else if (line.startsWith("FAILURE")) {
         m_succeeded = false;
+    } else if (line.startsWith("polkit-agent-helper-1: ")) {
+        // The socket-activated helper may send its stderr down the socket too.
+        qInfo().noquote() << line;
     } else {
-        qWarning() << "Unknown line from" << helperPath << line;
+        qWarning() << "Unknown line from the polkit helper" << line;
     }
 }
 

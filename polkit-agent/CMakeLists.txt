@@ -10,6 +10,7 @@ target_link_libraries(cutefish-polkit-agent
         Cutefish::Application
         Qt6::Core
         Qt6::DBus
+        Qt6::Network
         Qt6::Quick
         Qt6::QuickControls2
 

@@ -8,10 +8,13 @@
 #include <QByteArray>
 #include <QString>
 
+class QIODevice;
+class QLocalSocket;
 class QProcess;
 
-// One PAM conversation through polkit's setuid helper. Deleting the session
-// ends the conversation.
+// One PAM conversation through polkit's helper: the socket-activated service
+// when polkit provides one, else the setuid binary. Deleting the session ends
+// the conversation.
 class AuthSession : public QObject
 {
     Q_OBJECT
@@ -29,12 +32,16 @@ signals:
     void completed(bool gainedAuthorization);
 
 private:
+    bool connectSocket(const QString &user);
+    void startProcess(const QString &user);
     void readOutput();
     void processLine(const QByteArray &line);
     void finish(bool gainedAuthorization);
 
 private:
+    QLocalSocket *m_socket;
     QProcess *m_process;
+    QIODevice *m_channel;
     QByteArray m_buffer;
     bool m_succeeded;
     bool m_finished;
