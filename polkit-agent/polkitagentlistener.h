@@ -63,6 +63,10 @@ private:
         QDBusMessage call;
     };
 
+    bool sendRegistration();
+    void onPolkitOwnerChanged(const QString &service, const QString &oldOwner, const QString &newOwner);
+    void dropRequests();
+
     void startNext();
     void startSession();
     void releaseSession();
@@ -75,6 +79,8 @@ private:
     void onDialogAccepted();
 
 private:
+    QString m_objectPath;
+
     // polkitd sends requests concurrently; the first one owns the dialog.
     QList<Request> m_queue;
 

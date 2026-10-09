@@ -10,6 +10,7 @@
 #include <QDBusMetaType>
 #include <QDBusObjectPath>
 #include <QDBusReply>
+#include <QDBusServiceWatcher>
 #include <QDBusVariant>
 #include <QLocale>
 #include <QDebug>
@@ -112,6 +113,18 @@ bool PolKitAgentListener::registerAgent(const QString &objectPath)
         return false;
     }
 
+    m_objectPath = objectPath;
+
+    // polkitd forgets its agents when it restarts, e.g. on an upgrade.
+    QDBusServiceWatcher *watcher = new QDBusServiceWatcher(polkitService, bus,
+                                                           QDBusServiceWatcher::WatchForOwnerChange, this);
+    connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this, &PolKitAgentListener::onPolkitOwnerChanged);
+
+    return sendRegistration();
+}
+
+bool PolKitAgentListener::sendRegistration()
+{
     const QString sessionId = loginSessionId();
 
     if (sessionId.isEmpty())
@@ -128,9 +141,9 @@ bool PolKitAgentListener::registerAgent(const QString &objectPath)
                                                        QStringLiteral("RegisterAuthenticationAgent"));
     call << QVariant::fromValue(subject)
          << QLocale::system().name() + QStringLiteral(".UTF-8")
-         << objectPath;
+         << m_objectPath;
 
-    const QDBusMessage result = bus.call(call);
+    const QDBusMessage result = QDBusConnection::systemBus().call(call);
 
     if (result.type() == QDBusMessage::ErrorMessage) {
         qWarning() << "Cannot register the authentication agent:" << result.errorMessage();
@@ -138,6 +151,36 @@ bool PolKitAgentListener::registerAgent(const QString &objectPath)
     }
 
     return true;
+}
+
+void PolKitAgentListener::onPolkitOwnerChanged(const QString &service, const QString &oldOwner, const QString &newOwner)
+{
+    Q_UNUSED(service);
+
+    // The requests belong to the polkitd that is gone; their cookies mean
+    // nothing to the next one.
+    if (!oldOwner.isEmpty())
+        dropRequests();
+
+    if (!newOwner.isEmpty())
+        sendRegistration();
+}
+
+void PolKitAgentListener::dropRequests()
+{
+    releaseSession();
+
+    if (m_dialog) {
+        m_dialog->deleteLater();
+        m_dialog.clear();
+    }
+
+    m_hasResponse = false;
+    m_response.clear();
+    m_requestPending = false;
+
+    while (!m_queue.isEmpty())
+        reply(m_queue.takeFirst(), Withdrawn);
 }
 
 void PolKitAgentListener::BeginAuthentication(const QString &actionId,
