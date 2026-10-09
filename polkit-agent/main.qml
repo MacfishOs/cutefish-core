@@ -8,12 +8,23 @@ Item {
 
     property var heightValue: mainLayout.implicitHeight + 32
 
-    width: 450
+    width: 420
     height: heightValue
 
     Connections {
         target: confirmation
         function onFailure() {
+            doneButton.enabled = true
+            passwordInput.enabled = true
+            passwordInput.forceActiveFocus()
+        }
+
+        // Each further PAM question starts empty; a field still being typed
+        // in is left alone.
+        function onRequested() {
+            if (!passwordInput.enabled)
+                passwordInput.text = ""
+
             doneButton.enabled = true
             passwordInput.enabled = true
             passwordInput.forceActiveFocus()
@@ -102,8 +113,8 @@ Item {
 
         FishUI.TextField {
             id: passwordInput
-            placeholderText: qsTr("Password")
-            echoMode: FishUI.TextField.Password
+            placeholderText: confirmation.prompt !== "" ? confirmation.prompt : qsTr("Password")
+            echoMode: confirmation.echo ? TextInput.Normal : TextInput.Password
             Layout.fillWidth: true
             selectByMouse: true
             focus: true
@@ -113,6 +124,16 @@ Item {
             Keys.onEscapePressed: {
                 confirmation.rejected()
             }
+        }
+
+        FishUI.Label {
+            Layout.fillWidth: true
+            visible: confirmation.notice !== ""
+            text: confirmation.notice
+            textFormat: Text.PlainText
+            font.pixelSize: 14
+            wrapMode: Text.Wrap
+            color: confirmation.noticeIsError ? FishUI.Theme.redColor : FishUI.Theme.disabledTextColor
         }
 
         RowLayout {

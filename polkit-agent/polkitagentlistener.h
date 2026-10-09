@@ -7,52 +7,84 @@
 #include <QObject>
 #include <QString>
 #include <QPointer>
+#include <QList>
+#include <QMap>
+#include <QVariantMap>
+#include <QDBusContext>
+#include <QDBusMessage>
+#include <QDBusArgument>
 
-#include <PolkitQt1/Identity>
-#include <PolkitQt1/Details>
-#include <PolkitQt1/Agent/Listener>
-#include <PolkitQt1/Agent/Session>
+struct PolkitIdentity
+{
+    QString kind;
+    QVariantMap details;
+};
+
+typedef QList<PolkitIdentity> PolkitIdentityList;
+typedef QMap<QString, QString> PolkitDetails;
+
+QDBusArgument &operator<<(QDBusArgument &argument, const PolkitIdentity &identity);
+const QDBusArgument &operator>>(const QDBusArgument &argument, PolkitIdentity &identity);
+
+Q_DECLARE_METATYPE(PolkitIdentity)
 
 class Dialog;
-class PolKitAgentListener : public PolkitQt1::Agent::Listener
+class AuthSession;
+class PolKitAgentListener : public QObject, protected QDBusContext
 {
     Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.PolicyKit1.AuthenticationAgent")
 
 public:
     explicit PolKitAgentListener(QObject *parent = nullptr);
 
+    bool registerAgent(const QString &objectPath);
+
 public slots:
-    void initiateAuthentication(const QString &actionId,
-                                const QString &message,
-                                const QString &iconName,
-                                const PolkitQt1::Details &details,
-                                const QString &cookie,
-                                const PolkitQt1::Identity::List &identities,
-                                PolkitQt1::Agent::AsyncResult *result);
-
-    bool initiateAuthenticationFinish() { return true; }
-    // polkitd withdrew the request: the dialog and session go with it.
-    void cancelAuthentication();
-
-    void completed(bool gainedAuthorization);
+    void BeginAuthentication(const QString &actionId,
+                             const QString &message,
+                             const QString &iconName,
+                             const PolkitDetails &details,
+                             const QString &cookie,
+                             const PolkitIdentityList &identities);
+    void CancelAuthentication(const QString &cookie);
 
 private:
-    void tryAgain();
-    void finishObtainPrivilege(bool gainedAuthorization);
+    enum Outcome {
+        Completed,
+        Dismissed,
+        Withdrawn,
+    };
 
-private slots:
+    struct Request {
+        QString message;
+        QString cookie;
+        QString user;
+        QDBusMessage call;
+    };
+
+    void startNext();
+    void startSession();
+    void releaseSession();
+    void finishCurrent(Outcome outcome);
+    void reply(const Request &request, Outcome outcome);
+
+    void onRequest(const QString &prompt, bool echo);
+    void onNotice(const QString &text, bool error);
+    void onCompleted(bool gainedAuthorization);
     void onDialogAccepted();
-    void onDialogCanceled();
 
 private:
-    QPointer<Dialog> m_dialog;
-    QPointer<PolkitQt1::Agent::Session> m_session;
-    PolkitQt1::Agent::AsyncResult *m_result;
-    PolkitQt1::Identity m_selectedUser;
-    QString m_cookie;
+    // polkitd sends requests concurrently; the first one owns the dialog.
+    QList<Request> m_queue;
 
-    bool m_inProgress;
-    bool m_wasCancelled;
+    QPointer<Dialog> m_dialog;
+    QPointer<AuthSession> m_session;
+
+    // A response typed before PAM asked for one.
+    QString m_response;
+    bool m_hasResponse;
+    bool m_requestPending;
 
     int m_numTries;
 };

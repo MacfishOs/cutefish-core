@@ -1,17 +1,7 @@
-find_package(PkgConfig)
-pkg_check_modules(POLKIT_AGENT REQUIRED polkit-agent-1)
-message(STATUS "polkit agent: ${POLKIT_AGENT_INCLUDE_DIRS} ${POLKIT_AGENT_LIBRARIES}")
-
-find_package(PolkitQt6-1 REQUIRED)
-
-include_directories(
-    ${POLKIT_AGENT_INCLUDE_DIRS}
-    "${POLKITQT-1_INCLUDE_DIR}"
-)
-
 add_executable(cutefish-polkit-agent
     main.cpp
     polkitagentlistener.cpp
+    authsession.cpp
     dialog.cpp
     qml.qrc
 )
@@ -19,14 +9,11 @@ add_executable(cutefish-polkit-agent
 target_link_libraries(cutefish-polkit-agent
         Cutefish::Application
         Qt6::Core
+        Qt6::DBus
         Qt6::Quick
         Qt6::QuickControls2
 
         # FishUI
-
-        ${POLKITQT-1_CORE_LIBRARY}
-        ${POLKITQT-1_AGENT_LIBRARY}
-        ${POLKIT_AGENT_LDFLAGS}
 )
 
 file(GLOB TS_FILES translations/*.ts)

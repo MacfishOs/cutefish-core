@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <PolkitQt1/Subject>
 #include <QFile>
 #include <QGuiApplication>
 #include <QLocale>
@@ -31,10 +30,8 @@ int main(int argc, char *argv[])
     }
 
     PolKitAgentListener listener;
-    PolkitQt1::UnixSessionSubject session(getpid());
 
-    if (!listener.registerListener(session,
-                                   QStringLiteral("/com/cutefish/PolicyKit1/AuthenticationAgent")))
+    if (!listener.registerAgent(QStringLiteral("/com/cutefish/PolicyKit1/AuthenticationAgent")))
         return -1;
 
     return app.exec();

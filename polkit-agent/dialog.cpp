@@ -14,6 +14,8 @@ Dialog::Dialog(const QString &message, const QString &identity)
     : m_message(message)
     , m_identity(identity)
     , m_password(QString())
+    , m_echo(false)
+    , m_noticeIsError(false)
     , m_view(new QQuickView)
 {
     qDebug() << "Creating ConfirmationDialog";
@@ -59,4 +61,24 @@ void Dialog::show()
 void Dialog::authenticationFailure()
 {
     emit failure();
+}
+
+void Dialog::setRequest(const QString &prompt, bool echo)
+{
+    m_prompt = prompt;
+    m_echo = echo;
+
+    emit requestChanged();
+    emit requested();
+}
+
+void Dialog::setNotice(const QString &text, bool error)
+{
+    if (m_notice == text && m_noticeIsError == error)
+        return;
+
+    m_notice = text;
+    m_noticeIsError = error;
+
+    emit noticeChanged();
 }
