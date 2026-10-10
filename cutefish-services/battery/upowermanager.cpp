@@ -69,16 +69,27 @@ UPowerManager::UPowerManager(QObject *parent)
         }
 
         const auto pathList = reply.value();
-        for (const QDBusObjectPath &path : pathList) {
-            UPowerDevice *device = new UPowerDevice(path.path(), this);
-            Battery *battery = new Battery(device, this);
-
-            if (battery->type() != Battery::PrimaryBattery) {
-                device->deleteLater();
-                battery->deleteLater();
-            }
-        }
+        for (const QDBusObjectPath &path : pathList)
+            addDevice(path.path());
     }
+}
+
+void UPowerManager::addDevice(const QString &path)
+{
+    if (m_batteries.contains(path))
+        return;
+
+    UPowerDevice *device = new UPowerDevice(path, this);
+    Battery *battery = new Battery(device, this);
+
+    if (battery->type() != Battery::PrimaryBattery) {
+        device->deleteLater();
+        battery->deleteLater();
+        return;
+    }
+
+    device->setParent(battery);
+    m_batteries.insert(path, battery);
 }
 
 bool UPowerManager::onBattery() const
@@ -121,10 +132,11 @@ void UPowerManager::onPropertiesChanged(const QString &ifaceName, const QVariant
 
 void UPowerManager::onDeviceAdded(const QDBusObjectPath &path)
 {
-    qDebug() << "onDeviceAdded()" << path.path();
+    addDevice(path.path());
 }
 
 void UPowerManager::onDeviceRemoved(const QDBusObjectPath &path)
 {
-    qDebug() << "onDeviceRemoved()" << path.path();
+    // Deleted now, so its D-Bus path is free for a battery added in the same batch.
+    delete m_batteries.take(path.path());
 }

@@ -11,6 +11,9 @@
 
 #include <QObject>
 #include <QDBusInterface>
+#include <QHash>
+
+class Battery;
 
 class UPowerManager : public QObject
 {
@@ -33,7 +36,11 @@ private slots:
     void onDeviceRemoved(const QDBusObjectPath &path);
 
 private:
+    void addDevice(const QString &path);
+
     QDBusInterface m_interface;
+    // Primary batteries by UPower device path.
+    QHash<QString, Battery *> m_batteries;
     bool m_onBattery;
     bool m_lidIsPresent;
     bool m_lidIsClosed;
