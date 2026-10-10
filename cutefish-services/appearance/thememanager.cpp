@@ -62,24 +62,8 @@ ThemeManager::ThemeManager(QObject *parent)
     }
 
     if (!m_settings->contains(s_systemFontName)) {
-        QString languageCode = LanguageEnvironment::preferredLanguages().first();
-        QString fontName;
-
-        if (languageCode == "zh_CN") {
-            fontName = "Noto Sans CJK SC";
-        } else if (languageCode.contains("en_")) {
-            fontName = "Noto Sans";
-        } else if (languageCode == "zh_TW") {
-            fontName = "Noto Sans CJK TC";
-        } else if (languageCode == "zh_HK") {
-            fontName = "Noto Sans CJK HK";
-        } else if (languageCode == "ja_JP") {
-            fontName = "Noto Sans CJK JP";
-        } else {
-            fontName = "Noto Sans";
-        }
-
-        m_settings->setValue(s_systemFontName, fontName);
+        const QString fontName = fontForLocale(LanguageEnvironment::preferredLanguages().first());
+        m_settings->setValue(s_systemFontName, fontName.isEmpty() ? QStringLiteral("Noto Sans") : fontName);
     }
 
     // Update fontconfig after login.
@@ -182,6 +166,21 @@ void ThemeManager::setCursorSize(int size)
         applyCursorSettings();
         emit cursorSizeChanged();
     }
+}
+
+QString ThemeManager::fontForLocale(const QString &localeName)
+{
+    if (localeName == "zh_CN")
+        return QStringLiteral("Noto Sans CJK SC");
+    if (localeName.startsWith("en_"))
+        return QStringLiteral("Noto Sans");
+    if (localeName == "zh_TW")
+        return QStringLiteral("Noto Sans CJK TC");
+    if (localeName == "zh_HK")
+        return QStringLiteral("Noto Sans CJK HK");
+    if (localeName == "ja_JP")
+        return QStringLiteral("Noto Sans CJK JP");
+    return {};
 }
 
 QString ThemeManager::systemFont()

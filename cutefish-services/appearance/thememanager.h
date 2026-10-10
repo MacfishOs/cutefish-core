@@ -38,6 +38,8 @@ class ThemeManager : public QObject
 
 public:
     static ThemeManager *self();
+    // The UI font a language starts with; empty when it has none of its own.
+    static QString fontForLocale(const QString &localeName);
 
     ThemeManager(QObject *parent = nullptr);
 

@@ -6,6 +6,7 @@
 #include "cutefishnotification.h"
 #include "preferences.h"
 #include "languageadaptor.h"
+#include "appearance/thememanager.h"
 
 #include <QDBusConnection>
 #include <QSettings>
@@ -70,21 +71,9 @@ void Language::setPreferredLanguages(const QStringList &languages)
     m_settings->setValue("preferredLanguages", codes);
 
     if (primaryChanged) {
-        QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
-        settings.beginGroup(QStringLiteral("Appearance"));
-
-        const QString localeName = QLocale(code).name();
-        if (localeName == "zh_CN") {
-            settings.setValue("Font", "Noto Sans CJK SC");
-        } else if (localeName.startsWith("en_")) {
-            settings.setValue("Font", "Noto Sans");
-        } else if (localeName == "zh_TW") {
-            settings.setValue("Font", "Noto Sans CJK TC");
-        } else if (localeName == "zh_HK") {
-            settings.setValue("Font", "Noto Serif CJK HK");
-        } else if (localeName == "ja_JP") {
-            settings.setValue("Font", "Noto Serif CJK JP");
-        }
+        const QString font = ThemeManager::fontForLocale(QLocale(code).name());
+        if (!font.isEmpty())
+            ThemeManager::self()->setSystemFont(font);
     }
 
     m_settings->setValue("language", code);
