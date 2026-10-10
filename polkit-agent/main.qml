@@ -14,6 +14,8 @@ Item {
     Connections {
         target: confirmation
         function onFailure() {
+            // Enter would otherwise send the rejected password again.
+            passwordInput.text = ""
             doneButton.enabled = true
             passwordInput.enabled = true
             passwordInput.forceActiveFocus()
