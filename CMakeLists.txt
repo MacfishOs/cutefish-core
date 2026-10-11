@@ -19,6 +19,7 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 find_package(CutefishFramework REQUIRED COMPONENTS Application Capture Display Protocols)
 
 add_subdirectory(appruntime)
+add_subdirectory(booster)
 add_subdirectory(polkit-agent)
 add_subdirectory(privacy)
 add_subdirectory(session)

@@ -1,8 +1,11 @@
 #ifndef APPRUNTIME_H
 #define APPRUNTIME_H
 
+#include "booster.h"
+
 #include <QHash>
 #include <QObject>
+#include <QProcessEnvironment>
 #include <QStringList>
 #include <QTimer>
 
@@ -13,8 +16,8 @@ class ApplicationRegistry;
  * spawns applications, so the runtime is the single place that knows which
  * application a process belongs to and can therefore quit it again.
  *
- * startProcess() is the only place that actually creates a process, so a
- * booster such as mapplauncherd can be plugged in there alone.
+ * startProcess() is the only place that actually creates a process; it hands
+ * applications that can use it to the Booster first.
  */
 class AppRuntime : public QObject
 {
@@ -22,6 +25,9 @@ class AppRuntime : public QObject
 
 public:
     explicit AppRuntime(QObject *parent = nullptr);
+
+    // What every launched application gets, apart from its activation token.
+    static QProcessEnvironment applicationEnvironment();
 
 public slots:
     uint launchApplication(const QString &appId, const QStringList &arguments);
@@ -62,6 +68,7 @@ private:
     static qulonglong startTime(uint pid);
 
     ApplicationRegistry *m_registry;
+    Booster m_booster;
     // pid -> instance
     QHash<uint, Instance> m_instances;
     QTimer m_reaper;

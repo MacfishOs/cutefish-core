@@ -29,6 +29,15 @@ AppRuntime::AppRuntime(QObject *parent)
     connect(&m_reaper, &QTimer::timeout, this, &AppRuntime::reap);
 }
 
+QProcessEnvironment AppRuntime::applicationEnvironment()
+{
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    LanguageEnvironment::apply(environment);
+    ProxyEnvironment::apply(environment);
+    environment.remove(QStringLiteral("XDG_ACTIVATION_TOKEN"));
+    return environment;
+}
+
 uint AppRuntime::launchApplication(const QString &appId, const QStringList &arguments)
 {
     return launchApplication(appId, arguments, QString());
@@ -95,24 +104,24 @@ uint AppRuntime::launchCommand(const QString &appId, const QStringList &command,
 uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
                               const QString &workingDirectory, const QString &activationToken)
 {
-    QProcess process;
-    process.setProgram(command.first());
-    process.setArguments(command.mid(1));
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    LanguageEnvironment::apply(environment);
-    ProxyEnvironment::apply(environment);
-    environment.remove(QStringLiteral("XDG_ACTIVATION_TOKEN"));
-    if (!activationToken.isEmpty())
-        environment.insert(QStringLiteral("XDG_ACTIVATION_TOKEN"), activationToken);
-    process.setProcessEnvironment(environment);
+    QProcessEnvironment environment = applicationEnvironment();
+    qint64 pid = m_booster.launch(command, workingDirectory, environment, activationToken);
 
-    if (!workingDirectory.isEmpty())
-        process.setWorkingDirectory(workingDirectory);
+    if (pid == 0) {
+        QProcess process;
+        process.setProgram(command.first());
+        process.setArguments(command.mid(1));
+        if (!activationToken.isEmpty())
+            environment.insert(QStringLiteral("XDG_ACTIVATION_TOKEN"), activationToken);
+        process.setProcessEnvironment(environment);
 
-    qint64 pid = 0;
-    if (!process.startDetached(&pid) || pid <= 0) {
-        qWarning() << "AppRuntime: failed to start" << command << process.errorString();
-        return 0;
+        if (!workingDirectory.isEmpty())
+            process.setWorkingDirectory(workingDirectory);
+
+        if (!process.startDetached(&pid) || pid <= 0) {
+            qWarning() << "AppRuntime: failed to start" << command << process.errorString();
+            return 0;
+        }
     }
 
     // Only an id the registry knows names the scope: portals read the app id

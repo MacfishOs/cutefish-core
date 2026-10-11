@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/booster">
+        <file>preload.qml</file>
+    </qresource>
+</RCC>
