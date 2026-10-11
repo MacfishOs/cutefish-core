@@ -20,6 +20,7 @@ find_package(CutefishFramework REQUIRED COMPONENTS Application Capture Display P
 
 add_subdirectory(appruntime)
 add_subdirectory(polkit-agent)
+add_subdirectory(privacy)
 add_subdirectory(session)
 add_subdirectory(cutefish-services)
 add_subdirectory(screenrecorder)

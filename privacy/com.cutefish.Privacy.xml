@@ -1,0 +1,19 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="com.cutefish.Privacy">
+    <property name="cameraEnabled" type="b" access="read"/>
+    <property name="microphoneEnabled" type="b" access="read"/>
+    <method name="setCameraEnabled">
+        <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <method name="setMicrophoneEnabled">
+        <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <signal name="cameraEnabledChanged">
+        <arg name="enabled" type="b"/>
+    </signal>
+    <signal name="microphoneEnabledChanged">
+        <arg name="enabled" type="b"/>
+    </signal>
+  </interface>
+</node>
