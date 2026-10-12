@@ -10,12 +10,15 @@
 #include <QSettings>
 #include <QStringList>
 
+class ScheduledFeature;
 class WallpaperManager;
 
 class ThemeManager : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool isDarkMode READ isDarkMode WRITE setDarkMode NOTIFY darkModeChanged)
+    Q_PROPERTY(int darkModeSchedule READ darkModeSchedule WRITE setDarkModeSchedule NOTIFY
+                       darkModeScheduleChanged)
     Q_PROPERTY(bool backgroundVisible READ backgroundVisible WRITE setBackgroundVisible NOTIFY
                        backgroundVisibleChanged)
     Q_PROPERTY(bool continuousCorners READ continuousCorners WRITE setContinuousCorners NOTIFY
@@ -44,7 +47,12 @@ public:
     ThemeManager(QObject *parent = nullptr);
 
     bool isDarkMode();
+    // A manual switch holds until the schedule's next turn.
     void setDarkMode(bool darkMode);
+
+    // ScheduledFeature::Schedule, without Custom: dark from sunset to sunrise.
+    int darkModeSchedule() const;
+    void setDarkModeSchedule(int schedule);
 
     bool continuousCorners() const;
     void setContinuousCorners(bool value);
@@ -96,6 +104,7 @@ public:
 
 signals:
     void darkModeChanged(bool darkMode);
+    void darkModeScheduleChanged(int schedule);
     void wallpaperChanged(QString path);
     void userWallpapersChanged();
     void wallpaperFoldersChanged();
@@ -116,8 +125,8 @@ private:
 
     QSettings *m_settings;
     WallpaperManager *m_wallpaperManager;
+    ScheduledFeature *m_darkMode;
 
-    bool m_isDarkMode;
     bool m_continuousCorners;
     int m_accentColor;
 

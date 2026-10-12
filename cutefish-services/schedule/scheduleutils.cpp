@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "nightlightschedule.h"
+#include "scheduleutils.h"
 
 #include <QFile>
 
 #include <cmath>
 
-namespace NightLightSchedule {
+namespace ScheduleUtils {
 
 static constexpr double kPi = 3.14159265358979323846;
 
@@ -131,4 +131,4 @@ std::optional<Coordinates> zoneCoordinates(const QByteArray &zoneId, const QStri
     return std::nullopt;
 }
 
-} // namespace NightLightSchedule
+} // namespace ScheduleUtils

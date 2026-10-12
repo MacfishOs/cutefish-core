@@ -4,6 +4,9 @@
     <method name="setDarkMode">
         <arg name="darkMode" type="b" direction="in"/>
     </method>
+    <method name="setDarkModeSchedule">
+        <arg name="schedule" type="i" direction="in"/>
+    </method>
     <method name="setContinuousCorners">
         <arg name="continuousCorners" type="b" direction="in"/>
     </method>
@@ -61,6 +64,7 @@
     <method name="updateFontConfig"></method>
 
     <property name="isDarkMode" type="b" access="read"/>
+    <property name="darkModeSchedule" type="i" access="read"/>
     <property name="continuousCorners" type="b" access="read"/>
     <property name="backgroundVisible" type="b" access="read"/>
     <property name="systemFont" type="s" access="read"/>
@@ -78,6 +82,9 @@
 
     <signal name="darkModeChanged">
         <arg type="b"/>
+    </signal>
+    <signal name="darkModeScheduleChanged">
+        <arg type="i"/>
     </signal>
     <signal name="wallpaperChanged">
         <arg type="s"/>

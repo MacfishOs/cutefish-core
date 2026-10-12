@@ -39,6 +39,7 @@ qt6_add_dbus_adaptor(DBUS_SOURCES
 set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
 
 add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${RESOURCES})
+target_include_directories(${TARGET} PRIVATE schedule)
 
 target_compile_definitions(${TARGET} PRIVATE
         CUTEFISH_GTK_CSS_DIR="${CMAKE_INSTALL_FULL_DATAROOTDIR}/${TARGET}/gtk"

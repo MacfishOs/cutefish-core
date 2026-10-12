@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#ifndef NIGHTLIGHTSCHEDULE_H
-#define NIGHTLIGHTSCHEDULE_H
+#ifndef SCHEDULEUTILS_H
+#define SCHEDULEUTILS_H
 
 #include <QByteArray>
 #include <QDateTime>
@@ -13,12 +13,12 @@
 #include <functional>
 #include <optional>
 
-// Where a day stands on the night light's schedule, and the sunset and sunrise
-// it follows. Modelled on Ash's schedule_utils::GetCurrentPosition() and
+// Where a day stands on a scheduled feature's schedule, and the sunset and
+// sunrise it follows. Modelled on Ash's schedule_utils::GetCurrentPosition() and
 // GeolocationController, with the location taken from the time zone.
-namespace NightLightSchedule {
+namespace ScheduleUtils {
 
-// The times of day the night light turns on and off.
+// The times of day a feature turns on and off.
 struct Times {
     QTime start;
     QTime end;
@@ -61,6 +61,6 @@ QStringList zoneTables();
 std::optional<Coordinates> zoneCoordinates(const QByteArray &zoneId,
                                            const QStringList &tables = zoneTables());
 
-} // namespace NightLightSchedule
+} // namespace ScheduleUtils
 
-#endif // NIGHTLIGHTSCHEDULE_H
+#endif // SCHEDULEUTILS_H

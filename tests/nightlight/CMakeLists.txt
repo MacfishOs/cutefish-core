@@ -11,8 +11,10 @@ qt6_add_dbus_adaptor(ADAPTOR_SOURCES ${SERVICE_DIR}/nightlight/com.cutefish.Serv
     ${SERVICE_DIR}/nightlight/nightlight.h NightLight)
 add_executable(night_light_test night_light_test.cpp ${ADAPTOR_SOURCES}
     ${SERVICE_DIR}/nightlight/nightlight.cpp
-    ${SERVICE_DIR}/nightlight/nightlightschedule.cpp)
-target_include_directories(night_light_test PRIVATE ${SERVICE_DIR} ${SERVICE_DIR}/nightlight)
+    ${SERVICE_DIR}/schedule/scheduledfeature.cpp
+    ${SERVICE_DIR}/schedule/scheduleutils.cpp)
+target_include_directories(night_light_test PRIVATE ${SERVICE_DIR} ${SERVICE_DIR}/nightlight
+    ${SERVICE_DIR}/schedule)
 target_link_libraries(night_light_test PRIVATE Cutefish::Application Cutefish::Display Qt6::Core
     Qt6::DBus Qt6::Test)
 enable_testing()

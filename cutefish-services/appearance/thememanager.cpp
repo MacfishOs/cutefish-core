@@ -7,6 +7,7 @@
 #include "gtksettings.h"
 #include "languageenvironment.h"
 #include "preferences.h"
+#include "scheduledfeature.h"
 #include "wallpapermanager.h"
 
 #include <QDBusConnection>
@@ -43,13 +44,28 @@ ThemeManager::ThemeManager(QObject *parent)
     connect(m_wallpaperManager, &WallpaperManager::backgroundVisibleChanged, this,
             &ThemeManager::backgroundVisibleChanged);
 
+    // Ash's DarkLightModeControllerImpl: the same schedule as the night
+    // light, without custom times.
+    m_darkMode = new ScheduledFeature({QStringLiteral("Appearance"), QStringLiteral("DarkMode"),
+                                       QStringLiteral("DarkModeSchedule"),
+                                       QStringLiteral("DarkModeHoldUntil"), {}, {}},
+                                      this, [] {
+                                          return QDateTime::currentDateTime();
+                                      });
+    connect(m_darkMode, &ScheduledFeature::enabledChanged, this, [this](bool darkMode) {
+        updateGtk3Config();
+        emit darkModeChanged(darkMode);
+    });
+    connect(m_darkMode, &ScheduledFeature::scheduleChanged, this,
+            &ThemeManager::darkModeScheduleChanged);
+    m_darkMode->start();
+
     // init dbus
     new AppearanceAdaptor(this);
     QDBusConnection::sessionBus().registerObject(
             QStringLiteral("/com/cutefish/Services/Appearance"), this);
 
     // init value
-    m_isDarkMode = m_settings->value("DarkMode", false).toBool();
     m_continuousCorners = m_settings->value("ContinuousCorners", true).toBool();
     m_accentColor = m_settings->value("AccentColor", 0).toInt();
     m_cursorTheme = m_settings->value("CursorTheme", "default").toString();
@@ -76,20 +92,22 @@ ThemeManager::ThemeManager(QObject *parent)
 
 bool ThemeManager::isDarkMode()
 {
-    return m_isDarkMode;
+    return m_darkMode->enabled();
 }
 
 void ThemeManager::setDarkMode(bool darkMode)
 {
-    if (darkMode == m_isDarkMode)
-        return;
+    m_darkMode->setEnabled(darkMode);
+}
 
-    m_isDarkMode = darkMode;
-    m_settings->setValue("DarkMode", darkMode);
+int ThemeManager::darkModeSchedule() const
+{
+    return m_darkMode->schedule();
+}
 
-    updateGtk3Config();
-
-    emit darkModeChanged(m_isDarkMode);
+void ThemeManager::setDarkModeSchedule(int schedule)
+{
+    m_darkMode->setSchedule(schedule);
 }
 
 bool ThemeManager::continuousCorners() const

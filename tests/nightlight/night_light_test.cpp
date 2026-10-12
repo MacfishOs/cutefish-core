@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "nightlight.h"
-#include "nightlightschedule.h"
+#include "scheduleutils.h"
 
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -21,7 +21,7 @@
 #include "preferences.h"
 
 using namespace cutefish::display;
-using namespace NightLightSchedule;
+using namespace ScheduleUtils;
 
 static const QString displayService = QStringLiteral("com.cutefish.DisplayConfig.NightLightTest");
 
@@ -127,10 +127,16 @@ private:
         });
     }
 
-    QVariant saved(const QString &key)
+    QVariant saved(const QString &key, const QString &group = QStringLiteral("NightLight"))
     {
         QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
-        return settings.value(QStringLiteral("NightLight/") + key);
+        return settings.value(group + QLatin1Char('/') + key);
+    }
+
+    static ScheduledFeature::Keys darkModeKeys()
+    {
+        return {QStringLiteral("Appearance"), QStringLiteral("DarkMode"),
+                QStringLiteral("DarkModeSchedule"), QStringLiteral("DarkModeHoldUntil"), {}, {}};
     }
 
 private slots:
@@ -156,16 +162,16 @@ private slots:
     void anOvernightScheduleIsOnAcrossMidnight()
     {
         const auto times = fixed(QTime(18, 0), QTime(6, 0));
-        auto position = NightLightSchedule::position(at(2, 12), times);
+        auto position = ScheduleUtils::position(at(2, 12), times);
         QVERIFY(!position.enabled);
         QCOMPARE(position.next, at(2, 18));
-        position = NightLightSchedule::position(at(2, 18), times);
+        position = ScheduleUtils::position(at(2, 18), times);
         QVERIFY(position.enabled);
         QCOMPARE(position.next, at(3, 6));
-        position = NightLightSchedule::position(at(3, 3), times);
+        position = ScheduleUtils::position(at(3, 3), times);
         QVERIFY(position.enabled);
         QCOMPARE(position.next, at(3, 6));
-        position = NightLightSchedule::position(at(3, 6), times);
+        position = ScheduleUtils::position(at(3, 6), times);
         QVERIFY(!position.enabled);
         QCOMPARE(position.next, at(3, 18));
     }
@@ -173,20 +179,20 @@ private slots:
     void aDaytimeScheduleIsOnBetweenItsTimes()
     {
         const auto times = fixed(QTime(9, 0), QTime(17, 0));
-        auto position = NightLightSchedule::position(at(2, 8), times);
+        auto position = ScheduleUtils::position(at(2, 8), times);
         QVERIFY(!position.enabled);
         QCOMPARE(position.next, at(2, 9));
-        position = NightLightSchedule::position(at(2, 12), times);
+        position = ScheduleUtils::position(at(2, 12), times);
         QVERIFY(position.enabled);
         QCOMPARE(position.next, at(2, 17));
-        position = NightLightSchedule::position(at(2, 20), times);
+        position = ScheduleUtils::position(at(2, 20), times);
         QVERIFY(!position.enabled);
         QCOMPARE(position.next, at(3, 9));
     }
 
     void equalTimesNeverTurnItOn()
     {
-        const auto position = NightLightSchedule::position(at(2, 12), fixed(QTime(7, 0), QTime(7, 0)));
+        const auto position = ScheduleUtils::position(at(2, 12), fixed(QTime(7, 0), QTime(7, 0)));
         QVERIFY(!position.enabled);
         QVERIFY(!position.next.isValid());
     }
@@ -197,7 +203,7 @@ private slots:
         const TimesForDate times = [](QDate date) {
             return Times {QTime(18, 0), QTime(6, date.day())};
         };
-        const auto position = NightLightSchedule::position(at(2, 22), times);
+        const auto position = ScheduleUtils::position(at(2, 22), times);
         QVERIFY(position.enabled);
         QCOMPARE(position.next, at(3, 6, 3));
     }
@@ -213,11 +219,11 @@ private slots:
         const QDateTime second(date, QTime(2, 30), zone, Resolution::PreferAfter);
         QCOMPARE(first.secsTo(second), 3600);
 
-        auto position = NightLightSchedule::position(first, times);
+        auto position = ScheduleUtils::position(first, times);
         QVERIFY(position.enabled);
         QCOMPARE(position.next, QDateTime(date, QTime(2, 45), zone, Resolution::PreferBefore));
 
-        position = NightLightSchedule::position(second, times);
+        position = ScheduleUtils::position(second, times);
         QVERIFY(position.enabled);
         QVERIFY(position.next > second);
         QCOMPARE(position.next, QDateTime(date, QTime(2, 45), zone, Resolution::PreferAfter));
@@ -550,6 +556,53 @@ private slots:
         QVERIFY(nightLight->enabled());
         QTRY_COMPARE(m_display->calls.size(), 1);
         QCOMPARE(m_display->calls.first().strength, 0.5);
+    }
+
+    // --- A feature without custom times, the way dark mode keeps one. ---
+
+    void aFeatureWithoutCustomTimesFollowsOnlyTheSun()
+    {
+        {
+            QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
+            settings.setValue(QStringLiteral("Appearance/DarkModeSchedule"),
+                              int(ScheduledFeature::Custom));
+        }
+        ScheduledFeature darkMode(darkModeKeys(), nullptr, [this] {
+            return m_now;
+        });
+        darkMode.start();
+        QCOMPARE(darkMode.schedule(), int(ScheduledFeature::SunsetToSunrise));
+
+        darkMode.setSchedule(ScheduledFeature::Never);
+        darkMode.setSchedule(ScheduledFeature::Custom);
+        QCOMPARE(darkMode.schedule(), int(ScheduledFeature::Never));
+        QVERIFY(!darkMode.nextCheckpoint().isValid());
+
+        darkMode.setSchedule(ScheduledFeature::SunsetToSunrise);
+        QVERIFY(!darkMode.enabled());
+        m_now = darkMode.nextCheckpoint();
+        darkMode.checkpointForTesting();
+        QVERIFY(darkMode.enabled());
+        QCOMPARE(saved(QStringLiteral("DarkMode"), QStringLiteral("Appearance")).toBool(), true);
+    }
+
+    void aFeatureKeepsItsHoldUnderItsOwnKeys()
+    {
+        ScheduledFeature darkMode(darkModeKeys(), nullptr, [this] {
+            return m_now;
+        });
+        darkMode.start();
+        darkMode.setSchedule(ScheduledFeature::SunsetToSunrise);
+        darkMode.setEnabled(true);
+        const QVariant hold = saved(QStringLiteral("DarkModeHoldUntil"), QStringLiteral("Appearance"));
+        QCOMPARE(hold.toLongLong(), darkMode.nextCheckpoint().toMSecsSinceEpoch());
+        QVERIFY(!saved(QStringLiteral("HoldUntil")).isValid());
+
+        ScheduledFeature restarted(darkModeKeys(), nullptr, [this] {
+            return m_now;
+        });
+        restarted.start();
+        QVERIFY(restarted.enabled());
     }
 };
 
