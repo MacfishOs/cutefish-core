@@ -22,7 +22,7 @@ Application::Application(int &argc, char **argv)
     , m_batteryWarning(new BatteryWarning(this))
     , m_language(Language::self())
     , m_clipboard(new Clipboard(this))
-    , m_powerManager(new PowerManager(m_upowerManager, this))
+    , m_powerManager(new PowerManager(m_upowerManager, m_brightnessManager, this))
     , m_nightLight(new NightLight(this))
     , m_permissionManager(new PermissionManager([this] { return engine(); }, this))
     , m_crashManager(new CrashManager([this] { return engine(); },

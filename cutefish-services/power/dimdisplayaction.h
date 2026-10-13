@@ -7,7 +7,6 @@
 
 #include <tuple>
 
-#include <QDBusInterface>
 #include <QDBusUnixFileDescriptor>
 #include <QElapsedTimer>
 #include <QTimer>
@@ -15,12 +14,14 @@
 #include "action.h"
 #include "displayclient.h"
 
+class BrightnessManager;
+
 class DimDisplayAction : public Action
 {
     Q_OBJECT
 
 public:
-    explicit DimDisplayAction(QObject *parent = nullptr);
+    explicit DimDisplayAction(BrightnessManager *brightness, QObject *parent = nullptr);
 
     void onWakeupFromIdle() override;
     void onIdleTimeout(int msec) override;
@@ -54,7 +55,7 @@ private:
     void requestDockedLid(bool closed);
     void finishDockedLid(bool closed, bool succeeded, cutefish::display::ipc::ErrorCode error);
 
-    QDBusInterface m_iface;
+    BrightnessManager *m_brightness;
     DisplayClient m_display;
     int m_dimOnIdleTime = 0;
     int m_suspendDelay = 900;

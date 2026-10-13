@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QSettings>
 
+class BrightnessManager;
 class DimDisplayAction;
 class UPowerManager;
 
@@ -12,7 +13,8 @@ class PowerManager : public QObject
     Q_OBJECT
 
 public:
-    explicit PowerManager(UPowerManager *upowerManager, QObject *parent = nullptr);
+    PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness,
+                 QObject *parent = nullptr);
 
 public slots:
     void setBatteryScreenOff(int timeout);

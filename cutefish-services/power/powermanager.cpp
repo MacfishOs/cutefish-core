@@ -16,11 +16,12 @@ static int readTimeout(const QSettings &settings, const QString &key, int fallba
     return settings.contains(key) ? normalizedTimeout(settings.value(key).toInt()) : fallback;
 }
 
-PowerManager::PowerManager(UPowerManager *upowerManager, QObject *parent)
+PowerManager::PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness,
+                           QObject *parent)
     : QObject(parent)
     , m_settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat)
     , m_upowerManager(upowerManager)
-    , m_dimDisplayAction(new DimDisplayAction(this))
+    , m_dimDisplayAction(new DimDisplayAction(brightness, this))
 {
     loadSettings();
 

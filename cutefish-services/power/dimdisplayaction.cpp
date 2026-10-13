@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "dimdisplayaction.h"
+#include "brightness/brightnessmanager.h"
 
 #include <utility>
 
+#include <QDBusConnection>
+#include <QDBusInterface>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDebug>
@@ -38,10 +41,9 @@ static constexpr int s_dockedLidRetries = 10;
 
 using cutefish::display::ipc::ErrorCode;
 
-DimDisplayAction::DimDisplayAction(QObject *parent)
+DimDisplayAction::DimDisplayAction(BrightnessManager *brightness, QObject *parent)
     : Action(parent)
-    , m_iface("com.cutefish.Services", "/com/cutefish/Services/Brightness",
-              "com.cutefish.Services.Brightness", QDBusConnection::sessionBus())
+    , m_brightness(brightness)
     , m_display(this)
 {
     QDBusConnection::sessionBus().connect(
@@ -155,15 +157,15 @@ void DimDisplayAction::onIdleTimeout(int msec)
     if (sec == finalDimTimeout(m_dimOnIdleTime)) {
         if (m_oldScreenBrightness > 0) {
             const int newBrightness = qRound(m_oldScreenBrightness / 8.0);
-            m_iface.asyncCall("setValue", QVariant::fromValue(newBrightness));
+            m_brightness->setValue(newBrightness);
         }
         m_dimmed = true;
     } else if (sec == halfDimTimeout(m_dimOnIdleTime)) {
-        m_oldScreenBrightness = m_iface.property("brightness").toInt();
+        m_oldScreenBrightness = m_brightness->brightness();
 
         if (m_oldScreenBrightness > 0) {
             const int newBrightness = qRound(m_oldScreenBrightness / 2.0);
-            m_iface.asyncCall("setValue", QVariant::fromValue(newBrightness));
+            m_brightness->setValue(newBrightness);
         }
         m_dimmed = true;
     }
@@ -345,10 +347,10 @@ void DimDisplayAction::turnDisplayOff()
 
     if (!m_displayPoweredOff) {
         if (m_oldScreenBrightness < 0)
-            m_oldScreenBrightness = m_iface.property("brightness").toInt();
+            m_oldScreenBrightness = m_brightness->brightness();
 
         if (m_oldScreenBrightness > 0)
-            m_iface.asyncCall("setValue", QVariant::fromValue(0));
+            m_brightness->setValue(0);
     }
 
     m_displayOff = true;
@@ -362,7 +364,7 @@ void DimDisplayAction::restoreDisplay()
     }
 
     if (m_oldScreenBrightness > 0)
-        m_iface.asyncCall("setValue", QVariant::fromValue(m_oldScreenBrightness));
+        m_brightness->setValue(m_oldScreenBrightness);
 
     m_oldScreenBrightness = -1;
     m_displayOff = false;
