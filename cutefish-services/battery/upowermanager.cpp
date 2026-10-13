@@ -139,4 +139,7 @@ void UPowerManager::onDeviceRemoved(const QDBusObjectPath &path)
 {
     // Deleted now, so its D-Bus path is free for a battery added in the same batch.
     delete m_batteries.take(path.path());
+    // The path it may have held goes to another primary battery.
+    for (Battery *battery : std::as_const(m_batteries))
+        battery->init();
 }
