@@ -8,3 +8,8 @@ add_executable(application-scope-test application_scope_test.cpp ../applications
 target_include_directories(application-scope-test PRIVATE ..)
 target_link_libraries(application-scope-test PRIVATE Qt6::Core Qt6::DBus Qt6::Test)
 add_test(NAME application-scope COMMAND application-scope-test)
+
+add_executable(chromium-switches-test chromium_switches_test.cpp ../chromiumswitches.cpp)
+target_include_directories(chromium-switches-test PRIVATE ..)
+target_link_libraries(chromium-switches-test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME chromium-switches COMMAND chromium-switches-test)

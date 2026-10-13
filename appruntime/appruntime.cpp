@@ -1,5 +1,6 @@
 #include "appruntime.h"
 #include "applicationscope.h"
+#include "chromiumswitches.h"
 #include "languageenvironment.h"
 #include "proxysettings.h"
 
@@ -108,9 +109,10 @@ uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
     qint64 pid = m_booster.launch(command, workingDirectory, environment, activationToken);
 
     if (pid == 0) {
+        const QStringList arguments = withChromiumSwitches(command);
         QProcess process;
-        process.setProgram(command.first());
-        process.setArguments(command.mid(1));
+        process.setProgram(arguments.first());
+        process.setArguments(arguments.mid(1));
         if (!activationToken.isEmpty())
             environment.insert(QStringLiteral("XDG_ACTIVATION_TOKEN"), activationToken);
         process.setProcessEnvironment(environment);
@@ -119,7 +121,7 @@ uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
             process.setWorkingDirectory(workingDirectory);
 
         if (!process.startDetached(&pid) || pid <= 0) {
-            qWarning() << "AppRuntime: failed to start" << command << process.errorString();
+            qWarning() << "AppRuntime: failed to start" << arguments << process.errorString();
             return 0;
         }
     }

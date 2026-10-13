@@ -7,6 +7,8 @@ set(SOURCES
     appruntime.cpp
     booster.cpp
     booster.h
+    chromiumswitches.cpp
+    chromiumswitches.h
     main.cpp
 )
 
