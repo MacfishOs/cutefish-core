@@ -344,7 +344,7 @@ FontConfig ThemeManager::fontConfig()
     config.family = systemFont();
     config.fixedFamily = systemFixedFont();
     config.antialias = m_settings->value("FontAntialias", true).toBool();
-    config.hintStyle = m_settings->value("FontHintStyle", "hintslight").toString();
+    config.hintStyle = m_settings->value("FontHintStyle", "hintfull").toString();
     return config;
 }
 

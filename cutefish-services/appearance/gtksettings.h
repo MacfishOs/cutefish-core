@@ -9,7 +9,7 @@ struct GtkSettings
     qreal fontPointSize = 9;
     // fontconfig's values, as written by writeFontConfig().
     bool fontAntialias = true;
-    QString fontHintStyle = QStringLiteral("hintslight");
+    QString fontHintStyle = QStringLiteral("hintfull");
     QString fontRgba = QStringLiteral("rgb");
     bool darkMode = false;
     QString iconTheme;

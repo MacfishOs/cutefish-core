@@ -8,7 +8,7 @@ struct FontConfig
     QString family;
     QString fixedFamily;
     bool antialias = true;
-    QString hintStyle = QStringLiteral("hintslight");
+    QString hintStyle = QStringLiteral("hintfull");
     QString rgba = QStringLiteral("rgb");
 };
 
