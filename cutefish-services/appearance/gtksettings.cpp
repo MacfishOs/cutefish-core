@@ -38,7 +38,7 @@ void writeGtkSettings(const GtkSettings &gtk)
     settings.setValue("gtk-icon-theme-name", gtk.iconTheme);
     settings.setValue("gtk-cursor-theme-name", gtk.cursorTheme);
     settings.setValue("gtk-cursor-theme-size", gtk.cursorSize);
-    settings.setValue("gtk-enable-animations", false);
+    settings.setValue("gtk-enable-animations", true);
     settings.setValue("gtk-theme-name", gtkTheme);
     settings.sync();
 
