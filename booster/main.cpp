@@ -154,8 +154,8 @@ int main(int argc, char *argv[])
             return;
         }
 
-        reply(socket, BoosterProtocol::Accepted);
-        loop.exit(0);
+        // The runtime that stopped waiting has started the application itself.
+        loop.exit(reply(socket, BoosterProtocol::Accepted) ? 0 : 1);
     });
 
     if (loop.exec() != 0)

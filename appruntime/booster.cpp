@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <csignal>
 #include <cstring>
 
 // The session is busy with its own components at first.
@@ -74,15 +75,22 @@ uint Booster::launch(const QStringList &command, const QString &workingDirectory
     m_notifier->setEnabled(false);
     const QByteArray message = BoosterProtocol::encode(request);
     char reply = 0;
+    bool silent = false;
     if (::send(m_socket, message.constData(), message.size(), MSG_NOSIGNAL) == message.size()) {
         pollfd fd = {m_socket, POLLIN, 0};
-        if (::poll(&fd, 1, kReplyTimeout) == 1 && ::recv(m_socket, &reply, 1, 0) != 1)
+        const int ready = ::poll(&fd, 1, kReplyTimeout);
+        silent = ready == 0;
+        if (ready == 1 && ::recv(m_socket, &reply, 1, 0) != 1)
             reply = 0;
     }
 
     const uint pid = reply == BoosterProtocol::Accepted ? m_pid : 0;
     if (!pid)
         qWarning() << "AppRuntime: the booster did not take" << executable;
+    // Still loading the module: accepting later would start the application a second
+    // time. Its socket still open, it has not exited, so the PID is still its own.
+    if (silent)
+        ::kill(pid_t(m_pid), SIGKILL);
 
     // Either way this booster is done: it is the application now, or it quits
     // on the closed socket.
