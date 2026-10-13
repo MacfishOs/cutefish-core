@@ -27,7 +27,8 @@ void writeFontConfig(const FontConfig &config)
                                          config.antialias ? QStringLiteral("true")
                                                           : QStringLiteral("false"),
                                          config.hintStyle.toHtmlEscaped(),
-                                         config.rgba.toHtmlEscaped());
+                                         config.rgba.toHtmlEscaped(),
+                                         config.cjkFamily.toHtmlEscaped());
 
     const QString targetPath =
             QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)

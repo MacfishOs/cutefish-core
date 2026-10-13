@@ -11,6 +11,7 @@
 #include "wallpapermanager.h"
 
 #include <QDBusConnection>
+#include <QLocale>
 
 static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
 static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
@@ -186,6 +187,31 @@ void ThemeManager::setCursorSize(int size)
     }
 }
 
+// The first Chinese, Japanese or Korean language decides the forms of Han text that carries
+// no language of its own.
+static QString cjkFontForLanguages(const QStringList &languages)
+{
+    for (const QString &code : languages) {
+        const QLocale locale(code);
+        switch (locale.language()) {
+        case QLocale::Japanese:
+            return QStringLiteral("Noto Sans CJK JP");
+        case QLocale::Korean:
+            return QStringLiteral("Noto Sans CJK KR");
+        case QLocale::Chinese:
+            if (locale.territory() == QLocale::HongKong || locale.territory() == QLocale::Macao)
+                return QStringLiteral("Noto Sans CJK HK");
+            if (locale.script() == QLocale::TraditionalHanScript)
+                return QStringLiteral("Noto Sans CJK TC");
+            return QStringLiteral("Noto Sans CJK SC");
+        default:
+            break;
+        }
+    }
+
+    return QStringLiteral("Noto Sans CJK SC");
+}
+
 QString ThemeManager::fontForLocale(const QString &localeName)
 {
     if (localeName == "zh_CN")
@@ -345,6 +371,7 @@ FontConfig ThemeManager::fontConfig()
     config.fixedFamily = systemFixedFont();
     config.antialias = m_settings->value("FontAntialias", true).toBool();
     config.hintStyle = m_settings->value("FontHintStyle", "hintfull").toString();
+    config.cjkFamily = cjkFontForLanguages(LanguageEnvironment::preferredLanguages());
     return config;
 }
 

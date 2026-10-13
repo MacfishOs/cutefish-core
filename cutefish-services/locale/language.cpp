@@ -78,6 +78,8 @@ void Language::setPreferredLanguages(const QStringList &languages)
 
     m_settings->setValue("language", code);
     m_settings->sync();
+    // The CJK fallback follows the order of the languages, so it is rewritten after the sync.
+    ThemeManager::self()->updateFontConfig();
 
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
     LanguageEnvironment::apply(environment, codes);
