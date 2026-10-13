@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDebug>
 #include <QTimer>
 
@@ -71,11 +73,7 @@ void DimDisplayAction::setLidPresent(bool present)
         return;
 
     m_lidPresent = present;
-    if (m_lidPresent) {
-        inhibitSystemdLidSwitch();
-    } else {
-        m_lidSwitchInhibitor = QDBusUnixFileDescriptor();
-    }
+    updateLidSwitchInhibitor();
 }
 
 bool DimDisplayAction::hasNativeDisplayPower() const
@@ -97,7 +95,7 @@ void DimDisplayAction::onWakeupFromIdle()
 
     m_dimmed = false;
     m_suspendRequested = false;
-    if (!m_lidClosed)
+    if (idleSleepApplies())
         stopSuspendCountdown();
 
     // Wait one event loop turn for the screen to wake up before restoring it.
@@ -114,13 +112,22 @@ void DimDisplayAction::onWakeupFromIdle()
     });
 }
 
-// A wake with the lid still closed (power button, wake-on-LAN) reaches neither
-// onWakeupFromIdle nor handleLidOpened; without this every later suspend would
-// be refused as still requested.
 void DimDisplayAction::onPrepareForSleep(bool sleeping)
 {
-    if (!sleeping)
-        m_suspendRequested = false;
+    if (sleeping) {
+        // Whoever asked for it, this sleep is the one that was due.
+        m_suspendTimer.stop();
+        m_suspendDue = false;
+        return;
+    }
+
+    m_suspendRequested = false;
+
+    // A wake without input (a timer, the power supply, a swallowed key) leaves the
+    // display off; sleep again unless someone comes back. logind does this for a
+    // closed lid once its holdoff has passed.
+    if (m_displayOff && idleSleepApplies())
+        startSuspendCountdown();
 }
 
 void DimDisplayAction::onIdleTimeout(int msec)
@@ -181,7 +188,7 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
     m_dimOnIdleTime = timeout;
     m_suspendDelay = qMax(0, suspendDelay);
     m_suspendTimer.stop();
-    if (!m_lidClosed)
+    if (idleSleepApplies())
         m_suspendDue = false;
 
     // Registered even for "never": the lock screen still goes dark.
@@ -204,7 +211,7 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
         m_policyIdleTimeouts.append(registerIdleTimeout(timeout));
     }
 
-    if (m_displayOff && !m_lidDisplayOff && m_displayOffTimer.isValid() && m_suspendDelay > 0) {
+    if (m_displayOff && idleSleepApplies() && m_displayOffTimer.isValid() && m_suspendDelay > 0) {
         const qint64 remaining = qint64(m_suspendDelay) * 1000 - m_displayOffTimer.elapsed();
         if (remaining <= 0) {
             m_suspendDue = true;
@@ -225,11 +232,10 @@ void DimDisplayAction::onScreenSaverActiveChanged(bool active)
         return;
     }
     m_dimmed = false;
-    if (!m_lidClosed) {
+    if (idleSleepApplies())
         stopSuspendCountdown();
-        if (m_displayOff)
-            restoreDisplay();
-    }
+    if (!m_lidClosed && m_displayOff)
+        restoreDisplay();
 }
 
 void DimDisplayAction::onLogindPropertiesChanged(const QString &interfaceName,
@@ -278,27 +284,36 @@ bool DimDisplayAction::lockSession()
     return true;
 }
 
-bool DimDisplayAction::suspendSession()
-{
-    QDBusInterface session(QStringLiteral("com.cutefish.Session"), QStringLiteral("/Session"),
-                           QStringLiteral("com.cutefish.Session"), QDBusConnection::sessionBus());
-    if (!session.isValid())
-        return false;
-
-    const QDBusMessage reply = session.call(QStringLiteral("suspend"));
-    return reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()
-            && reply.arguments().constFirst().toBool();
-}
-
 void DimDisplayAction::trySuspend()
 {
     if (!m_suspendDue || !m_displayOff || m_suspendRequested)
         return;
 
-    if (suspendSession()) {
-        m_suspendRequested = true;
-        m_suspendDue = false;
-    }
+    // Not interactive: with a sleep inhibitor held, logind would otherwise wait on a
+    // password prompt nobody can see. A refusal is retried when the inhibitors change.
+    QDBusMessage message = QDBusMessage::createMethodCall(
+            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
+            QString::fromLatin1(s_logindInterface), QStringLiteral("Suspend"));
+    message << false;
+
+    m_suspendRequested = true;
+    const quint64 serial = ++m_suspendSerial;
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message),
+                                                this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this, serial](QDBusPendingCallWatcher *call) {
+                call->deleteLater();
+                if (serial != m_suspendSerial)
+                    return;
+
+                if (call->isError()) {
+                    qInfo() << "Suspend refused:" << call->error().message();
+                    m_suspendRequested = false;
+                    return;
+                }
+
+                m_suspendDue = false;
+            });
 }
 
 void DimDisplayAction::startSuspendCountdown()
@@ -306,7 +321,7 @@ void DimDisplayAction::startSuspendCountdown()
     m_suspendTimer.stop();
     m_suspendDue = false;
 
-    if (m_lidClosed)
+    if (!idleSleepApplies())
         return;
 
     m_displayOffTimer.restart();
@@ -370,7 +385,7 @@ void DimDisplayAction::sleepWithLidClosed(bool waitForLock)
 {
     if (!m_displayOff) {
         // Suspend even without the lock: the compositor locks as the displays go
-        // off and again before sleep, and logind's own lid handling is inhibited.
+        // off and again before sleep.
         if (waitForLock && !lockSession())
             qWarning() << "Suspending with the lid closed before the session is locked";
 
@@ -379,19 +394,32 @@ void DimDisplayAction::sleepWithLidClosed(bool waitForLock)
     }
 
     m_lidDisplayOff = true;
+    m_lidSleeping = true;
     m_suspendTimer.stop();
     m_displayOffTimer.invalidate();
+
+    // logind's own lid handling sleeps through block inhibitors, and sleeps again
+    // after a wake with the lid still closed.
+    updateLidSwitchInhibitor();
+
     if (!m_suspendRequested) {
         m_suspendDue = true;
         trySuspend();
     }
 }
 
+bool DimDisplayAction::idleSleepApplies() const
+{
+    return !m_lidClosed || m_dockedLidActive;
+}
+
 void DimDisplayAction::handleLidOpened()
 {
     m_lidClosed = false;
+    m_lidSleeping = false;
     m_suspendRequested = false;
     stopSuspendCountdown();
+    updateLidSwitchInhibitor();
     m_dockedLidRecheck = false;
     m_dockedLidRetries = 0;
     m_dockedLidRetryTimer.stop();
@@ -482,31 +510,39 @@ void DimDisplayAction::onDisplayStateChanged()
         requestDockedLid(true);
 }
 
-void DimDisplayAction::inhibitSystemdLidSwitch()
+void DimDisplayAction::updateLidSwitchInhibitor()
 {
-    if (!m_lidPresent || m_lidSwitchInhibitor.isValid()) {
+    if (!m_lidPresent || m_lidSleeping) {
+        m_lidSwitchInhibitor = QDBusUnixFileDescriptor();
         return;
     }
 
-    QDBusInterface logind(QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
-                          QString::fromLatin1(s_logindInterface), QDBusConnection::systemBus());
-    if (!logind.isValid())
+    if (m_lidSwitchInhibitor.isValid() || m_lidSwitchInhibiting)
         return;
 
-    const QDBusMessage reply = logind.call(
-            QStringLiteral("Inhibit"), QStringLiteral("handle-lid-switch"),
-            QStringLiteral("Cutefish Settings"),
-            QStringLiteral("Cutefish manages lid power policy"), QStringLiteral("block"));
-    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
-        qWarning() << "Unable to inhibit systemd lid handling:" << reply.errorMessage();
-        return;
-    }
+    QDBusMessage message = QDBusMessage::createMethodCall(
+            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
+            QString::fromLatin1(s_logindInterface), QStringLiteral("Inhibit"));
+    message << QStringLiteral("handle-lid-switch") << QStringLiteral("Cutefish")
+            << QStringLiteral("Cutefish manages lid power policy") << QStringLiteral("block");
 
-    const auto inhibitor = reply.arguments().constFirst().value<QDBusUnixFileDescriptor>();
-    if (!inhibitor.isValid()) {
-        qWarning() << "systemd returned an invalid lid inhibitor";
-        return;
-    }
+    m_lidSwitchInhibiting = true;
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message),
+                                                this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this](QDBusPendingCallWatcher *call) {
+                m_lidSwitchInhibiting = false;
+                const QDBusPendingReply<QDBusUnixFileDescriptor> reply = *call;
+                // The reply holds a copy of the descriptor too.
+                call->deleteLater();
+                if (reply.isError()) {
+                    qWarning() << "Unable to inhibit systemd lid handling:"
+                               << reply.error().message();
+                    return;
+                }
 
-    m_lidSwitchInhibitor = inhibitor;
+                // A lid that closed meanwhile stays with logind.
+                if (m_lidPresent && !m_lidSleeping)
+                    m_lidSwitchInhibitor = reply.value();
+            });
 }

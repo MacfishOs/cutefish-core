@@ -2,10 +2,15 @@
 
 #include <QDBusConnection>
 #include <QDBusContext>
+#include <QDBusMessage>
+#include <QDBusUnixFileDescriptor>
 #include <QMutex>
 #include <QTest>
 #include <QThread>
 #include <QTimer>
+
+#include <poll.h>
+#include <unistd.h>
 
 using namespace cutefish::display;
 
@@ -17,6 +22,7 @@ namespace {
 struct Log {
     int locks = 0;
     int suspends = 0;
+    QList<bool> interactive;
     QList<bool> docked;
     QList<uint> power;
 };
@@ -72,28 +78,69 @@ private:
     Recorder *m_recorder;
 };
 
-class FakeSession : public QObject
+class FakeLogind : public QObject, protected QDBusContext
 {
     Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "com.cutefish.Session")
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.login1.Manager")
 
 public:
-    explicit FakeSession(Recorder *recorder)
+    explicit FakeLogind(Recorder *recorder)
         : m_recorder(recorder)
     {
     }
 
-public slots:
-    bool suspend()
+    ~FakeLogind() override
     {
-        m_recorder->update([](Log &log) {
-            ++log.suspends;
-        });
-        return true;
+        if (m_lidInhibitor >= 0)
+            ::close(m_lidInhibitor);
     }
+
+    // Refuses Suspend as logind does while a sleep inhibitor is held.
+    bool inhibited = false;
+
+    // The holder closing its end hangs up the read end kept here.
+    bool holdsLidInhibitor() const
+    {
+        if (m_lidInhibitor < 0)
+            return false;
+        pollfd fd {m_lidInhibitor, 0, 0};
+        return ::poll(&fd, 1, 0) == 0;
+    }
+
+public slots:
+    QDBusUnixFileDescriptor Inhibit(const QString &what, const QString &, const QString &,
+                                    const QString &)
+    {
+        int fds[2];
+        if (what != QStringLiteral("handle-lid-switch") || ::pipe(fds) != 0) {
+            sendErrorReply(QDBusError::NotSupported, what);
+            return {};
+        }
+        if (m_lidInhibitor >= 0)
+            ::close(m_lidInhibitor);
+        m_lidInhibitor = fds[0];
+        QDBusUnixFileDescriptor inhibitor(fds[1]);
+        ::close(fds[1]);
+        return inhibitor;
+    }
+
+    void Suspend(bool interactive)
+    {
+        m_recorder->update([interactive](Log &log) {
+            ++log.suspends;
+            log.interactive.append(interactive);
+        });
+        if (inhibited)
+            sendErrorReply(QStringLiteral("org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"),
+                           QStringLiteral("Operation inhibited"));
+    }
+
+signals:
+    void PrepareForSleep(bool start);
 
 private:
     Recorder *m_recorder;
+    int m_lidInhibitor = -1;
 };
 
 // Answers the way the compositor's DisplayConfigService does.
@@ -191,7 +238,8 @@ private:
     int m_serial = 0;
 };
 
-// The action blocks on Lock and suspend, so the fakes answer from their own thread.
+// The action blocks on Lock, so the fakes answer from their own thread. logind is
+// on the same bus, which the tests make the system bus too.
 class Services : public QObject
 {
     Q_OBJECT
@@ -205,14 +253,14 @@ public:
             m_bus = std::make_unique<QDBusConnection>(QDBusConnection::connectToBus(
                     QDBusConnection::SessionBus, QStringLiteral("fake-services")));
             screenSaver = new FakeScreenSaver(&recorder);
-            session = new FakeSession(&recorder);
+            logind = new FakeLogind(&recorder);
             display = new FakeDisplayConfig(&recorder);
             const auto options =
                     QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals;
             m_bus->registerObject(QStringLiteral("/ScreenSaver"), screenSaver, options);
             m_bus->registerService(QStringLiteral("org.freedesktop.ScreenSaver"));
-            m_bus->registerObject(QStringLiteral("/Session"), session, options);
-            m_bus->registerService(QStringLiteral("com.cutefish.Session"));
+            m_bus->registerObject(QStringLiteral("/org/freedesktop/login1"), logind, options);
+            m_bus->registerService(QStringLiteral("org.freedesktop.login1"));
             m_bus->registerObject(QStringLiteral("/com/cutefish/DisplayConfig1"), display,
                                   options);
             m_bus->registerService(displayService);
@@ -223,10 +271,10 @@ public:
     {
         run([this] {
             m_bus->unregisterService(QStringLiteral("org.freedesktop.ScreenSaver"));
-            m_bus->unregisterService(QStringLiteral("com.cutefish.Session"));
+            m_bus->unregisterService(QStringLiteral("org.freedesktop.login1"));
             m_bus->unregisterService(displayService);
             delete screenSaver;
-            delete session;
+            delete logind;
             delete display;
             const QString name = m_bus->name();
             m_bus.reset();
@@ -243,9 +291,39 @@ public:
         QMetaObject::invokeMethod(this, std::forward<F>(function), Qt::BlockingQueuedConnection);
     }
 
+    bool holdsLidInhibitor()
+    {
+        bool held = false;
+        run([&] {
+            held = logind->holdsLidInhibitor();
+        });
+        return held;
+    }
+
+    void sleepAndWake()
+    {
+        run([this] {
+            emit logind->PrepareForSleep(true);
+            emit logind->PrepareForSleep(false);
+        });
+    }
+
+    void releaseSleepInhibitors()
+    {
+        run([this] {
+            logind->inhibited = false;
+            auto signal = QDBusMessage::createSignal(QStringLiteral("/org/freedesktop/login1"),
+                                                     QStringLiteral("org.freedesktop.DBus.Properties"),
+                                                     QStringLiteral("PropertiesChanged"));
+            signal << QStringLiteral("org.freedesktop.login1.Manager")
+                   << QVariantMap {{QStringLiteral("BlockInhibited"), QString()}} << QStringList();
+            m_bus->send(signal);
+        });
+    }
+
     Recorder recorder;
     FakeScreenSaver *screenSaver = nullptr;
-    FakeSession *session = nullptr;
+    FakeLogind *logind = nullptr;
     FakeDisplayConfig *display = nullptr;
 
 private:
@@ -273,7 +351,7 @@ class PowerPolicyTest : public QObject
 private slots:
     void initTestCase()
     {
-        // No logind here: the lid inhibitor fails instead of reaching the real one.
+        // logind is a fake on the private session bus.
         qputenv("DBUS_SYSTEM_BUS_ADDRESS", qgetenv("DBUS_SESSION_BUS_ADDRESS"));
         // Nor a compositor: idle notifications never arrive, the tests deliver them.
         qputenv("WAYLAND_DISPLAY", "power-policy-test-none");
@@ -287,15 +365,20 @@ private slots:
         action.setLidPresent(true);
         waitForDisplayState();
 
+        QTRY_VERIFY(services.holdsLidInhibitor());
+
         action.handleLidClosed();
         QTRY_COMPARE(services.recorder.log().suspends, 1);
         const Log log = services.recorder.log();
+        QCOMPARE(log.interactive, QList<bool> {false});
         QCOMPARE(log.docked, QList<bool> {true});
         QCOMPARE(log.locks, 1);
         QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+        QTRY_VERIFY(!services.holdsLidInhibitor());
 
         action.handleLidOpened();
         QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0}));
+        QTRY_VERIFY(services.holdsLidInhibitor());
     }
 
     void failedLockStillSuspends()
@@ -516,6 +599,92 @@ private slots:
         QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
         QTest::qWait(1500);
         QCOMPARE(services.recorder.log().suspends, 0);
+    }
+
+    void anInhibitedSleepWaitsWithoutAPrompt()
+    {
+        Services services;
+        services.run([&] {
+            services.logind->inhibited = true;
+        });
+        DimDisplayAction action;
+        waitForDisplayState();
+        action.setPolicy(60, 1);
+
+        action.onIdleTimeout(60000);
+        QTRY_COMPARE(services.recorder.log().suspends, 1);
+        QCOMPARE(services.recorder.log().interactive, QList<bool> {false});
+        QTest::qWait(1500);
+        QCOMPARE(services.recorder.log().suspends, 1);
+
+        services.releaseSleepInhibitors();
+        QTRY_COMPARE(services.recorder.log().suspends, 2);
+        QCOMPARE(services.recorder.log().interactive, (QList<bool> {false, false}));
+    }
+
+    void anInhibitedClosedLidIsLeftToLogind()
+    {
+        Services services;
+        services.run([&] {
+            services.logind->inhibited = true;
+        });
+        DimDisplayAction action;
+        action.setLidPresent(true);
+        waitForDisplayState();
+        QTRY_VERIFY(services.holdsLidInhibitor());
+
+        // logind's own lid handling sleeps through the inhibitor that refused this.
+        action.handleLidClosed();
+        QTRY_COMPARE(services.recorder.log().suspends, 1);
+        QTRY_VERIFY(!services.holdsLidInhibitor());
+
+        // It also sleeps again after a wake with the lid still closed.
+        services.sleepAndWake();
+        QTest::qWait(200);
+        QVERIFY(!services.holdsLidInhibitor());
+
+        action.handleLidOpened();
+        QTRY_VERIFY(services.holdsLidInhibitor());
+    }
+
+    void dockedLidStillSleepsWhenIdle()
+    {
+        Services services;
+        services.run([&] {
+            services.display->external = true;
+        });
+        DimDisplayAction action;
+        action.setLidPresent(true);
+        waitForDisplayState();
+        action.handleLidClosed();
+        QTRY_COMPARE(services.recorder.log().docked, QList<bool> {true});
+        QTest::qWait(100);
+
+        action.setPolicy(1200, 1);
+        action.onIdleTimeout(1200000);
+        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+        QTRY_COMPARE(services.recorder.log().suspends, 1);
+        // An external display is in use, so the lid stays Cutefish's.
+        QVERIFY(services.holdsLidInhibitor());
+    }
+
+    void aWakeWithoutInputSleepsAgain()
+    {
+        Services services;
+        DimDisplayAction action;
+        waitForDisplayState();
+        action.setPolicy(60, 1);
+        action.onIdleTimeout(60000);
+        QTRY_COMPARE(services.recorder.log().suspends, 1);
+
+        services.sleepAndWake();
+        QTRY_COMPARE(services.recorder.log().suspends, 2);
+
+        services.sleepAndWake();
+        QTest::qWait(200);
+        action.onWakeupFromIdle();
+        QTest::qWait(1500);
+        QCOMPARE(services.recorder.log().suspends, 2);
     }
 };
 

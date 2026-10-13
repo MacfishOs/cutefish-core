@@ -40,7 +40,6 @@ private Q_SLOTS:
 
 private:
     bool lockSession();
-    bool suspendSession();
     void trySuspend();
     void turnDisplayOff();
     void restoreDisplay();
@@ -48,7 +47,8 @@ private:
     void stopSuspendCountdown();
     void turnDisplayOffWhenIdle();
     void sleepWithLidClosed(bool waitForLock);
-    void inhibitSystemdLidSwitch();
+    bool idleSleepApplies() const;
+    void updateLidSwitchInhibitor();
     bool hasNativeDisplayPower() const;
     bool setDisplayPower(bool on);
     void requestDockedLid(bool closed);
@@ -64,9 +64,12 @@ private:
     bool m_displayOff = false;
     bool m_suspendRequested = false;
     bool m_suspendDue = false;
+    quint64 m_suspendSerial = 0;
     bool m_lidClosed = false;
     bool m_lidPresent = false;
     bool m_lidDisplayOff = false;
+    // Closed with no display in use: logind handles the lid until it opens.
+    bool m_lidSleeping = false;
     bool m_locked = false;
     // The user has been away for the locked timeout since their last input.
     bool m_lockedIdle = false;
@@ -81,6 +84,7 @@ private:
     std::tuple<QString, qulonglong, qulonglong> m_displayTopology;
 
     QDBusUnixFileDescriptor m_lidSwitchInhibitor;
+    bool m_lidSwitchInhibiting = false;
 
     QTimer m_suspendTimer;
     QElapsedTimer m_displayOffTimer;
