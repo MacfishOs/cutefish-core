@@ -153,7 +153,7 @@ bool BrightnessManager::publish()
     object.addMethod("displays", [this] { return displays(); });
     object.addMethod("displayBrightness",
                      [this](const std::string &display) { return int32_t(displayBrightness(display)); },
-                     {{"display"}, {""}});
+                     {{"display"}, {"value"}});
     object.addMethod("setDisplayBrightness",
                      [this](const std::string &display, int32_t value) { setDisplayBrightness(display, value); },
                      {{"display", "value"}, {}});
