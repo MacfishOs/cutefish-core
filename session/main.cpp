@@ -5,7 +5,8 @@
 
 int main(int argc, char* argv[])
 {
-    Application a(argc, argv);
+    cutefish::base::EventLoop loop;
+    Application a(argc, argv, loop);
 
     return a.exec();
 }

@@ -4,47 +4,51 @@
 #ifndef AUTHSESSION_H
 #define AUTHSESSION_H
 
-#include <QObject>
-#include <QByteArray>
-#include <QString>
+#include <functional>
+#include <memory>
+#include <string>
 
-class QIODevice;
-class QLocalSocket;
-class QProcess;
+namespace cutefish::base {
+class LocalSocket;
+class Process;
+}
 
 // One PAM conversation through polkit's helper: the socket-activated service
 // when polkit provides one, else the setuid binary. Deleting the session ends
 // the conversation.
-class AuthSession : public QObject
+class AuthSession
 {
-    Q_OBJECT
-
 public:
-    explicit AuthSession(QObject *parent = nullptr);
+    AuthSession();
     ~AuthSession();
 
-    void start(const QString &user, const QString &cookie);
-    void respond(const QString &response);
+    AuthSession(const AuthSession &) = delete;
+    AuthSession &operator=(const AuthSession &) = delete;
 
-signals:
-    void request(const QString &prompt, bool echo);
-    void notice(const QString &text, bool error);
-    void completed(bool gainedAuthorization);
+    void start(const std::string &user, const std::string &cookie);
+    void respond(const std::string &response);
+
+    std::function<void(const std::string &prompt, bool echo)> onRequest;
+    std::function<void(const std::string &text, bool error)> onNotice;
+    std::function<void(bool gainedAuthorization)> onCompleted;
+
+    // For tests: the helper and its socket.
+    static void setHelperForTesting(const std::string &helper, const std::string &socket);
 
 private:
-    bool connectSocket(const QString &user);
-    void startProcess(const QString &user);
-    void readOutput();
-    void processLine(const QByteArray &line);
+    bool connectSocket(const std::string &user);
+    void startProcess(const std::string &user);
+    void write(const std::string &line);
+    void readOutput(const std::string &data);
+    void processLine(const std::string &line);
     void finish(bool gainedAuthorization);
 
-private:
-    QLocalSocket *m_socket;
-    QProcess *m_process;
-    QIODevice *m_channel;
-    QByteArray m_buffer;
-    bool m_succeeded;
-    bool m_finished;
+    std::unique_ptr<cutefish::base::LocalSocket> m_socket;
+    std::unique_ptr<cutefish::base::Process> m_process;
+    std::string m_buffer;
+    bool m_succeeded = false;
+    bool m_finished = false;
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
 };
 
 #endif // AUTHSESSION_H

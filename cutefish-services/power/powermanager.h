@@ -1,39 +1,52 @@
 #ifndef CUTEFISH_SETTINGS_POWERMANAGER_H
 #define CUTEFISH_SETTINGS_POWERMANAGER_H
 
-#include <QObject>
-#include <QSettings>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/dbus.h"
+#include "base/settings.h"
+#include "base/signal.h"
 
 class BrightnessManager;
 class DimDisplayAction;
+class IdleManager;
 class UPowerManager;
 
-class PowerManager : public QObject
+class PowerManager
 {
-    Q_OBJECT
-
 public:
-    PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness,
-                 QObject *parent = nullptr);
+    PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness, IdleManager *idle,
+                 cutefish::base::Settings &settings, cutefish::base::dbus::Connection *session,
+                 cutefish::base::dbus::Connection *system);
+    ~PowerManager();
 
-public slots:
+    PowerManager(const PowerManager &) = delete;
+    PowerManager &operator=(const PowerManager &) = delete;
+
+    // com.cutefish.Services.Power at /com/cutefish/Services/Power.
+    bool publish();
+
     void setBatteryScreenOff(int timeout);
     void setACScreenOff(int timeout);
     void setACPreventSleep(bool prevent);
     void setDimDisplayTimeout(int timeout);
 
-private slots:
+private:
     void onBatteryChanged();
     void onLidClosedChanged();
-
-private:
     void loadSettings();
     void applyPolicy();
-    void writePowerSetting(const QString &key, const QVariant &value);
+    template<typename T>
+    void writePowerSetting(const std::string &key, const T &value);
 
-    QSettings m_settings;
+    cutefish::base::Settings &m_settings;
+    cutefish::base::dbus::Connection *m_session;
     UPowerManager *m_upowerManager;
-    DimDisplayAction *m_dimDisplayAction;
+    std::unique_ptr<DimDisplayAction> m_dimDisplayAction;
+    std::unique_ptr<cutefish::base::dbus::Object> m_object;
+    std::vector<cutefish::base::Subscription> m_subscriptions;
 
     int m_batteryScreenOff = 300;
     int m_acScreenOff = 1200;

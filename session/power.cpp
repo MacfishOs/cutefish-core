@@ -3,21 +3,27 @@
 
 #include "power.h"
 
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDebug>
+#include "base/dbus.h"
+#include "logs.h"
 
-static bool callLogind(const QString& method)
+namespace dbus = cutefish::base::dbus;
+
+static bool callLogind(const std::string& method)
 {
-    QDBusMessage message = QDBusMessage::createMethodCall(
-            QStringLiteral("org.freedesktop.login1"), QStringLiteral("/org/freedesktop/login1"),
-            QStringLiteral("org.freedesktop.login1.Manager"), method);
+    dbus::Connection* bus = dbus::Connection::system();
+    if (!bus) {
+        CF_WARNING(sessionLog()) << "logind" << method << "failed: no system bus";
+        return false;
+    }
+    dbus::Message message = bus->newMethodCall("org.freedesktop.login1", "/org/freedesktop/login1",
+                                               "org.freedesktop.login1.Manager", method);
     // Interactive: polkit may ask for a password instead of refusing outright.
-    message << true;
+    message.append(true);
 
-    const QDBusMessage reply = QDBusConnection::systemBus().call(message);
-    if (reply.type() == QDBusMessage::ErrorMessage) {
-        qWarning() << "logind" << method << "failed:" << reply.errorName() << reply.errorMessage();
+    const dbus::Reply reply = bus->call(message);
+    if (reply.isError()) {
+        CF_WARNING(sessionLog()) << "logind" << method << "failed:" << reply.error().name
+                                 << reply.error().message;
         return false;
     }
 
@@ -28,17 +34,17 @@ namespace Power {
 
 bool reboot()
 {
-    return callLogind(QStringLiteral("Reboot"));
+    return callLogind("Reboot");
 }
 
 bool powerOff()
 {
-    return callLogind(QStringLiteral("PowerOff"));
+    return callLogind("PowerOff");
 }
 
 bool suspend()
 {
-    return callLogind(QStringLiteral("Suspend"));
+    return callLogind("Suspend");
 }
 
 } // namespace Power

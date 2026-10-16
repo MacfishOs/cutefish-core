@@ -1,6 +1,9 @@
 #pragma once
 
-#include <QProcess>
+#include <functional>
+#include <string>
+
+#include "base/process.h"
 
 class ShellConnection;
 
@@ -13,15 +16,24 @@ class ShellConnection;
  * ordinary public socket, which its other windows and everything it launches
  * use.
  */
-class ShellProcess final : public QProcess
+class ShellProcess final
 {
 public:
-    explicit ShellProcess(QObject* parent = nullptr);
-    ~ShellProcess() override;
+    ShellProcess();
+    ~ShellProcess();
 
     //! Runs `program --daemon [--desktop-socket <fd>]`. `connection` may be
-    //! null, in which case the daemon runs without a desktop.
-    void startForSession(const QString& program, const QString& socket,
+    //! null, in which case the daemon runs without a desktop. False when it
+    //! is running already or cannot be started.
+    bool startForSession(const std::string& program, const std::string& socket,
                          ShellConnection* connection);
     void stop();
+
+    bool isRunning() const { return m_process.isRunning(); }
+
+    std::function<void(int code, bool crashed)> onFinished;
+
+private:
+    cutefish::base::Process m_process;
+    std::string m_program;
 };

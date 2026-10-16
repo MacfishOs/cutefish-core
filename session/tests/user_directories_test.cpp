@@ -1,66 +1,65 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <QDir>
-#include <QFile>
-#include <QStandardPaths>
-#include <QTemporaryDir>
-#include <QTest>
+#include <algorithm>
+#include <filesystem>
 
+#include <gtest/gtest.h>
+
+#include "base/file.h"
+#include "base/paths.h"
+#include "testutil.h"
 #include "userdirectories.h"
 
-class UserDirectoriesTest : public QObject
+using cutefish::base::file::TemporaryDirectory;
+namespace fs = std::filesystem;
+
+static std::vector<std::string> directoryNames(const std::string& path)
 {
-    Q_OBJECT
-
-private slots:
-
-    void firstLogin()
-    {
-        QTemporaryDir home;
-        const auto config = home.filePath(".config");
-        UserDirectories::ensure(home.path(), config);
-
-        const QStringList names {"Desktop", "Documents", "Downloads", "Music",
-                                 "Pictures", "Public", "Templates", "Videos"};
-        QCOMPARE(QDir(home.path()).entryList(QDir::Dirs | QDir::NoDotAndDotDot), names);
-
-        QFile file(config + "/user-dirs.dirs");
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        QCOMPARE(file.readAll(),
-                 QByteArray("XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n"
-                            "XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n"
-                            "XDG_TEMPLATES_DIR=\"$HOME/Templates\"\n"
-                            "XDG_PUBLICSHARE_DIR=\"$HOME/Public\"\n"
-                            "XDG_DOCUMENTS_DIR=\"$HOME/Documents\"\n"
-                            "XDG_MUSIC_DIR=\"$HOME/Music\"\n"
-                            "XDG_PICTURES_DIR=\"$HOME/Pictures\"\n"
-                            "XDG_VIDEOS_DIR=\"$HOME/Videos\"\n"));
-
-        qputenv("HOME", home.path().toUtf8());
-        qputenv("XDG_CONFIG_HOME", config.toUtf8());
-        QCOMPARE(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
-                 home.filePath("Downloads"));
+    std::vector<std::string> names;
+    for (const auto& item : fs::directory_iterator(path)) {
+        if (item.is_directory())
+            names.push_back(item.path().filename().string());
     }
+    std::sort(names.begin(), names.end());
+    return names;
+}
 
-    void existingFileIsKept()
-    {
-        QTemporaryDir home;
-        const auto config = home.filePath(".config");
-        QVERIFY(QDir().mkpath(config));
-        const QByteArray contents = "XDG_DESKTOP_DIR=\"$HOME/Schreibtisch\"\n";
-        QFile file(config + "/user-dirs.dirs");
-        QVERIFY(file.open(QIODevice::WriteOnly));
-        file.write(contents);
-        file.close();
+TEST(UserDirectories, firstLogin)
+{
+    TemporaryDirectory home(sessiontest::temporaryParent());
+    const auto config = home.path() + "/.config";
+    UserDirectories::ensure(home.path(), config);
 
-        UserDirectories::ensure(home.path(), config);
+    const std::vector<std::string> names {".config",  "Desktop",  "Documents", "Downloads", "Music",
+                                          "Pictures", "Public",   "Templates", "Videos"};
+    EXPECT_EQ(directoryNames(home.path()), names);
 
-        QCOMPARE(QDir(home.path()).entryList(QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot),
-                 QStringList {".config"});
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        QCOMPARE(file.readAll(), contents);
-    }
-};
-QTEST_GUILESS_MAIN(UserDirectoriesTest)
-#include "user_directories_test.moc"
+    EXPECT_EQ(sessiontest::readFile(config + "/user-dirs.dirs"),
+              "XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n"
+              "XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n"
+              "XDG_TEMPLATES_DIR=\"$HOME/Templates\"\n"
+              "XDG_PUBLICSHARE_DIR=\"$HOME/Public\"\n"
+              "XDG_DOCUMENTS_DIR=\"$HOME/Documents\"\n"
+              "XDG_MUSIC_DIR=\"$HOME/Music\"\n"
+              "XDG_PICTURES_DIR=\"$HOME/Pictures\"\n"
+              "XDG_VIDEOS_DIR=\"$HOME/Videos\"\n");
+
+    // What the rest of the desktop reads back, $HOME being the user's home.
+    EXPECT_EQ(cutefish::base::paths::userDirectory(cutefish::base::paths::UserDirectory::Downloads,
+                                                   config + "/user-dirs.dirs"),
+              cutefish::base::paths::home() + "/Downloads");
+}
+
+TEST(UserDirectories, existingFileIsKept)
+{
+    TemporaryDirectory home(sessiontest::temporaryParent());
+    const auto config = home.path() + "/.config";
+    const std::string contents = "XDG_DESKTOP_DIR=\"$HOME/Schreibtisch\"\n";
+    ASSERT_TRUE(sessiontest::writeFile(config + "/user-dirs.dirs", contents));
+
+    UserDirectories::ensure(home.path(), config);
+
+    EXPECT_EQ(directoryNames(home.path()), std::vector<std::string> {".config"});
+    EXPECT_EQ(sessiontest::readFile(config + "/user-dirs.dirs"), contents);
+}

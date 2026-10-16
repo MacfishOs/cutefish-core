@@ -3,14 +3,15 @@
 
 #include "captureswitches.h"
 
-#include <QDebug>
-#include <QDir>
-#include <QFile>
-#include <QSocketNotifier>
+#include "base/event_loop.h"
+#include "base/logging.h"
 
+#include <algorithm>
 #include <errno.h>
+#include <filesystem>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -19,7 +20,9 @@
 
 #include <vector>
 
-static QList<snd_ctl_elem_id> captureSwitches(int fd)
+static const cutefish::base::LogCategory kLog("cutefish.privacy");
+
+static std::vector<snd_ctl_elem_id> captureSwitches(int fd)
 {
     snd_ctl_elem_list list = {};
     if (::ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &list) < 0)
@@ -32,11 +35,11 @@ static QList<snd_ctl_elem_id> captureSwitches(int fd)
         return {};
 
     // ALSA names every capture mute "<source> Capture Switch", or just "Capture Switch".
-    QList<snd_ctl_elem_id> switches;
+    std::vector<snd_ctl_elem_id> switches;
     for (unsigned int i = 0; i < list.used; ++i) {
-        const QByteArray name(reinterpret_cast<const char *>(ids[i].name));
-        if (ids[i].iface == SNDRV_CTL_ELEM_IFACE_MIXER && name.endsWith("Capture Switch"))
-            switches.append(ids[i]);
+        const std::string name(reinterpret_cast<const char *>(ids[i].name));
+        if (ids[i].iface == SNDRV_CTL_ELEM_IFACE_MIXER && name.ends_with("Capture Switch"))
+            switches.push_back(ids[i]);
     }
 
     return switches;
@@ -57,16 +60,18 @@ static bool writeSwitch(int fd, const snd_ctl_elem_id &id, bool on)
     return ::ioctl(fd, SNDRV_CTL_IOCTL_ELEM_WRITE, &value) >= 0;
 }
 
-CaptureSwitches::CaptureSwitches(const QString &deviceDirectory, QObject *parent)
-    : QObject(parent)
-    , m_deviceDirectory(deviceDirectory)
+CaptureSwitches::CaptureSwitches(const std::string &deviceDirectory)
+    : m_deviceDirectory(deviceDirectory)
 {
 }
 
 CaptureSwitches::~CaptureSwitches()
 {
-    for (int fd : std::as_const(m_cards))
+    for (const auto &[name, fd] : m_cards)
         ::close(fd);
+
+    if (m_watch)
+        cutefish::base::EventLoop::current()->unwatch(m_watch);
 
     if (m_inotify >= 0)
         ::close(m_inotify);
@@ -80,8 +85,10 @@ void CaptureSwitches::setLocked(bool locked)
     m_locked = locked;
 
     if (!locked) {
-        const QStringList names = m_cards.keys();
-        for (const QString &name : names)
+        std::vector<std::string> names;
+        for (const auto &[name, fd] : m_cards)
+            names.push_back(name);
+        for (const std::string &name : names)
             unlockCard(name);
 
         return;
@@ -90,35 +97,44 @@ void CaptureSwitches::setLocked(bool locked)
     // Sound cards plugged in while locked are locked as their control node appears.
     if (m_inotify < 0) {
         m_inotify = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-        if (m_inotify >= 0 && ::inotify_add_watch(m_inotify, QFile::encodeName(m_deviceDirectory).constData(),
-                                                  IN_CREATE | IN_DELETE) >= 0) {
-            m_notifier = new QSocketNotifier(m_inotify, QSocketNotifier::Read, this);
-            connect(m_notifier, &QSocketNotifier::activated, this, &CaptureSwitches::readEvents);
+        if (m_inotify >= 0 && ::inotify_add_watch(m_inotify, m_deviceDirectory.c_str(), IN_CREATE | IN_DELETE) >= 0) {
+            m_watch = cutefish::base::EventLoop::current()->watch(m_inotify, EPOLLIN, [this](uint32_t) {
+                readEvents();
+            });
         } else {
-            qWarning() << "cutefish-privacy: cannot watch" << m_deviceDirectory << ::strerror(errno);
+            CF_WARNING(kLog) << "cutefish-privacy: cannot watch" << m_deviceDirectory << ::strerror(errno);
         }
     }
 
-    const QStringList names = QDir(m_deviceDirectory).entryList({QStringLiteral("controlC*")}, QDir::System);
-    for (const QString &name : names)
+    // Control nodes are character devices, never regular files.
+    std::vector<std::string> names;
+    std::error_code error;
+    for (const auto &item : std::filesystem::directory_iterator(m_deviceDirectory, error)) {
+        const std::string name = item.path().filename().string();
+        std::error_code typeError;
+        if (name.starts_with("controlC") && !item.is_directory(typeError) && !item.is_regular_file(typeError))
+            names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    for (const std::string &name : names)
         lockCard(name);
 }
 
-void CaptureSwitches::lockCard(const QString &name)
+void CaptureSwitches::lockCard(const std::string &name)
 {
     if (m_cards.contains(name))
         return;
 
-    const QByteArray path = QFile::encodeName(m_deviceDirectory + QLatin1Char('/') + name);
-    const int fd = ::open(path.constData(), O_RDWR | O_CLOEXEC);
+    const std::string path = m_deviceDirectory + '/' + name;
+    const int fd = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
     if (fd < 0) {
-        qWarning() << "cutefish-privacy: cannot open" << path << ::strerror(errno);
+        CF_WARNING(kLog) << "cutefish-privacy: cannot open" << path << ::strerror(errno);
         return;
     }
 
-    const QList<snd_ctl_elem_id> switches = captureSwitches(fd);
-    if (switches.isEmpty()) {
-        qInfo() << "cutefish-privacy:" << name << "has no capture switch";
+    const std::vector<snd_ctl_elem_id> switches = captureSwitches(fd);
+    if (switches.empty()) {
+        CF_INFO(kLog) << "cutefish-privacy:" << name << "has no capture switch";
         ::close(fd);
         return;
     }
@@ -126,22 +142,26 @@ void CaptureSwitches::lockCard(const QString &name)
     for (snd_ctl_elem_id id : switches) {
         // Locked before the write, so nothing turns it back on in between.
         if (::ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LOCK, &id) < 0)
-            qWarning() << "cutefish-privacy: cannot lock" << name << reinterpret_cast<const char *>(id.name)
-                       << ::strerror(errno);
+            CF_WARNING(kLog) << "cutefish-privacy: cannot lock" << name << reinterpret_cast<const char *>(id.name)
+                             << ::strerror(errno);
 
         if (!writeSwitch(fd, id, false))
-            qWarning() << "cutefish-privacy: cannot turn off" << name << reinterpret_cast<const char *>(id.name)
-                       << ::strerror(errno);
+            CF_WARNING(kLog) << "cutefish-privacy: cannot turn off" << name
+                             << reinterpret_cast<const char *>(id.name) << ::strerror(errno);
     }
 
-    m_cards.insert(name, fd);
+    m_cards[name] = fd;
 }
 
-void CaptureSwitches::unlockCard(const QString &name)
+void CaptureSwitches::unlockCard(const std::string &name)
 {
-    const int fd = m_cards.take(name);
+    const auto found = m_cards.find(name);
+    if (found == m_cards.end())
+        return;
+    const int fd = found->second;
+    m_cards.erase(found);
 
-    const QList<snd_ctl_elem_id> switches = captureSwitches(fd);
+    const std::vector<snd_ctl_elem_id> switches = captureSwitches(fd);
     for (snd_ctl_elem_id id : switches) {
         writeSwitch(fd, id, true);
         ::ioctl(fd, SNDRV_CTL_IOCTL_ELEM_UNLOCK, &id);
@@ -163,13 +183,16 @@ void CaptureSwitches::readEvents()
             const auto *event = reinterpret_cast<const inotify_event *>(buffer + offset);
             offset += sizeof(inotify_event) + event->len;
 
-            const QString name = event->len ? QFile::decodeName(event->name) : QString();
-            if (!name.startsWith(QLatin1String("controlC")))
+            const std::string name = event->len ? std::string(event->name) : std::string();
+            if (!name.starts_with("controlC"))
                 continue;
 
             if (event->mask & IN_DELETE) {
-                if (m_cards.contains(name))
-                    ::close(m_cards.take(name));
+                const auto found = m_cards.find(name);
+                if (found != m_cards.end()) {
+                    ::close(found->second);
+                    m_cards.erase(found);
+                }
             } else if (m_locked) {
                 lockCard(name);
             }

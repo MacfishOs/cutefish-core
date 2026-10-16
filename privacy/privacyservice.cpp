@@ -3,54 +3,35 @@
 
 #include "privacyservice.h"
 
-#include <QDBusArgument>
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDBusMetaType>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
-#include <QDebug>
-#include <QDir>
-#include <QFile>
+#include "base/event_loop.h"
+#include "base/logging.h"
 
-static const QString kAction = QStringLiteral("com.cutefish.privacy.switch-devices");
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <filesystem>
+#include <map>
+#include <tuple>
+#include <unistd.h>
+
+namespace dbus = cutefish::base::dbus;
+using namespace std::chrono_literals;
+
+static const cutefish::base::LogCategory kLog("cutefish.privacy");
+
+static constexpr char kAction[] = "com.cutefish.privacy.switch-devices";
 static const char *const kCamera = "camera";
 static const char *const kMicrophone = "microphone";
-static const int kIdleTimeout = 60 * 1000;
+static constexpr auto kIdleTimeout = 60s;
 
 // polkit's Subject: a kind and its details.
-struct PolkitSubject
+using PolkitSubject = std::tuple<std::string, dbus::VariantMap>;
+
+PrivacyService::PrivacyService(const std::string &stateDirectory)
+    : m_stateDirectory(stateDirectory)
 {
-    QString kind;
-    QVariantMap details;
-};
-
-Q_DECLARE_METATYPE(PolkitSubject)
-
-static QDBusArgument &operator<<(QDBusArgument &argument, const PolkitSubject &subject)
-{
-    argument.beginStructure();
-    argument << subject.kind << subject.details;
-    argument.endStructure();
-    return argument;
-}
-
-static const QDBusArgument &operator>>(const QDBusArgument &argument, PolkitSubject &subject)
-{
-    argument.beginStructure();
-    argument >> subject.kind >> subject.details;
-    argument.endStructure();
-    return argument;
-}
-
-PrivacyService::PrivacyService(const QString &stateDirectory, QObject *parent)
-    : QObject(parent)
-    , m_stateDirectory(stateDirectory)
-{
-    qDBusRegisterMetaType<PolkitSubject>();
-    qDBusRegisterMetaType<QMap<QString, QString>>();
-
-    QDir().mkpath(m_stateDirectory);
+    std::error_code error;
+    std::filesystem::create_directories(m_stateDirectory, error);
 
     // Again at start, for devices that were present before the udev rules.
     if (!cameraEnabled())
@@ -61,82 +42,100 @@ PrivacyService::PrivacyService(const QString &stateDirectory, QObject *parent)
 
     m_idleTimer.setSingleShot(true);
     m_idleTimer.setInterval(kIdleTimeout);
-    connect(&m_idleTimer, &QTimer::timeout, this, [this] {
-        if (!m_captureSwitches.isLocked())
-            Q_EMIT idle();
-    });
+    m_idleTimer.onTimeout = [this] {
+        if (!m_captureSwitches.isLocked() && onIdle)
+            onIdle();
+    };
     m_idleTimer.start();
+}
+
+bool PrivacyService::exportTo(dbus::Connection *bus)
+{
+    m_bus = bus;
+    m_object = std::make_unique<dbus::Object>(bus, "/com/cutefish/Privacy", "com.cutefish.Privacy");
+    m_object->addProperty("cameraEnabled", [this] { return cameraEnabled(); });
+    m_object->addProperty("microphoneEnabled", [this] { return microphoneEnabled(); });
+    m_object->addMethod(
+            "setCameraEnabled", "b", "",
+            [this](dbus::MethodCall &call) {
+                bool enabled = false;
+                call.read(enabled);
+                authorize(call, [this, enabled] {
+                    applyCamera(enabled);
+                });
+            },
+            {{"enabled"}, {}});
+    m_object->addMethod(
+            "setMicrophoneEnabled", "b", "",
+            [this](dbus::MethodCall &call) {
+                bool enabled = false;
+                call.read(enabled);
+                authorize(call, [this, enabled] {
+                    applyMicrophone(enabled);
+                });
+            },
+            {{"enabled"}, {}});
+    m_object->addSignal("cameraEnabledChanged", "b", {"enabled"});
+    m_object->addSignal("microphoneEnabledChanged", "b", {"enabled"});
+    return m_object->publish();
 }
 
 bool PrivacyService::cameraEnabled() const
 {
-    return !QFile::exists(flagPath(kCamera));
+    return ::access(flagPath(kCamera).c_str(), F_OK) != 0;
 }
 
 bool PrivacyService::microphoneEnabled() const
 {
-    return !QFile::exists(flagPath(kMicrophone));
+    return ::access(flagPath(kMicrophone).c_str(), F_OK) != 0;
 }
 
 void PrivacyService::setCameraEnabled(bool enabled)
 {
-    authorize([this, enabled] {
-        applyCamera(enabled);
-    });
+    m_idleTimer.start();
+    applyCamera(enabled);
 }
 
 void PrivacyService::setMicrophoneEnabled(bool enabled)
 {
-    authorize([this, enabled] {
-        applyMicrophone(enabled);
-    });
+    m_idleTimer.start();
+    applyMicrophone(enabled);
 }
 
-void PrivacyService::authorize(std::function<void()> apply)
+void PrivacyService::authorize(dbus::MethodCall &call, std::function<void()> apply)
 {
     m_idleTimer.start();
 
-    if (!calledFromDBus()) {
-        apply();
-        return;
-    }
-
-    setDelayedReply(true);
-    const QDBusMessage request = message();
-
-    QDBusMessage check = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.PolicyKit1"),
-                                                        QStringLiteral("/org/freedesktop/PolicyKit1/Authority"),
-                                                        QStringLiteral("org.freedesktop.PolicyKit1.Authority"),
-                                                        QStringLiteral("CheckAuthorization"));
-    const PolkitSubject subject {QStringLiteral("system-bus-name"),
-                                 {{QStringLiteral("name"), request.service()}}};
+    dbus::MethodCall request = call;
+    dbus::Message check = m_bus->newMethodCall("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority",
+                                               "org.freedesktop.PolicyKit1.Authority", "CheckAuthorization");
+    const PolkitSubject subject {"system-bus-name", {{"name", dbus::Variant(call.message().sender())}}};
     // 1: AllowUserInteraction, should an administrator require a password.
-    check << QVariant::fromValue(subject) << kAction << QVariant::fromValue(QMap<QString, QString>())
-          << uint(1) << QString();
+    check.append(subject, std::string(kAction), std::map<std::string, std::string>(), uint32_t(1), std::string());
 
-    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(check), this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [request, apply](QDBusPendingCallWatcher *watcher) {
-        watcher->deleteLater();
+    // Kept until the reply has been handled, then released on the loop. No
+    // timeout: an administrator may take a while over the password.
+    auto pending = std::make_shared<dbus::PendingCall>();
+    *pending = m_bus->callAsync(
+            check,
+            [request, apply, pending](const dbus::Reply &reply) mutable {
+                bool authorized = false;
+                std::tuple<bool, bool, std::map<std::string, std::string>> result;
+                if (reply.read(result))
+                    authorized = std::get<0>(result);
+                else
+                    CF_WARNING(kLog) << "cutefish-privacy: polkit check failed:" << reply.error().message;
 
-        bool authorized = false;
-        const QDBusMessage reply = watcher->reply();
-        if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
-            const QDBusArgument result = reply.arguments().constFirst().value<QDBusArgument>();
-            result.beginStructure();
-            result >> authorized;
-        } else {
-            qWarning() << "cutefish-privacy: polkit check failed:" << reply.errorMessage();
-        }
-
-        if (!authorized) {
-            QDBusConnection::systemBus().send(request.createErrorReply(
-                QDBusError::AccessDenied, QStringLiteral("Not authorized to turn the camera or microphone on or off")));
-            return;
-        }
-
-        apply();
-        QDBusConnection::systemBus().send(request.createReply());
-    });
+                if (!authorized) {
+                    request.replyError("org.freedesktop.DBus.Error.AccessDenied",
+                                       "Not authorized to turn the camera or microphone on or off");
+                } else {
+                    apply();
+                    request.reply();
+                }
+                cutefish::base::EventLoop::current()->post([released = std::move(pending)] {});
+            },
+            std::chrono::hours(24));
 }
 
 void PrivacyService::applyCamera(bool enabled)
@@ -147,8 +146,8 @@ void PrivacyService::applyCamera(bool enabled)
     setFlag(kCamera, !enabled);
     m_cameras.setAuthorized(enabled);
 
-    if (changed)
-        Q_EMIT cameraEnabledChanged(enabled);
+    if (changed && m_object)
+        m_object->emitSignal("cameraEnabledChanged", enabled);
 }
 
 void PrivacyService::applyMicrophone(bool enabled)
@@ -158,24 +157,28 @@ void PrivacyService::applyMicrophone(bool enabled)
     setFlag(kMicrophone, !enabled);
     m_captureSwitches.setLocked(!enabled);
 
-    if (changed)
-        Q_EMIT microphoneEnabledChanged(enabled);
+    if (changed && m_object)
+        m_object->emitSignal("microphoneEnabledChanged", enabled);
 }
 
-QString PrivacyService::flagPath(const char *device) const
+std::string PrivacyService::flagPath(const char *device) const
 {
-    return m_stateDirectory + QLatin1Char('/') + QLatin1String(device) + QStringLiteral("-off");
+    return m_stateDirectory + '/' + device + "-off";
 }
 
 void PrivacyService::setFlag(const char *device, bool off)
 {
-    QFile flag(flagPath(device));
+    const std::string path = flagPath(device);
 
     if (!off) {
-        flag.remove();
+        ::unlink(path.c_str());
         return;
     }
 
-    if (!flag.open(QIODevice::WriteOnly))
-        qWarning() << "cutefish-privacy: cannot write" << flag.fileName() << flag.errorString();
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    if (fd < 0) {
+        CF_WARNING(kLog) << "cutefish-privacy: cannot write" << path << std::strerror(errno);
+        return;
+    }
+    ::close(fd);
 }

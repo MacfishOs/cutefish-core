@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <QTest>
+#include <gtest/gtest.h>
 
 #include "coredump.h"
 
@@ -24,69 +24,69 @@ static const char s_message[] =
         "#1  0x00007fe71931c538 n/a (libc.so.6 + 0x110538)\n"
         "ELF object binary architecture: AMD x86-64";
 
-class CoredumpTest : public QObject
+TEST(CoredumpTest, ParsesThreadsAndFrames)
 {
-    Q_OBJECT
+    const auto threads = Coredump::parseStackTrace(s_message);
+    ASSERT_EQ(threads.size(), 2u);
+    EXPECT_EQ(threads[0].id, "2112053");
+    ASSERT_EQ(threads[0].frames.size(), 5u);
+    EXPECT_EQ(threads[0].frames[0].function, "");
+    EXPECT_EQ(threads[0].frames[0].module, "libc.so.6");
+    EXPECT_EQ(threads[0].frames[1].function, "raise");
+    EXPECT_EQ(threads[0].frames[2].function, "QMessageLogger::fatal(char const*, ...) const");
+    EXPECT_EQ(threads[0].frames[3].module, "/home/reion/align/svgrender/build/svgrender");
+    EXPECT_EQ(threads[0].frames[4].module, "");
+    EXPECT_EQ(threads[1].frames.size(), 2u);
+}
 
-private slots:
+TEST(CoredumpTest, IgnoresAMessageWithoutStack)
+{
+    EXPECT_TRUE(Coredump::parseStackTrace("Process 1 (x) of user 1000 dumped core.").empty());
+}
 
-    void parsesThreadsAndFrames()
-    {
-        const auto threads = Coredump::parseStackTrace(QString::fromLatin1(s_message));
-        QCOMPARE(threads.size(), 2);
-        QCOMPARE(threads.at(0).id, QStringLiteral("2112053"));
-        QCOMPARE(threads.at(0).frames.size(), 5);
-        QCOMPARE(threads.at(0).frames.at(0).function, QString());
-        QCOMPARE(threads.at(0).frames.at(0).module, QStringLiteral("libc.so.6"));
-        QCOMPARE(threads.at(0).frames.at(1).function, QStringLiteral("raise"));
-        QCOMPARE(threads.at(0).frames.at(2).function,
-                 QStringLiteral("QMessageLogger::fatal(char const*, ...) const"));
-        QCOMPARE(threads.at(0).frames.at(3).module,
-                 QStringLiteral("/home/reion/align/svgrender/build/svgrender"));
-        QCOMPARE(threads.at(0).frames.at(4).module, QString());
-        QCOMPARE(threads.at(1).frames.size(), 2);
-    }
+TEST(CoredumpTest, KeepsWhatItCannotDemangle)
+{
+    EXPECT_EQ(Coredump::demangle("_Zbogus"), "_Zbogus");
+    EXPECT_EQ(Coredump::demangle("main"), "main");
+}
 
-    void ignoresAMessageWithoutStack()
-    {
-        QVERIFY(Coredump::parseStackTrace(QStringLiteral("Process 1 (x) of user 1000 dumped core."))
-                        .isEmpty());
-    }
+TEST(CoredumpTest, ReadsTheApplicationFromItsScope)
+{
+    Coredump dump;
+    dump.userUnit = "app-cutefish-cutefish\\x2dsystem\\x2dmonitor-2127671.scope";
+    EXPECT_EQ(dump.applicationId(), "cutefish-system-monitor");
+    EXPECT_EQ(dump.applicationPid(), 2127671u);
 
-    void keepsWhatItCannotDemangle()
-    {
-        QCOMPARE(Coredump::demangle(QStringLiteral("_Zbogus")), QStringLiteral("_Zbogus"));
-        QCOMPARE(Coredump::demangle(QStringLiteral("main")), QStringLiteral("main"));
-    }
+    dump.userUnit = "app-cutefish-org.gnome.\\xe6\\x96\\x87-12.scope";
+    EXPECT_EQ(dump.applicationId(), "org.gnome.\xe6\x96\x87");
 
-    void readsTheApplicationFromItsScope()
-    {
-        Coredump dump;
-        dump.userUnit = QStringLiteral("app-cutefish-cutefish\\x2dsystem\\x2dmonitor-2127671.scope");
-        QCOMPARE(dump.applicationId(), QStringLiteral("cutefish-system-monitor"));
-        QCOMPARE(dump.applicationPid(), 2127671u);
+    dump.userUnit = "session-662.scope";
+    EXPECT_EQ(dump.applicationId(), "");
+    EXPECT_EQ(dump.applicationPid(), 0u);
+}
 
-        dump.userUnit = QStringLiteral("app-cutefish-org.gnome.\\xe6\\x96\\x87-12.scope");
-        QCOMPARE(dump.applicationId(), QStringLiteral("org.gnome.文"));
+TEST(CoredumpTest, WritesAReport)
+{
+    Coredump dump;
+    dump.signal = SIGSEGV;
+    dump.signalName = "SIGSEGV";
+    dump.executable = "/usr/bin/x";
+    dump.threads = Coredump::parseStackTrace(s_message);
+    const std::string report = dump.report("X");
+    EXPECT_EQ(report.rfind("X quit unexpectedly\nExecutable: /usr/bin/x\n", 0), 0u);
+    EXPECT_NE(report.find("(SIGSEGV)"), std::string::npos);
+    EXPECT_NE(report.find("\nThread 2112053:\n#0 ?? (libc.so.6)\n#1 raise (libc.so.6)\n"), std::string::npos);
+}
 
-        dump.userUnit = QStringLiteral("session-662.scope");
-        QCOMPARE(dump.applicationId(), QString());
-        QCOMPARE(dump.applicationPid(), 0u);
-    }
-
-    void writesAReport()
-    {
-        Coredump dump;
-        dump.signal = SIGSEGV;
-        dump.signalName = QStringLiteral("SIGSEGV");
-        dump.executable = QStringLiteral("/usr/bin/x");
-        dump.threads = Coredump::parseStackTrace(QString::fromLatin1(s_message));
-        const QString report = dump.report(QStringLiteral("X"));
-        QVERIFY(report.startsWith(QStringLiteral("X quit unexpectedly\nExecutable: /usr/bin/x\n")));
-        QVERIFY(report.contains(QStringLiteral("(SIGSEGV)")));
-        QVERIFY(report.contains(QStringLiteral("\nThread 2112053:\n#0 ?? (libc.so.6)\n#1 raise (libc.so.6)\n")));
-    }
-};
-
-QTEST_GUILESS_MAIN(CoredumpTest)
-#include "coredump_test.moc"
+TEST(CoredumpTest, WritesTheLocalTime)
+{
+    Coredump dump;
+    dump.time = 1760000000000;
+    const std::string report = dump.report("X");
+    const size_t time = report.find("Time: ");
+    ASSERT_NE(time, std::string::npos);
+    // 2025-10-09T08:53:20 in UTC; the zone is the machine's, and not written.
+    const std::string value = report.substr(time + 6, report.find('\n', time) - time - 6);
+    EXPECT_EQ(value.size(), 19u) << value;
+    EXPECT_EQ(value[10], 'T');
+}

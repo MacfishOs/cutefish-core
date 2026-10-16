@@ -5,25 +5,29 @@
 #include "action.h"
 #include "idlemanager.h"
 
-Action::Action(QObject* parent)
-        : QObject(parent)
+Action::Action(IdleManager *idle)
+    : m_idle(idle)
 {
 }
 
-Action::~Action() = default;
+Action::~Action()
+{
+    if (m_idle)
+        m_idle->unregisterActionTimeouts(this);
+}
 
 int Action::registerIdleTimeout(int seconds)
 {
-    return IdleManager::self()->registerActionTimeout(this, seconds);
+    return m_idle ? m_idle->registerActionTimeout(this, seconds) : -1;
 }
 
 void Action::unregisterIdleTimeout(int identifier)
 {
-    IdleManager::self()->unregisterActionTimeout(this, identifier);
+    if (m_idle)
+        m_idle->unregisterActionTimeout(this, identifier);
 }
 
 bool Action::isSupported()
 {
     return true;
 }
-

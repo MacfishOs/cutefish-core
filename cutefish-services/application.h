@@ -4,45 +4,61 @@
 #ifndef APPLICATION_H
 #define APPLICATION_H
 
-#include "appearance/thememanager.h"
-#include "battery/batterywarning.h"
-#include "battery/upowermanager.h"
-#include "brightness/brightnessmanager.h"
-#include "clipboard/clipboard.h"
-#include "crash/crashmanager.h"
-#include "locale/language.h"
-#include "nightlight/nightlight.h"
-#include "permissions/permissionmanager.h"
-#include "power/powermanager.h"
-#include "proxy/proxyservice.h"
-#include <QGuiApplication>
+#include <memory>
 
-class Application : public QGuiApplication
+#include "base/settings.h"
+#include "base/signal.h"
+
+class BatteryWarning;
+class BrightnessManager;
+class Clipboard;
+class CrashManager;
+class IdleManager;
+class Language;
+class NightLight;
+class PermissionManager;
+class PowerManager;
+class ProxyService;
+class ThemeManager;
+class UPowerManager;
+
+namespace cutefish::base::dbus {
+class Connection;
+}
+
+// The session's services, on the session bus as com.cutefish.Services.
+class Application
 {
-    Q_OBJECT
-
 public:
-    explicit Application(int &argc, char **argv);
+    Application();
+    ~Application();
+
+    Application(const Application &) = delete;
+    Application &operator=(const Application &) = delete;
 
     void initTrash();
 
 private:
-    // One engine for every window of this process: FishUI sets up only the
-    // first engine that imports it.
-    QQmlEngine *engine();
+    // This process's dialogs follow the appearance it keeps itself.
+    void applyTheme();
 
-    QQmlEngine *m_engine = nullptr;
-    ThemeManager *m_themeManager;
-    BrightnessManager *m_brightnessManager;
-    UPowerManager *m_upowerManager;
-    BatteryWarning *m_batteryWarning;
-    Language *m_language;
-    Clipboard *m_clipboard;
-    PowerManager *m_powerManager;
-    NightLight *m_nightLight;
-    PermissionManager *m_permissionManager;
-    CrashManager *m_crashManager;
-    ProxyService *m_proxyService;
+    cutefish::base::dbus::Connection *m_session;
+    cutefish::base::dbus::Connection *m_system;
+    // ~/.config/cutefish/services.conf, which every part shares.
+    cutefish::base::Settings m_settings;
+    std::unique_ptr<IdleManager> m_idleManager;
+    std::unique_ptr<ThemeManager> m_themeManager;
+    std::unique_ptr<BrightnessManager> m_brightnessManager;
+    std::unique_ptr<UPowerManager> m_upowerManager;
+    std::unique_ptr<BatteryWarning> m_batteryWarning;
+    std::unique_ptr<Language> m_language;
+    std::unique_ptr<Clipboard> m_clipboard;
+    std::unique_ptr<PowerManager> m_powerManager;
+    std::unique_ptr<NightLight> m_nightLight;
+    std::unique_ptr<PermissionManager> m_permissionManager;
+    std::unique_ptr<CrashManager> m_crashManager;
+    std::unique_ptr<ProxyService> m_proxyService;
+    cutefish::base::Subscription m_themeChanged;
 };
 
 #endif // APPLICATION_H

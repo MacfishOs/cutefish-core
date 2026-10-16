@@ -2,117 +2,166 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "language.h"
-#include "languageenvironment.h"
-#include "cutefishnotification.h"
-#include "preferences.h"
-#include "languageadaptor.h"
-#include "appearance/thememanager.h"
+#include "appearance/fontconfigwriter.h"
 
-#include <QDBusConnection>
-#include <QSettings>
-#include <QDBusMessage>
-#include <QDBusMetaType>
-#include <QLocale>
+#include <algorithm>
+#include <map>
 
-Language *Language::self()
+#include <systemd/sd-bus.h>
+#include <unicode/uloc.h>
+
+#include "base/strings.h"
+#include "common/environment.h"
+#include "common/language_environment.h"
+
+using namespace cutefish::base;
+using namespace cutefish::base::strings;
+namespace language = cutefish::core::language;
+
+static void removeAll(std::vector<std::string> &list, const std::string &value)
 {
-    static Language s;
-    return &s;
+    list.erase(std::remove(list.begin(), list.end(), value), list.end());
 }
 
-Language::Language(QObject *parent)
-    : QObject(parent)
-    , m_settings(new QSettings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat, this))
+static void removeDuplicates(std::vector<std::string> &list)
 {
-    m_settings->beginGroup(QStringLiteral("Language"));
-
-    qDBusRegisterMetaType<QMap<QString, QString>>();
-    new LanguageAdaptor(this);
-    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Language"),
-                                                 this);
-
-    emit languageChanged();
+    std::vector<std::string> unique;
+    for (const std::string &entry : list) {
+        if (std::find(unique.begin(), unique.end(), entry) == unique.end())
+            unique.push_back(entry);
+    }
+    list = std::move(unique);
 }
 
-QString Language::languageCode() const
+Language::Language(Settings &settings, dbus::Connection *session, Appearance appearance)
+    : m_settings(settings)
+    , m_session(session)
+    , m_appearance(std::move(appearance))
 {
-    const QString code = m_settings->value("language").toString();
-    return code.isEmpty() ? LanguageEnvironment::systemLanguage() : code;
 }
 
-QStringList Language::preferredLanguages() const
+Language::~Language() = default;
+
+bool Language::publish()
 {
-    const QString primary = languageCode();
-    QStringList codes = m_settings->value("preferredLanguages").toStringList();
-    codes.removeAll(primary);
-    codes.prepend(primary);
-    codes.removeDuplicates();
+    if (!m_session)
+        return false;
+    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Language",
+                                              "com.cutefish.Services.Language");
+    m_object->addMethod("setLanguage", [this](const std::string &value) { setLanguage(value); },
+                        {{"value"}, {}});
+    m_object->addMethod("setPreferredLanguages",
+                        [this](const std::vector<std::string> &value) { setPreferredLanguages(value); },
+                        {{"value"}, {}});
+    m_object->addProperty("preferredLanguages", [this] { return preferredLanguages(); });
+    m_object->addProperty("languageCode", [this] { return languageCode(); });
+    m_object->addSignal("languageChanged", "");
+    return m_object->publish();
+}
+
+std::string Language::languageCode() const
+{
+    const std::string code = m_settings.stringValue("Language/language");
+    return code.empty() ? language::systemLanguage() : code;
+}
+
+std::vector<std::string> Language::preferredLanguages() const
+{
+    const std::string primary = languageCode();
+    std::vector<std::string> codes = m_settings.stringListValue("Language/preferredLanguages");
+    removeAll(codes, primary);
+    codes.insert(codes.begin(), primary);
+    removeDuplicates(codes);
     return codes;
 }
 
-void Language::setLanguage(const QString &code)
+void Language::setLanguage(const std::string &code)
 {
-    QStringList codes = preferredLanguages();
-    codes.removeAll(code);
-    codes.prepend(code);
+    std::vector<std::string> codes = preferredLanguages();
+    removeAll(codes, code);
+    codes.insert(codes.begin(), code);
     setPreferredLanguages(codes);
 }
 
-void Language::setPreferredLanguages(const QStringList &languages)
+std::string Language::localeName(const std::string &code)
 {
-    QStringList codes = languages;
-    codes.removeAll(QString());
-    codes.removeDuplicates();
-    if (codes.isEmpty() || codes == preferredLanguages())
+    char likely[ULOC_FULLNAME_CAPACITY] = {};
+    UErrorCode status = U_ZERO_ERROR;
+    uloc_addLikelySubtags(code.c_str(), likely, sizeof(likely), &status);
+    if (U_FAILURE(status))
+        return "C";
+    char languageCode[ULOC_LANG_CAPACITY] = {};
+    char country[ULOC_COUNTRY_CAPACITY] = {};
+    uloc_getLanguage(likely, languageCode, sizeof(languageCode), &status);
+    uloc_getCountry(likely, country, sizeof(country), &status);
+    if (U_FAILURE(status) || !*languageCode || std::string_view(languageCode) == "c")
+        return "C";
+    return *country ? std::string(languageCode) + '_' + country : std::string(languageCode);
+}
+
+void Language::setPreferredLanguages(const std::vector<std::string> &languages)
+{
+    std::vector<std::string> codes = languages;
+    removeAll(codes, std::string());
+    removeDuplicates(codes);
+    if (codes.empty() || codes == preferredLanguages())
         return;
 
-    const QString code = codes.first();
+    const std::string code = codes.front();
     const bool primaryChanged = code != languageCode();
-    m_settings->setValue("preferredLanguages", codes);
+    m_settings.setValue("Language/preferredLanguages", codes);
 
     if (primaryChanged) {
-        const QString font = ThemeManager::fontForLocale(QLocale(code).name());
-        if (!font.isEmpty())
-            ThemeManager::self()->setSystemFont(font);
+        const std::string font = fontForLocale(localeName(code));
+        if (!font.empty() && m_appearance.setSystemFont)
+            m_appearance.setSystemFont(font);
     }
 
-    m_settings->setValue("language", code);
-    m_settings->sync();
+    m_settings.setValue("Language/language", code);
+    m_settings.sync();
     // The CJK fallback follows the order of the languages, so it is rewritten after the sync.
-    ThemeManager::self()->updateFontConfig();
+    if (m_appearance.updateFontConfig)
+        m_appearance.updateFontConfig();
 
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    LanguageEnvironment::apply(environment, codes);
-    QMap<QString, QString> activationEnvironment;
-    QStringList systemdEnvironment;
-    for (const QString &name : environment.keys()) {
-        if (name == "LANG" || name == "LANGUAGE" || name.startsWith("LC_")) {
-            activationEnvironment.insert(name, environment.value(name));
-            systemdEnvironment.append(name + '=' + environment.value(name));
+    cutefish::core::Environment environment = cutefish::core::processEnvironment();
+    language::apply(environment, codes);
+    std::map<std::string, std::string> activationEnvironment;
+    std::vector<std::string> systemdEnvironment;
+    for (const auto &[name, value] : environment) {
+        if (name == "LANG" || name == "LANGUAGE" || startsWith(name, "LC_")) {
+            activationEnvironment[name] = value;
+            systemdEnvironment.push_back(name + '=' + value);
         }
     }
     // D-Bus cannot remove variables; an empty LC_ALL lets individual categories take effect.
-    activationEnvironment.insert("LC_ALL", QString());
-    auto dbusMessage = QDBusMessage::createMethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus",
-        "org.freedesktop.DBus", "UpdateActivationEnvironment");
-    dbusMessage << QVariant::fromValue(activationEnvironment);
-    QDBusConnection::sessionBus().asyncCall(dbusMessage);
+    activationEnvironment["LC_ALL"] = std::string();
+    if (m_session) {
+        const dbus::Proxy bus(m_session, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                              "org.freedesktop.DBus");
+        bus.send("UpdateActivationEnvironment", activationEnvironment);
 
-    auto systemdMessage = QDBusMessage::createMethodCall("org.freedesktop.systemd1", "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager", "UnsetAndSetEnvironment");
-    systemdMessage.setAutoStartService(false);
-    systemdMessage << QStringList{"LC_ALL"} << systemdEnvironment;
-    QDBusConnection::sessionBus().asyncCall(systemdMessage);
-    emit languageChanged();
+        dbus::Message systemd = m_session->newMethodCall("org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                                                         "org.freedesktop.systemd1.Manager",
+                                                         "UnsetAndSetEnvironment");
+        sd_bus_message_set_auto_start(systemd.get(), 0);
+        systemd.append(std::vector<std::string> {"LC_ALL"}, systemdEnvironment);
+        m_session->send(systemd);
+    }
+    emitLanguageChanged();
 
     if (!primaryChanged)
         return;
 
-    auto *notification = new Cutefish::Notification(this);
-    notification->setDesktopEntry(QStringLiteral("cutefish-settings"));
-    notification->setIconName(QStringLiteral("preferences-system"));
-    notification->setBody(tr("Some applications may need to be restarted for the change to take effect."));
-    notification->setTimeout(10);
-    notification->setAutoDelete(true);
-    notification->show();
+    m_notification = std::make_unique<Notification>(m_session);
+    m_notification->setDesktopEntry("cutefish-settings");
+    m_notification->setIconName("preferences-system");
+    m_notification->setBody("Some applications may need to be restarted for the change to take effect.");
+    m_notification->setTimeout(10);
+    m_notification->show();
+}
+
+void Language::emitLanguageChanged()
+{
+    if (m_object)
+        m_object->emitSignal("languageChanged");
 }

@@ -3,135 +3,145 @@
 
 #include "coredump.h"
 
-#include <QRegularExpression>
-
-#include <cxxabi.h>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <cxxabi.h>
+#include <format>
+#include <regex>
 
-static const QLatin1String s_scopePrefix("app-cutefish-");
-static const QLatin1String s_scopeSuffix(".scope");
+#include "base/strings.h"
+
+using namespace cutefish::base;
+using namespace cutefish::base::strings;
+
+static const std::string s_scopePrefix = "app-cutefish-";
+static const std::string s_scopeSuffix = ".scope";
 
 // The scope name without its prefix and suffix: <escaped id>-<pid>.
-static QString scopeInstance(const QString &unit)
+static std::string scopeInstance(const std::string &unit)
 {
-    if (!unit.startsWith(s_scopePrefix) || !unit.endsWith(s_scopeSuffix))
-        return QString();
-    return unit.mid(s_scopePrefix.size(), unit.size() - s_scopePrefix.size() - s_scopeSuffix.size());
+    if (!startsWith(unit, s_scopePrefix) || !endsWith(unit, s_scopeSuffix)
+        || unit.size() < s_scopePrefix.size() + s_scopeSuffix.size())
+        return {};
+    return unit.substr(s_scopePrefix.size(), unit.size() - s_scopePrefix.size() - s_scopeSuffix.size());
 }
 
 // Reverses systemd's unit name escaping, \xNN for each byte of UTF-8.
-static QString unescape(const QString &text)
+static std::string unescape(const std::string &text)
 {
-    const QByteArray bytes = text.toLatin1();
-    QByteArray result;
-    for (int i = 0; i < bytes.size(); ++i) {
-        if (bytes.at(i) == '\\' && i + 3 < bytes.size() && bytes.at(i + 1) == 'x') {
-            bool ok = false;
-            const int byte = bytes.mid(i + 2, 2).toInt(&ok, 16);
-            if (ok) {
-                result.append(char(byte));
+    std::string result;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\\' && i + 3 < text.size() && text[i + 1] == 'x') {
+            const auto byte = toNumber<int>(std::string_view(text).substr(i + 2, 2), 16);
+            if (byte) {
+                result += char(*byte);
                 i += 3;
                 continue;
             }
         }
-        result.append(bytes.at(i));
+        result += text[i];
     }
-    return QString::fromUtf8(result);
+    return result;
 }
 
-QString Coredump::applicationId() const
+std::string Coredump::applicationId() const
 {
-    const QString instance = scopeInstance(userUnit);
-    const int dash = instance.lastIndexOf(QLatin1Char('-'));
-    if (dash <= 0)
-        return QString();
-    return unescape(instance.left(dash));
+    const std::string instance = scopeInstance(userUnit);
+    const size_t dash = instance.rfind('-');
+    if (dash == std::string::npos || dash == 0)
+        return {};
+    return unescape(instance.substr(0, dash));
 }
 
-uint Coredump::applicationPid() const
+uint32_t Coredump::applicationPid() const
 {
-    const QString instance = scopeInstance(userUnit);
-    const int dash = instance.lastIndexOf(QLatin1Char('-'));
-    if (dash <= 0)
+    const std::string instance = scopeInstance(userUnit);
+    const size_t dash = instance.rfind('-');
+    if (dash == std::string::npos || dash == 0)
         return 0;
-    return instance.mid(dash + 1).toUInt();
+    return toNumber<uint32_t>(std::string_view(instance).substr(dash + 1)).value_or(0);
 }
 
-QString Coredump::signalDescription() const
+std::string Coredump::signalDescription() const
 {
-    const QString description = signal > 0 ? QString::fromLocal8Bit(::strsignal(signal)) : QString();
-    if (signalName.isEmpty())
+    const std::string description = signal > 0 ? std::string(::strsignal(signal)) : std::string();
+    if (signalName.empty())
         return description;
-    if (description.isEmpty())
+    if (description.empty())
         return signalName;
-    return QStringLiteral("%1 (%2)").arg(description, signalName);
+    return std::format("{} ({})", description, signalName);
 }
 
-QString Coredump::report(const QString &name) const
+// The local time as ISO 8601 writes it without a zone: 2026-10-06T12:34:56.
+static std::string isoTime(int64_t milliseconds)
 {
-    QString text;
-    text += QStringLiteral("%1 quit unexpectedly\n").arg(name);
-    text += QStringLiteral("Executable: %1\n").arg(executable);
-    if (!commandLine.isEmpty())
-        text += QStringLiteral("Command line: %1\n").arg(commandLine);
-    text += QStringLiteral("Signal: %1\n").arg(signalDescription());
-    if (time.isValid())
-        text += QStringLiteral("Time: %1\n").arg(time.toString(Qt::ISODate));
+    const time_t seconds = time_t(milliseconds / 1000);
+    struct tm local {};
+    localtime_r(&seconds, &local);
+    char text[64];
+    std::strftime(text, sizeof(text), "%Y-%m-%dT%H:%M:%S", &local);
+    return text;
+}
+
+std::string Coredump::report(const std::string &name) const
+{
+    std::string text;
+    text += std::format("{} quit unexpectedly\n", name);
+    text += std::format("Executable: {}\n", executable);
+    if (!commandLine.empty())
+        text += std::format("Command line: {}\n", commandLine);
+    text += std::format("Signal: {}\n", signalDescription());
+    if (time > 0)
+        text += std::format("Time: {}\n", isoTime(time));
     for (const CoredumpThread &thread : threads) {
-        text += QStringLiteral("\nThread %1:\n").arg(thread.id);
-        for (int i = 0; i < thread.frames.size(); ++i) {
-            const CoredumpFrame &frame = thread.frames.at(i);
-            text += QStringLiteral("#%1 %2 (%3)\n")
-                            .arg(i)
-                            .arg(frame.function.isEmpty() ? QStringLiteral("??") : frame.function,
-                                 frame.module);
+        text += std::format("\nThread {}:\n", thread.id);
+        for (size_t i = 0; i < thread.frames.size(); ++i) {
+            const CoredumpFrame &frame = thread.frames[i];
+            text += std::format("#{} {} ({})\n", i, frame.function.empty() ? std::string("??") : frame.function,
+                                frame.module);
         }
     }
     return text;
 }
 
-QList<CoredumpThread> Coredump::parseStackTrace(const QString &message)
+std::vector<CoredumpThread> Coredump::parseStackTrace(const std::string &message)
 {
-    static const QRegularExpression threadLine(QStringLiteral("^Stack trace of thread (\\d+):$"));
+    static const std::regex threadLine("^Stack trace of thread (\\d+):$");
     // #3  0x00007fe7198dbede name (module + 0xdbede); the module part is
     // missing for an address no mapping covers.
-    static const QRegularExpression frameLine(
-            QStringLiteral("^#\\d+\\s+0x[0-9a-fA-F]+\\s+(\\S+)(?:\\s+\\((.*?)(?: \\+ 0x[0-9a-fA-F]+)?\\))?$"));
+    static const std::regex frameLine("^#\\d+\\s+0x[0-9a-fA-F]+\\s+(\\S+)(?:\\s+\\((.*?)(?: \\+ 0x[0-9a-fA-F]+)?\\))?$");
 
-    QList<CoredumpThread> threads;
-    const QStringList lines = message.split(QLatin1Char('\n'));
-    for (const QString &rawLine : lines) {
-        const QString line = rawLine.trimmed();
-        const auto thread = threadLine.match(line);
-        if (thread.hasMatch()) {
-            threads.append({thread.captured(1), {}});
+    std::vector<CoredumpThread> threads;
+    for (const std::string_view rawLine : splitViews(message, '\n')) {
+        const std::string line(trimmed(rawLine));
+        std::smatch match;
+        if (std::regex_match(line, match, threadLine)) {
+            threads.push_back({match[1].str(), {}});
             continue;
         }
-        if (threads.isEmpty())
+        if (threads.empty())
             continue;
-        const auto frame = frameLine.match(line);
-        if (!frame.hasMatch())
+        if (!std::regex_match(line, match, frameLine))
             continue;
-        const QString symbol = frame.captured(1);
-        QString module = frame.captured(2);
-        if (module == QLatin1String("n/a"))
+        const std::string symbol = match[1].str();
+        std::string module = match[2].matched ? match[2].str() : std::string();
+        if (module == "n/a")
             module.clear();
-        threads.last().frames.append(
-                {symbol == QLatin1String("n/a") ? QString() : demangle(symbol), module});
+        threads.back().frames.push_back({symbol == "n/a" ? std::string() : demangle(symbol), module});
     }
     return threads;
 }
 
-QString Coredump::demangle(const QString &symbol)
+std::string Coredump::demangle(const std::string &symbol)
 {
-    if (!symbol.startsWith(QLatin1String("_Z")))
+    if (!startsWith(symbol, "_Z"))
         return symbol;
     int status = 0;
-    char *name = abi::__cxa_demangle(symbol.toLatin1().constData(), nullptr, nullptr, &status);
+    char *name = abi::__cxa_demangle(symbol.c_str(), nullptr, nullptr, &status);
     if (status != 0 || !name)
         return symbol;
-    const QString result = QString::fromUtf8(name);
+    std::string result = name;
     std::free(name);
     return result;
 }

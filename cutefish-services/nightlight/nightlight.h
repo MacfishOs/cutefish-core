@@ -4,27 +4,30 @@
 #ifndef NIGHTLIGHT_H
 #define NIGHTLIGHT_H
 
-#include <QDBusContext>
-#include <QDBusServiceWatcher>
-
 #include <chrono>
+#include <memory>
+#include <string>
 
-#include "displayclient.h"
+#include "base/dbus.h"
+#include "base/signal.h"
+#include "display/displayclient.h"
 #include "scheduledfeature.h"
 
 // The night light's preferences and schedule; the compositor only animates the
 // strength it is sent. Modelled on Ash's NightLightControllerImpl: a change the
 // user makes takes a second, a scheduled one a minute.
-class NightLight : public ScheduledFeature, protected QDBusContext
+class NightLight : public ScheduledFeature
 {
-    Q_OBJECT
-    Q_PROPERTY(double temperature READ temperature NOTIFY temperatureChanged)
-    Q_PROPERTY(bool available READ available NOTIFY availableChanged)
-
 public:
-    explicit NightLight(QObject *parent = nullptr, Clock clock = [] {
-        return QDateTime::currentDateTime();
-    });
+    // `displayService` names the compositor's display service; tests run one
+    // of their own.
+    explicit NightLight(cutefish::base::Settings &settings,
+                        Clock clock = ScheduleUtils::currentDateTime,
+                        const std::string &displayService = "com.cutefish.DisplayConfig");
+    ~NightLight() override;
+
+    // com.cutefish.Services.NightLight at /com/cutefish/Services/NightLight.
+    bool publish(cutefish::base::dbus::Connection *bus);
 
     // The strength, from 0 to 1.
     double temperature() const { return m_temperature; }
@@ -36,14 +39,12 @@ public:
     // while Settings' slider is held.
     bool previewing() const { return m_previewing; }
 
-public slots:
     void setTemperature(double temperature);
-    // Ends by itself when the caller leaves the bus.
-    void setPreview(bool preview);
+    // Ends by itself when `caller`, a bus name, leaves the bus.
+    void setPreview(bool preview, const std::string &caller = {});
 
-signals:
-    void temperatureChanged(double temperature);
-    void availableChanged(bool available);
+    cutefish::base::Signal<double> temperatureChanged;
+    cutefish::base::Signal<bool> availableChanged;
 
 protected:
     void showEnabled(std::chrono::milliseconds duration) override;
@@ -53,8 +54,11 @@ private:
     void sendToCompositor(std::chrono::milliseconds duration);
     void updateAvailable();
 
-    DisplayClient m_display;
-    QDBusServiceWatcher m_previewWatcher;
+    cutefish::display::DisplayClient m_display;
+    cutefish::base::dbus::Connection *m_bus = nullptr;
+    cutefish::base::dbus::NameWatch m_previewWatch;
+    std::unique_ptr<cutefish::base::dbus::Object> m_object;
+    std::vector<cutefish::base::Subscription> m_subscriptions;
     double m_temperature = 0.5;
     bool m_available = false;
     bool m_previewing = false;

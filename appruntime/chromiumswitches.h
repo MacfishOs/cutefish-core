@@ -4,13 +4,14 @@
 #ifndef CHROMIUMSWITCHES_H
 #define CHROMIUMSWITCHES_H
 
-#include <QStringList>
+#include <string>
+#include <vector>
 
 // Whether the program is a Chromium build (a browser, Electron or CEF application), judged by
 // the resources shipped beside its binary.
-bool isChromiumProgram(const QString &program);
+bool isChromiumProgram(const std::string &program);
 
 // The command with the switches Chromium-based programs are started with.
-QStringList withChromiumSwitches(const QStringList &command);
+std::vector<std::string> withChromiumSwitches(const std::vector<std::string> &command);
 
 #endif

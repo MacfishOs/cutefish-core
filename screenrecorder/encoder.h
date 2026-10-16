@@ -1,17 +1,17 @@
 #ifndef CUTEFISH_RECORDER_ENCODER_H
 #define CUTEFISH_RECORDER_ENCODER_H
 
-#include <QByteArray>
-#include <QHash>
-#include <QImage>
-#include <QObject>
-#include <QRect>
-#include <QString>
+#include "image.h"
 
+#include "base/geometry.h"
+
+#include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
-
-#include "capturesession.h"
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 struct AVAudioFifo;
 struct AVBufferRef;
@@ -21,75 +21,76 @@ struct AVFrame;
 struct AVStream;
 struct SwsContext;
 
-// H.264 (VA-API, else x264) and AAC into an MP4, on its own thread. Frames keep
-// the compositor's times; later sizes are letterboxed into the first one.
-// DMA-BUF frames stay on the GPU: VA-API crops and converts them for the encoder.
-class Encoder : public QObject
+// H.264 (VA-API, else x264) and AAC into an MP4. Every call runs on the
+// caller's thread, and so do the callbacks. Frames keep the compositor's
+// times; later sizes are letterboxed into the first one. DMA-BUF frames stay
+// on the GPU: VA-API crops and converts them for the encoder.
+class Encoder
 {
-    Q_OBJECT
-
 public:
     static constexpr int kSampleRate = 48000;
     static constexpr int kChannels = 2;
 
-    explicit Encoder(QObject *parent = nullptr);
-    ~Encoder() override;
+    Encoder();
+    ~Encoder();
 
-public slots:
+    Encoder(const Encoder &) = delete;
+    Encoder &operator=(const Encoder &) = delete;
+
     //! Writes to @p path. The video's size is fixed by the first frame.
-    void open(const QString &path, bool audio);
+    void open(const std::string &path, bool audio);
 
     //! @p crop of @p image, presented at @p presentedNs on CLOCK_MONOTONIC.
-    //! @p buffer goes back through frameDone() once the pixels are read.
-    void encodeVideo(const QImage &image, const QRect &crop, qint64 presentedNs, int buffer);
-    //! The same from a DMA-BUF on the render node @p node. needsSharedMemory()
+    //! @p buffer goes back through onFrameDone once the pixels are read.
+    void encodeVideo(const Image &image, const cutefish::base::Rect &crop, int64_t presentedNs, int buffer);
+    //! The same from a DMA-BUF on the render node @p node. onNeedsSharedMemory
     //! when the GPU cannot take it.
-    void encodeDmaBuf(const CaptureSession::DmaBuf &dmabuf, const QString &node,
-                      const QRect &crop, qint64 presentedNs, int buffer);
+    void encodeDmaBuf(const DmaBuf &dmabuf, const std::string &node, const cutefish::base::Rect &crop,
+                      int64_t presentedNs, int buffer);
     //! The capture buffers handed over so far are replaced, after a size change
     //! or by a new session; their GPU imports go with them.
     void forgetBuffers();
 
-    //! Interleaved float samples whose first one was captured at @p capturedNs.
-    void encodeAudio(const QByteArray &samples, qint64 capturedNs);
+    //! Interleaved samples whose first one was captured at @p capturedNs.
+    void encodeAudio(const std::vector<float> &samples, int64_t capturedNs);
 
     //! Ends the video at @p stopNs and completes the file.
-    void finish(qint64 stopNs);
+    void finish(int64_t stopNs);
 
-signals:
-    void frameDone(int buffer);
+    std::function<void(int buffer)> onFrameDone;
     //! Frames have to come in shared memory from now on.
-    void needsSharedMemory();
+    std::function<void()> onNeedsSharedMemory;
     //! The first frame is in the file.
-    void started();
-    void finished(bool ok, const QString &error);
+    std::function<void()> onStarted;
+    std::function<void(bool ok, const std::string &error)> onFinished;
 
 private:
     friend class ScreenRecorderEncoderTest;
 
-    bool openVideo(const QSize &size, const QString &node, QString *error);
-    bool startVideo(QString *error);
+    bool openVideo(const cutefish::base::Size &size, const std::string &node, std::string *error);
+    bool startVideo(std::string *error);
     void closeVideo();
-    bool openVaapi(const QSize &size, const QString &node);
+    bool openVaapi(const cutefish::base::Size &size, const std::string &node);
     bool openVpp();
-    unsigned int importSurface(const CaptureSession::DmaBuf &dmabuf, int buffer);
-    bool convertDmaBuf(const CaptureSession::DmaBuf &dmabuf, int buffer, const QRect &crop);
+    unsigned int importSurface(const DmaBuf &dmabuf, int buffer);
+    bool convertDmaBuf(const DmaBuf &dmabuf, int buffer, const cutefish::base::Rect &crop);
     //! @p source trimmed to the video, and where in the frame it goes (m_fit).
-    QRect fit(QRect source);
-    bool sendPending(qint64 presentedNs);
-    void accepted(qint64 presentedNs);
-    bool openX264(const QSize &size);
-    bool openAudio(QString *error);
-    bool writeHeader(QString *error);
-    bool convert(const QImage &image, const QRect &crop);
-    bool sendVideo(qint64 pts, qint64 duration);
+    cutefish::base::Rect fit(cutefish::base::Rect source);
+    bool sendPending(int64_t presentedNs);
+    void accepted(int64_t presentedNs);
+    bool openX264(const cutefish::base::Size &size);
+    bool openAudio(std::string *error);
+    bool writeHeader(std::string *error);
+    bool convert(const Image &image, const cutefish::base::Rect &crop);
+    bool sendVideo(int64_t pts, int64_t duration);
     bool drainAudio(bool flush);
     bool writePackets(AVCodecContext *codec, AVStream *stream);
-    void queueAudio(const QByteArray &samples, qint64 capturedNs);
-    void fail(const QString &error);
+    void queueAudio(const std::vector<float> &samples, int64_t capturedNs);
+    void frameDone(int buffer);
+    void fail(const std::string &error);
     void close();
 
-    QString m_path;
+    std::string m_path;
     bool m_failed = false;
 
     AVFormatContext *m_format = nullptr;
@@ -112,20 +113,20 @@ private:
     AVAudioFifo *m_fifo = nullptr;
     SwsContext *m_sws = nullptr;
     int m_swFormat = -1;
-    QSize m_size;
-    QRect m_fit;
-    QSize m_scaledFrom;
+    cutefish::base::Size m_size;
+    cutefish::base::Rect m_fit;
+    cutefish::base::Size m_scaledFrom;
 
     //! The first frame's presentation time; everything is relative to it.
-    qint64 m_originNs = -1;
+    int64_t m_originNs = -1;
     //! The frame converted into m_frame, sent once the next one says how
     //! long it was on screen.
-    qint64 m_pendingPts = -1;
-    QHash<qint64, qint64> m_durations;
-    qint64 m_audioSamples = 0;
+    int64_t m_pendingPts = -1;
+    std::unordered_map<int64_t, int64_t> m_durations;
+    int64_t m_audioSamples = 0;
     bool m_audioAligned = false;
     //! Audio that arrived before the first frame fixed the origin.
-    std::deque<std::pair<QByteArray, qint64>> m_earlyAudio;
+    std::deque<std::pair<std::vector<float>, int64_t>> m_earlyAudio;
 };
 
 #endif // CUTEFISH_RECORDER_ENCODER_H

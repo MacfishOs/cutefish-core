@@ -3,49 +3,114 @@
 
 #include "processmanager.h"
 
-#include <QCoreApplication>
-#include <QDBusConnectionInterface>
-#include <QDBusMessage>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
-#include <QDBusReply>
-#include <QDBusServiceWatcher>
-#include <QDebug>
-#include <QDir>
-#include <QProcessEnvironment>
-#include <QSettings>
-#include <QStandardPaths>
-#include <QTimer>
-#include <limits>
+#include <algorithm>
+#include <climits>
+#include <cstdlib>
+#include <filesystem>
+#include <unistd.h>
 
-#include "applicationlauncher.h"
-#include "applicationregistry.h"
-#include "applicationruntime.h"
+#include <systemd/sd-bus.h>
+
+#include "base/application_registry.h"
+#include "base/event_loop.h"
+#include "base/paths.h"
+#include "base/settings.h"
+#include "base/strings.h"
+#include "common/runtime_client.h"
+
 #include "autostartentries.h"
 #include "compositorprocess.h"
-#include "cutefishnotification.h"
+#include "logs.h"
 #include "restartpolicy.h"
 #include "shellconnection.h"
 #include "shellprocess.h"
 #include "userdirectories.h"
 #include "xwaylandenvironment.h"
 
-ProcessManager::ProcessManager(QObject *parent)
-    : QObject(parent)
-    , m_compositorProcess(new CompositorProcess(this))
-    , m_shellConnection(new ShellConnection(this))
-    , m_shellProcess(new ShellProcess(this))
-    , m_shellRestart(new RestartPolicy(QStringLiteral("cutefish-filemanager"), [this] { startShell(); },
-                                       this))
+namespace base = cutefish::base;
+namespace strings = cutefish::base::strings;
+namespace dbus = cutefish::base::dbus;
+namespace runtime = cutefish::core::runtime;
+using namespace std::chrono_literals;
+
+static constexpr char kCompositor[] = "/usr/bin/cutefish-compositor";
+
+struct Publisher
 {
-    connect(m_shellProcess, &QProcess::finished, this, &ProcessManager::onShellFinished);
+    base::Process process;
+    base::Timer deadline;
+};
+
+static std::string environmentValue(const char *name, const char *fallback = "")
+{
+    const char *value = std::getenv(name);
+    return value && *value ? std::string(value) : std::string(fallback);
+}
+
+static bool fileExists(const std::string &path)
+{
+    std::error_code error;
+    return std::filesystem::exists(path, error);
+}
+
+// A command line split at white space, double quotes grouping, as the Exec
+// lines of autostart entries are written; three quotes stand for one.
+static std::vector<std::string> splitCommand(const std::string &command)
+{
+    std::vector<std::string> arguments;
+    std::string current;
+    int quoteCount = 0;
+    bool inQuote = false;
+
+    for (const char c : command) {
+        if (c == '"') {
+            ++quoteCount;
+            if (quoteCount == 3) {
+                quoteCount = 0;
+                current += c;
+            }
+            continue;
+        }
+        if (quoteCount) {
+            if (quoteCount == 1)
+                inQuote = !inQuote;
+            quoteCount = 0;
+        }
+        if (!inQuote && strings::isAsciiWhitespace(c)) {
+            if (!current.empty()) {
+                arguments.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty())
+        arguments.push_back(current);
+
+    return arguments;
+}
+
+ProcessManager::ProcessManager()
+    : m_compositorProcess(std::make_unique<CompositorProcess>())
+    , m_shellConnection(std::make_unique<ShellConnection>())
+    , m_shellProcess(std::make_unique<ShellProcess>())
+    , m_shellRestart(std::make_unique<RestartPolicy>("cutefish-filemanager", [this] { startShell(); }))
+{
+    m_shellProcess->onFinished = [this](int code, bool crashed) {
+        onShellFinished(code, crashed);
+    };
+    m_autostartTimer.setSingleShot(true);
+    m_autostartTimer.onTimeout = [this] {
+        loadAutoStartProcess();
+    };
+    m_exitTimer.setSingleShot(true);
 }
 
 ProcessManager::~ProcessManager()
 {
     stopShellAndDaemons();
     m_compositorProcess->stop();
-    qDeleteAll(m_coreProcesses);
 }
 
 void ProcessManager::start()
@@ -54,36 +119,34 @@ void ProcessManager::start()
         return;
     m_started = true;
 
-    m_waylandSocket = qEnvironmentVariable("WAYLAND_DISPLAY", QStringLiteral("cutefish-0"));
-    const QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR", QStringLiteral("/tmp"));
-    m_controlSocket = QStringLiteral("%1/%2-shell.control").arg(runtimeDir, m_waylandSocket);
+    m_waylandSocket = environmentValue("WAYLAND_DISPLAY", "cutefish-0");
+    const std::string runtimeDir = environmentValue("XDG_RUNTIME_DIR", "/tmp");
+    m_controlSocket = runtimeDir + '/' + m_waylandSocket + "-shell.control";
 
-    qunsetenv("DISPLAY");
-    qunsetenv("XAUTHORITY");
-    m_xwaylandEnvironment = new XwaylandEnvironment(this);
-    connect(m_xwaylandEnvironment, &XwaylandEnvironment::resolved, this, [this](bool) {
+    unsetenv("DISPLAY");
+    unsetenv("XAUTHORITY");
+    m_xwaylandEnvironment = std::make_unique<XwaylandEnvironment>();
+    m_xwaylandEnvironment->onResolved = [this](bool) {
         publishXwaylandEnvironment(true);
-    });
-    connect(m_xwaylandEnvironment, &XwaylandEnvironment::lost, this, [this] {
+    };
+    m_xwaylandEnvironment->onLost = [this] {
         publishXwaylandEnvironment(false);
-    });
-    connect(m_compositorProcess, &CompositorProcess::ready, this, [this] {
+    };
+    m_compositorProcess->onReady = [this] {
         m_xwaylandEnvironment->waitForReady();
-    });
-    connect(m_compositorProcess, &CompositorProcess::failed, this, [this](const QString &reason) {
-        qCritical() << reason;
+    };
+    m_compositorProcess->onFailed = [this](const std::string &reason) {
+        CF_CRITICAL(sessionLog()) << reason;
         stopShellAndDaemons();
-        QCoreApplication::exit(1);
-    });
+        base::EventLoop::current()->quit(1);
+    };
     // A compositor that dies takes the graphical session with it: there is no
     // display left to run on.
-    connect(m_compositorProcess, &CompositorProcess::exited, this, [this](int code) {
+    m_compositorProcess->onExited = [this](int code) {
         stopShellAndDaemons();
-        QCoreApplication::exit(code);
-    });
-    m_compositorProcess->start(qEnvironmentVariable("CUTEFISH_COMPOSITOR_BINARY",
-                                                    QStringLiteral("/usr/bin/cutefish-compositor")),
-                               m_waylandSocket, m_controlSocket, 15000,
+        base::EventLoop::current()->quit(code);
+    };
+    m_compositorProcess->start(kCompositor, m_waylandSocket, m_controlSocket, 15000,
                                m_xwaylandEnvironment->readinessFile());
 }
 
@@ -91,36 +154,39 @@ void ProcessManager::publishXwaylandEnvironment(bool startDesktop)
 {
     if (m_loggingOut)
         return;
-    auto *process = new QProcess(this);
-    auto *deadline = new QTimer(process);
-    deadline->setSingleShot(true);
-    const auto finish = [this, process, deadline, startDesktop] {
-        deadline->stop();
-        process->disconnect(this);
-        process->deleteLater();
+    auto publisher = std::make_unique<Publisher>();
+    Publisher *raw = publisher.get();
+    const auto finish = [this, raw, startDesktop] {
+        raw->deadline.stop();
+        const auto found = std::find_if(m_publishers.begin(), m_publishers.end(),
+                                        [raw](const auto &item) { return item.get() == raw; });
+        if (found != m_publishers.end()) {
+            std::shared_ptr<Publisher> done(std::move(*found));
+            m_publishers.erase(found);
+            base::EventLoop::current()->post([done] {});
+        }
         if (startDesktop && !m_loggingOut)
             startAfterCompositorReady();
     };
-    connect(process, &QProcess::finished, this, [finish](int code) {
+    raw->process.setOutputForwarded(true);
+    raw->process.onFinished = [finish](int code, bool) {
         if (code != 0)
-            qWarning() << "Could not publish Xwayland environment to activation services";
+            CF_WARNING(sessionLog()) << "Could not publish Xwayland environment to activation services";
         finish();
-    });
-    connect(process, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) {
-        if (error == QProcess::FailedToStart) {
-            qWarning() << "dbus-update-activation-environment is unavailable";
-            finish();
-        }
-    });
-    connect(deadline, &QTimer::timeout, process, [process] {
-        process->kill();
-    });
-    process->setProcessChannelMode(QProcess::ForwardedChannels);
-    process->start(QStringLiteral("dbus-update-activation-environment"),
-                   {QStringLiteral("--systemd"),
-                    QStringLiteral("DISPLAY=") + qEnvironmentVariable("DISPLAY"),
-                    QStringLiteral("XAUTHORITY=") + qEnvironmentVariable("XAUTHORITY")});
-    deadline->start(3000);
+    };
+    raw->deadline.setSingleShot(true);
+    raw->deadline.onTimeout = [raw] {
+        raw->process.kill();
+    };
+    m_publishers.push_back(std::move(publisher));
+    if (!raw->process.start("dbus-update-activation-environment",
+                            {"--systemd", "DISPLAY=" + environmentValue("DISPLAY"),
+                             "XAUTHORITY=" + environmentValue("XAUTHORITY")})) {
+        CF_WARNING(sessionLog()) << "dbus-update-activation-environment is unavailable";
+        finish();
+        return;
+    }
+    raw->deadline.start(3000ms);
 }
 
 void ProcessManager::startAfterCompositorReady()
@@ -133,47 +199,34 @@ void ProcessManager::startAfterCompositorReady()
     // without restarting the compositor: every shell generation gets a fresh
     // Wayland socketpair over it.
     if (!m_shellConnection->connectToCompositor(m_controlSocket)) {
-        qWarning() << "No compositor control channel; the shell will run without "
-                      "the private Cutefish protocols";
+        CF_WARNING(sessionLog()) << "No compositor control channel; the shell will run without "
+                                    "the private Cutefish protocols";
     }
 
     // Application autostart waits for the existing external services daemon.
-    const QString serviceName = QStringLiteral("com.cutefish.Services");
-    const auto servicesReady = [this]() {
-        if (m_servicesWatcher) {
-            m_servicesWatcher->deleteLater();
-            m_servicesWatcher = nullptr;
-        }
-        startDesktopProcess();
-    };
-
-    m_servicesWatcher = new QDBusServiceWatcher(serviceName, QDBusConnection::sessionBus(),
-                                                QDBusServiceWatcher::WatchForRegistration, this);
-    connect(m_servicesWatcher, &QDBusServiceWatcher::serviceRegistered, this,
-            [servicesReady](const QString &) {
-                servicesReady();
-            });
+    if (dbus::Connection *bus = dbus::Connection::session()) {
+        m_servicesWatch = bus->watchName("com.cutefish.Services", [this](const std::string &owner) {
+            if (owner.empty())
+                return;
+            m_servicesWatch = {};
+            startDesktopProcess();
+        });
+    }
 
     startDaemonProcess();
-
-    if (QDBusConnectionInterface *interface = QDBusConnection::sessionBus().interface()) {
-        const QDBusReply<bool> reply = interface->isServiceRegistered(serviceName);
-        if (reply.isValid() && reply.value())
-            servicesReady();
-    }
 }
 
 void ProcessManager::startShell()
 {
-    if (m_loggingOut || m_shellProcess->state() != QProcess::NotRunning)
+    if (m_loggingOut || m_shellProcess->isRunning())
         return;
 
     m_shellRestart->started();
-    m_shellProcess->startForSession(QStringLiteral("cutefish-filemanager"), m_waylandSocket,
-                                    m_shellConnection->isConnected() ? m_shellConnection : nullptr);
+    m_shellProcess->startForSession("cutefish-filemanager", m_waylandSocket,
+                                    m_shellConnection->isConnected() ? m_shellConnection.get() : nullptr);
 }
 
-void ProcessManager::onShellFinished(int code, QProcess::ExitStatus status)
+void ProcessManager::onShellFinished(int code, bool crashed)
 {
     if (m_loggingOut || !m_desktopStarted)
         return;
@@ -181,7 +234,7 @@ void ProcessManager::onShellFinished(int code, QProcess::ExitStatus status)
     // The compositor and every application it is showing carry on, the
     // wallpaper included; only the desktop's icons disappear, and a new
     // daemon on a new trusted connection brings them back.
-    m_shellRestart->exited(code, status);
+    m_shellRestart->exited(code, crashed);
 }
 
 void ProcessManager::logout()
@@ -198,71 +251,76 @@ void ProcessManager::endAfterApplications(Ending ending, std::function<bool()> t
         return;
     m_ending = true;
 
-    const QDBusMessage quitAll = QDBusMessage::createMethodCall(
-            QStringLiteral("com.cutefish.Applications1"),
-            QStringLiteral("/com/cutefish/Applications1"),
-            QStringLiteral("com.cutefish.Applications1"), QStringLiteral("QuitAll"));
+    dbus::Connection *bus = dbus::Connection::session();
+    if (!bus) {
+        m_ending = then();
+        return;
+    }
+    const dbus::Message quitAll = bus->newMethodCall("com.cutefish.Applications1", "/com/cutefish/Applications1",
+                                                     "com.cutefish.Applications1", "QuitAll");
     // No timeout: the user may take as long as they like over an unsaved document.
-    auto *watcher = new QDBusPendingCallWatcher(
-            QDBusConnection::sessionBus().asyncCall(quitAll, std::numeric_limits<int>::max()),
-            this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher, ending, then] {
-        const QDBusPendingReply<QString, QString> reply = *watcher;
-        watcher->deleteLater();
-        // Without the compositor's answer the session ends as it always did.
-        if (reply.isError() || reply.argumentAt<0>() == QLatin1String("quit")) {
-            m_ending = then();
-            return;
-        }
-        m_ending = false;
-        notifyEndingStopped(ending, reply.argumentAt<0>(), reply.argumentAt<1>());
-    });
+    m_quitAllCall = bus->callAsync(
+            quitAll,
+            [this, ending, then](const dbus::Reply &reply) {
+                std::string outcome;
+                std::string applicationId;
+                const bool answered = reply.read(outcome, applicationId);
+                // Without the compositor's answer the session ends as it always did.
+                if (!answered || outcome == "quit") {
+                    m_ending = then();
+                    return;
+                }
+                m_ending = false;
+                notifyEndingStopped(ending, outcome, applicationId);
+            },
+            std::chrono::milliseconds(INT_MAX));
 }
 
-void ProcessManager::notifyEndingStopped(Ending ending, const QString &outcome,
-                                         const QString &applicationId)
+void ProcessManager::notifyEndingStopped(Ending ending, const std::string &outcome,
+                                         const std::string &applicationId)
 {
-    ApplicationRegistry *registry = ApplicationRegistry::instance();
+    base::ApplicationRegistry &registry = base::ApplicationRegistry::instance();
     // A registry created here has not scanned yet; the name and icon come from it.
-    if (!applicationId.isEmpty() && registry->loading() && registry->entries().isEmpty()) {
-        connect(
-                registry, &ApplicationRegistry::loadingChanged, this,
-                [this, ending, outcome, applicationId] {
-                    notifyEndingStopped(ending, outcome, applicationId);
-                },
-                Qt::SingleShotConnection);
+    if (!applicationId.empty() && registry.isLoading() && registry.entries().empty()) {
+        m_registryChanged = registry.changed.connect([this, ending, outcome, applicationId] {
+            m_registryChanged.reset();
+            notifyEndingStopped(ending, outcome, applicationId);
+        });
         return;
     }
 
-    const DesktopEntry *entry = registry->byId(applicationId);
-    QString name = entry ? entry->name() : QString();
-    if (name.isEmpty())
-        name = applicationId.isEmpty() ? tr("An application") : applicationId;
+    const auto entry = registry.byId(applicationId);
+    std::string name = entry ? entry->name : std::string();
+    if (name.empty())
+        name = applicationId.empty() ? "An application" : applicationId;
 
-    QString summary;
+    std::string summary;
     switch (ending) {
     case Ending::Logout:
-        summary = tr("Log out cancelled");
+        summary = "Log out cancelled";
         break;
     case Ending::Restart:
-        summary = tr("Restart cancelled");
+        summary = "Restart cancelled";
         break;
     case Ending::Shutdown:
-        summary = tr("Shutdown cancelled");
+        summary = "Shutdown cancelled";
         break;
     }
-    const QString body = outcome == QLatin1String("cancelled") ? tr("%1 cancelled it.").arg(name)
-                                                               : tr("%1 did not quit.").arg(name);
+    const std::string body = outcome == "cancelled" ? name + " cancelled it." : name + " did not quit.";
 
-    auto *notification = new Cutefish::Notification(this);
+    dbus::Connection *bus = dbus::Connection::session();
+    if (!bus)
+        return;
+    dbus::Message notify = bus->newMethodCall("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                                              "org.freedesktop.Notifications", "Notify");
+    // Only a running notification server shows it; none is started for it.
+    sd_bus_message_set_auto_start(notify.get(), 0);
     // The session has no desktop entry to title it.
-    notification->setAppName(tr("System"));
-    notification->setIconName(entry && !entry->icon().isEmpty() ? entry->icon()
-                                                                : QStringLiteral("system-log-out"));
-    notification->setSummary(summary);
-    notification->setBody(body);
-    notification->setAutoDelete(true);
-    notification->show();
+    notify.append(std::string("System"), uint32_t(0),
+                  entry && !entry->icon.empty() ? entry->icon : std::string("system-log-out"), summary, body,
+                  std::vector<std::string>(), dbus::VariantMap{{"urgency", dbus::Variant(uint8_t(1))}},
+                  int32_t(-1));
+    bus->send(notify);
 }
 
 void ProcessManager::leave()
@@ -273,16 +331,21 @@ void ProcessManager::leave()
     // Under cutefish-dm the login screen comes up on its own VT first, and the
     // reply comes once it is on screen: this session then ends where nobody sees
     // it. Another display manager does not answer, and the session ends as before.
-    const QDBusMessage switchToGreeter = QDBusMessage::createMethodCall(
-            QStringLiteral("com.cutefish.DisplayManager"),
-            QStringLiteral("/com/cutefish/DisplayManager"),
-            QStringLiteral("com.cutefish.DisplayManager"), QStringLiteral("SwitchToGreeter"));
-    const QDBusMessage switched = QDBusConnection::systemBus().call(switchToGreeter, QDBus::Block, 15000);
-    if (switched.type() == QDBusMessage::ErrorMessage
-        && switched.errorName() != QLatin1String("org.freedesktop.DBus.Error.ServiceUnknown"))
-        qWarning() << "The login screen did not come up before logout:" << switched.errorMessage();
+    bool switched = false;
+    if (dbus::Connection *system = dbus::Connection::system()) {
+        const dbus::Message switchToGreeter =
+                system->newMethodCall("com.cutefish.DisplayManager", "/com/cutefish/DisplayManager",
+                                      "com.cutefish.DisplayManager", "SwitchToGreeter");
+        const dbus::Reply reply = system->call(switchToGreeter, 15s);
+        switched = !reply.isError();
+        if (reply.isError() && reply.error().name != "org.freedesktop.DBus.Error.ServiceUnknown")
+            CF_WARNING(sessionLog()) << "The login screen did not come up before logout:"
+                                     << reply.error().message;
+    } else {
+        CF_WARNING(sessionLog()) << "The login screen did not come up before logout: no system bus";
+    }
 
-    endSession(switched.type() == QDBusMessage::ReplyMessage);
+    endSession(switched);
 }
 
 void ProcessManager::endSession(bool behindLoginScreen)
@@ -292,10 +355,9 @@ void ProcessManager::endSession(bool behindLoginScreen)
 
     // Applications belong to the runtime, so ask it to quit them, then close
     // what we started ourselves.
-    ApplicationRuntime *runtime = ApplicationRuntime::instance();
-    if (!runtime->quitAll()) {
-        for (const QString &appId : runtime->runningApplications())
-            runtime->quitApplication(appId);
+    if (!runtime::quitAll()) {
+        for (const std::string &appId : runtime::runningApplications())
+            runtime::quitApplication(appId);
     }
 
     m_shellProcess->stop();
@@ -303,10 +365,11 @@ void ProcessManager::endSession(bool behindLoginScreen)
 
     // The kernel takes the compositor's cursor down with it; behind the login
     // screen it stays until that one's own replaces it.
-    QTimer::singleShot(behindLoginScreen ? 1000 : 0, this, [this] {
+    m_exitTimer.onTimeout = [this] {
         m_compositorProcess->stop();
-        QCoreApplication::exit(0);
-    });
+        base::EventLoop::current()->quit(0);
+    };
+    m_exitTimer.start(behindLoginScreen ? 1000ms : 0ms);
 }
 
 void ProcessManager::stopShellAndDaemons()
@@ -317,20 +380,16 @@ void ProcessManager::stopShellAndDaemons()
     stopProcesses(m_coreProcesses);
 }
 
-void ProcessManager::stopProcesses(QMap<QString, QProcess *> &processes)
+void ProcessManager::stopProcesses(std::map<std::string, std::unique_ptr<base::Process>> &processes)
 {
-    QMapIterator<QString, QProcess *> i(processes);
-    while (i.hasNext()) {
-        i.next();
-        QProcess *p = i.value();
-
-        if (p->state() == QProcess::NotRunning)
+    for (auto &[program, process] : processes) {
+        if (!process->isRunning())
             continue;
 
-        p->terminate();
+        process->terminate();
 
-        if (!p->waitForFinished(2000))
-            p->kill();
+        if (!process->waitForFinished(2000ms))
+            process->kill();
     }
 }
 
@@ -341,104 +400,107 @@ void ProcessManager::startDesktopProcess()
     m_desktopStarted = true;
 
     // Before the file manager, which reads the directories once.
-    UserDirectories::ensure(QDir::homePath(),
-                            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
+    UserDirectories::ensure(base::paths::home(), base::paths::configHome());
     // Resident, so every file manager window and dialog of the session, the
     // dock's included, opens from one warm process; it draws the desktop on
     // the trusted connection.
     startShell();
 
     // For CutefishOS. An ordinary application, so the runtime starts it.
-    if (QFile("/usr/bin/cutefish-welcome").exists()
-        && !QFile("/run/live/medium/live/filesystem.squashfs").exists()) {
-        QSettings settings("cutefish", "login");
-        QStringList command {QStringLiteral("/usr/bin/cutefish-welcome")};
+    if (fileExists("/usr/bin/cutefish-welcome") && !fileExists("/run/live/medium/live/filesystem.squashfs")) {
+        const base::Settings settings(base::paths::cutefishConfig("login"));
+        std::vector<std::string> command {"/usr/bin/cutefish-welcome"};
 
-        if (settings.value("Finished", false).toBool())
-            command << QStringLiteral("-d");
+        if (settings.boolValue("Finished", false))
+            command.push_back("-d");
 
-        ApplicationLauncher::startDetached(command, QString(), QStringLiteral("cutefish-welcome"));
+        runtime::launchCommand(command, std::string(), "cutefish-welcome");
     }
 
     // Auto start
-    QTimer::singleShot(100, this, &ProcessManager::loadAutoStartProcess);
+    m_autostartTimer.start(100ms);
 }
 
 void ProcessManager::startDaemonProcess()
 {
     // The application runtime owns every application start, so it has to be up
     // before anything that may want to launch one.
-    startCoreProcess(QStringLiteral("cutefish-appruntime"));
-    startCoreProcess(QStringLiteral("cutefish-services"));
+    startCoreProcess("cutefish-appruntime");
+    startCoreProcess("cutefish-services");
 }
 
-void ProcessManager::startCoreProcess(const QString &program, const QStringList &arguments)
+void ProcessManager::startCoreProcess(const std::string &program, const std::vector<std::string> &arguments)
 {
     if (m_loggingOut)
         return;
 
-    QProcess *process = m_coreProcesses.value(program);
-    RestartPolicy *restart = m_restartPolicies.value(program);
+    auto &process = m_coreProcesses[program];
+    auto &restart = m_restartPolicies[program];
     if (!process) {
-        process = new QProcess;
-        process->setProcessChannelMode(QProcess::ForwardedChannels);
-        restart = new RestartPolicy(program, [this, program, arguments] {
+        process = std::make_unique<base::Process>();
+        process->setOutputForwarded(true);
+        restart = std::make_unique<RestartPolicy>(program, [this, program, arguments] {
             startCoreProcess(program, arguments);
-        }, this);
-        // A process that failed to start emits errorOccurred only.
-        connect(process, &QProcess::finished, restart, &RestartPolicy::exited);
-        connect(process, &QProcess::errorOccurred, restart, [process, restart](QProcess::ProcessError error) {
-            if (error == QProcess::FailedToStart)
-                restart->exited(-1, process->exitStatus());
         });
-        m_coreProcesses.insert(program, process);
-        m_restartPolicies.insert(program, restart);
+        RestartPolicy *policy = restart.get();
+        process->onFinished = [policy](int code, bool crashed) {
+            policy->exited(code, crashed);
+        };
     }
-    if (process->state() != QProcess::NotRunning)
+    if (process->isRunning())
         return;
 
     restart->started();
-    process->start(program, arguments);
-    if (!process->waitForStarted())
-        qWarning() << "Failed to start" << program << process->errorString();
+    if (!process->start(program, arguments)) {
+        CF_WARNING(sessionLog()) << "Failed to start" << program;
+        restart->exited(-1, false);
+    }
 }
 
 void ProcessManager::stopRestarts()
 {
     m_shellRestart->stop();
-    for (RestartPolicy *restart : std::as_const(m_restartPolicies))
+    for (auto &[program, restart] : m_restartPolicies)
         restart->stop();
 }
 
 void ProcessManager::loadAutoStartProcess()
 {
-    const QStringList dirs =
-            QStandardPaths::locateAll(QStandardPaths::GenericConfigLocation,
-                                      QStringLiteral("autostart"), QStandardPaths::LocateDirectory);
-    const auto desktops =
-            qEnvironmentVariable("XDG_CURRENT_DESKTOP", "Cutefish").split(':', Qt::SkipEmptyParts);
+    // The user's directory first, then the system's.
+    std::vector<std::string> configDirectories {base::paths::configHome()};
+    for (const std::string &directory : base::paths::configDirectories())
+        configDirectories.push_back(directory);
+    std::vector<std::string> dirs;
+    for (const std::string &directory : configDirectories) {
+        const std::string path = directory + "/autostart";
+        std::error_code error;
+        if (std::filesystem::is_directory(path, error) && std::find(dirs.begin(), dirs.end(), path) == dirs.end())
+            dirs.push_back(path);
+    }
+    const auto desktops = strings::split(environmentValue("XDG_CURRENT_DESKTOP", "Cutefish"), ':',
+                                      strings::SplitBehavior::SkipEmptyParts);
     const auto execList = autostartEntries(dirs, desktops);
 
     // Autostart entries are applications: the runtime starts them, and keeps
     // them quittable like any other application.
-    for (const QString &exec : execList) {
-        QStringList command = QProcess::splitCommand(exec);
+    for (const std::string &exec : execList) {
+        std::vector<std::string> command = splitCommand(exec);
 
         // Autostart entries take no files, so their field codes expand to
         // nothing rather than to a literal "%U" argument.
-        command.removeIf([](const QString &argument) {
-            return argument.size() == 2 && argument.startsWith(QLatin1Char('%'));
+        std::erase_if(command, [](const std::string &argument) {
+            return argument.size() == 2 && argument.starts_with('%');
         });
 
-        if (command.isEmpty())
+        if (command.empty())
             continue;
 
-        const auto executable = QFileInfo(command.first()).fileName();
-        if (QStringList {"cutefish-services", "cutefish-appruntime", "cutefish-filemanager",
-                         "cutefish-compositor", "xdg-user-dirs-update"}
-                    .contains(executable))
+        const std::string executable = std::filesystem::path(command.front()).filename().string();
+        static const char *const skipped[] = {"cutefish-services", "cutefish-appruntime", "cutefish-filemanager",
+                                              "cutefish-compositor", "xdg-user-dirs-update"};
+        if (std::find(std::begin(skipped), std::end(skipped), executable) != std::end(skipped))
             continue;
 
-        ApplicationLauncher::startDetached(command);
+        runtime::launchCommand(command);
     }
 }

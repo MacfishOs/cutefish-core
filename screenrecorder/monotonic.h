@@ -4,16 +4,15 @@
 #ifndef CUTEFISH_RECORDER_MONOTONIC_H
 #define CUTEFISH_RECORDER_MONOTONIC_H
 
-#include <QtGlobal>
-
+#include <cstdint>
 #include <ctime>
 
 // The clock the compositor stamps its frames with.
-inline qint64 monotonicNs()
+inline int64_t monotonicNs()
 {
     timespec now {};
     clock_gettime(CLOCK_MONOTONIC, &now);
-    return qint64(now.tv_sec) * 1000000000 + now.tv_nsec;
+    return int64_t(now.tv_sec) * 1000000000 + now.tv_nsec;
 }
 
 #endif // CUTEFISH_RECORDER_MONOTONIC_H

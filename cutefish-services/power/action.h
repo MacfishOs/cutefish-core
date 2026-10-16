@@ -5,23 +5,22 @@
 #ifndef CUTEFISH_SETTINGS_DAEMON_ACTION_H
 #define CUTEFISH_SETTINGS_DAEMON_ACTION_H
 
-#include <QObject>
-#include <QVariantMap>
+class IdleManager;
 
-class Q_DECL_EXPORT Action : public QObject
+class Action
 {
-    Q_OBJECT
-    Q_DISABLE_COPY(Action)
-
 public:
     /**
      * Default constructor
      */
-    explicit Action(QObject *parent);
+    explicit Action(IdleManager *idle);
     /**
      * Default destructor
      */
-    ~Action() override;
+    virtual ~Action();
+
+    Action(const Action &) = delete;
+    Action &operator=(const Action &) = delete;
 
     /**
      * This function is meant to find out if this action is available on this system. Actions
@@ -35,28 +34,28 @@ public:
      */
     virtual bool isSupported();
 
-protected:
-    // Registration uses seconds; onIdleTimeout receives milliseconds.
-    int registerIdleTimeout(int seconds);
-
-    void unregisterIdleTimeout(int identifier);
-
-public Q_SLOTS:
     /**
-     * This slot is triggered whenever an idle timeout registered with registerIdleTimeout is
+     * This is called whenever an idle timeout registered with registerIdleTimeout is
      * reached.
      *
      * @param msec The idle timeout reached in milliseconds
      */
     virtual void onIdleTimeout(int msec) = 0;
     /**
-     * This slot is triggered whenever the PC wakes up from an Idle state. It is @b always called
+     * This is called whenever the PC wakes up from an Idle state. It is @b always called
      * after a registered idle timeout has been reached.
      */
     virtual void onWakeupFromIdle() = 0;
 
-Q_SIGNALS:
-    void actionTriggered(bool result, const QString &error = QString());
+protected:
+    // Registration uses seconds; onIdleTimeout receives milliseconds. Without
+    // an idle manager, as in tests, nothing is registered and -1 returned.
+    int registerIdleTimeout(int seconds);
+
+    void unregisterIdleTimeout(int identifier);
+
+private:
+    IdleManager *m_idle;
 };
 
 #endif // CUTEFISH_SETTINGS_DAEMON_ACTION_H

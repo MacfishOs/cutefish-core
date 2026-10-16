@@ -6,45 +6,28 @@
 
 #include "fontconfigwriter.h"
 
-#include <QObject>
-#include <QSettings>
-#include <QStringList>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/dbus.h"
+#include "base/settings.h"
+#include "base/signal.h"
 
 class ScheduledFeature;
 class WallpaperManager;
 
-class ThemeManager : public QObject
+class ThemeManager
 {
-    Q_OBJECT
-    Q_PROPERTY(bool isDarkMode READ isDarkMode WRITE setDarkMode NOTIFY darkModeChanged)
-    Q_PROPERTY(int darkModeSchedule READ darkModeSchedule WRITE setDarkModeSchedule NOTIFY
-                       darkModeScheduleChanged)
-    Q_PROPERTY(bool backgroundVisible READ backgroundVisible WRITE setBackgroundVisible NOTIFY
-                       backgroundVisibleChanged)
-    Q_PROPERTY(bool continuousCorners READ continuousCorners WRITE setContinuousCorners NOTIFY
-                       continuousCornersChanged)
-    Q_PROPERTY(QString systemFont READ systemFont WRITE setSystemFont NOTIFY systemFontChanged)
-    Q_PROPERTY(QString systemFixedFont READ systemFixedFont WRITE setSystemFixedFont)
-    Q_PROPERTY(qreal systemFontPointSize READ systemFontPointSize WRITE setSystemFontPointSize
-                       NOTIFY systemFontPointSizeChanged)
-    Q_PROPERTY(QString wallpaper READ wallpaper WRITE setWallpaper NOTIFY wallpaperChanged)
-    Q_PROPERTY(QStringList userWallpapers READ userWallpapers NOTIFY userWallpapersChanged)
-    Q_PROPERTY(QStringList wallpaperFolders READ wallpaperFolders NOTIFY wallpaperFoldersChanged)
-    Q_PROPERTY(int accentColor READ accentColor WRITE setAccentColor NOTIFY accentColorChanged)
-    Q_PROPERTY(int backgroundType READ backgroundType WRITE setBackgroundType NOTIFY
-                       backgroundTypeChanged)
-    Q_PROPERTY(QString backgroundColor READ backgroundColor WRITE setBackgroundColor NOTIFY
-                       backgroundColorChanged)
-    Q_PROPERTY(QString cursorTheme READ cursorTheme WRITE setCursorTheme NOTIFY cursorThemeChanged)
-    Q_PROPERTY(int cursorSize READ cursorSize WRITE setCursorSize NOTIFY cursorSizeChanged)
-    Q_PROPERTY(QString iconTheme READ iconTheme WRITE setIconTheme NOTIFY iconThemeChanged)
-
 public:
-    static ThemeManager *self();
-    // The UI font a language starts with; empty when it has none of its own.
-    static QString fontForLocale(const QString &localeName);
+    ThemeManager(cutefish::base::Settings &settings, cutefish::base::dbus::Connection *session);
+    ~ThemeManager();
 
-    ThemeManager(QObject *parent = nullptr);
+    ThemeManager(const ThemeManager &) = delete;
+    ThemeManager &operator=(const ThemeManager &) = delete;
+
+    // com.cutefish.Services.Appearance at /com/cutefish/Services/Appearance.
+    bool publish();
 
     bool isDarkMode();
     // A manual switch holds until the schedule's next turn.
@@ -57,83 +40,75 @@ public:
     bool continuousCorners() const;
     void setContinuousCorners(bool value);
 
-    QString systemFont();
+    std::string systemFont();
     bool backgroundVisible() const;
     void setBackgroundVisible(bool value);
-    void setSystemFont(const QString &fontFamily);
+    void setSystemFont(const std::string &fontFamily);
 
-    QString systemFixedFont();
-    void setSystemFixedFont(const QString &fontFamily);
+    std::string systemFixedFont();
+    void setSystemFixedFont(const std::string &fontFamily);
 
-    qreal systemFontPointSize();
-    void setSystemFontPointSize(qreal fontSize);
+    double systemFontPointSize();
+    void setSystemFontPointSize(double fontSize);
 
-    QString wallpaper();
-    void setWallpaper(const QString &path);
-    QStringList userWallpapers() const;
-    void removeUserWallpaper(const QString &path);
+    std::string wallpaper();
+    void setWallpaper(const std::string &path);
+    std::vector<std::string> userWallpapers() const;
+    void removeUserWallpaper(const std::string &path);
 
-    QStringList wallpaperFolders() const;
-    void addWallpaperFolder(const QString &path);
-    void removeWallpaperFolder(const QString &path);
-    QStringList wallpaperFolderImages(const QString &path);
+    std::vector<std::string> wallpaperFolders() const;
+    void addWallpaperFolder(const std::string &path);
+    void removeWallpaperFolder(const std::string &path);
+    std::vector<std::string> wallpaperFolderImages(const std::string &path);
 
     int backgroundType();
     void setBackgroundType(int type);
 
-    QString backgroundColor();
-    void setBackgroundColor(QString color);
+    std::string backgroundColor();
+    void setBackgroundColor(const std::string &color);
 
     int accentColor();
     void setAccentColor(int accentColor);
 
-    QString cursorTheme() const;
-    void setCursorTheme(const QString &theme);
+    std::string cursorTheme() const;
+    void setCursorTheme(const std::string &theme);
 
     int cursorSize() const;
     void setCursorSize(int size);
 
     void updateGtk3Config();
-    void setFontRendering(bool antialias, const QString &hintStyle);
+    void setFontRendering(bool antialias, const std::string &hintStyle);
     void applyCursorSettings();
 
-    QString iconTheme() const;
-    void setIconTheme(const QString &iconTheme);
+    std::string iconTheme() const;
+    void setIconTheme(const std::string &iconTheme);
 
     void updateFontConfig();
 
-signals:
-    void darkModeChanged(bool darkMode);
-    void darkModeScheduleChanged(int schedule);
-    void wallpaperChanged(QString path);
-    void userWallpapersChanged();
-    void wallpaperFoldersChanged();
-    void wallpaperFolderImagesChanged(QString folder);
-    void continuousCornersChanged(bool continuousCorners);
-    void accentColorChanged(int accentColor);
-    void backgroundVisibleChanged();
-    void backgroundTypeChanged();
-    void backgroundColorChanged();
-    void cursorThemeChanged();
-    void cursorSizeChanged();
-    void iconThemeChanged();
-    void systemFontPointSizeChanged();
-    void systemFontChanged();
+    // After any change the interface announces.
+    cutefish::base::Signal<> changed;
 
 private:
     FontConfig fontConfig();
+    template<typename... Args>
+    void emitSignal(const std::string &name, const Args &...args);
+    template<typename T>
+    void write(const std::string &key, const T &value);
 
-    QSettings *m_settings;
-    WallpaperManager *m_wallpaperManager;
-    ScheduledFeature *m_darkMode;
+    cutefish::base::Settings &m_settings;
+    cutefish::base::dbus::Connection *m_session;
+    std::unique_ptr<WallpaperManager> m_wallpaperManager;
+    std::unique_ptr<ScheduledFeature> m_darkMode;
+    std::unique_ptr<cutefish::base::dbus::Object> m_object;
+    std::vector<cutefish::base::Subscription> m_subscriptions;
 
     bool m_continuousCorners;
     int m_accentColor;
 
-    QString m_cursorTheme;
+    std::string m_cursorTheme;
     int m_cursorSize;
 
-    QString m_iconTheme;
+    std::string m_iconTheme;
 };
 
 #endif

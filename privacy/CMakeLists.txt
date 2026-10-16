@@ -11,16 +11,9 @@ set(SOURCES
     usbcameras.h
 )
 
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     com.cutefish.Privacy.xml
-                     privacyservice.h PrivacyService
-                     privacyadaptor PrivacyAdaptor)
-set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
-
-add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES})
+add_executable(${TARGET} ${SOURCES})
 target_link_libraries(${TARGET}
-    Qt6::Core
-    Qt6::DBus
+    Cutefish::ToolkitBase
 )
 
 configure_file(com.cutefish.Privacy.service.in com.cutefish.Privacy.service @ONLY)

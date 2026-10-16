@@ -1,24 +1,29 @@
 #ifndef CLIPBOARD_H
 #define CLIPBOARD_H
 
-#include <QClipboard>
-#include <QObject>
+#include <memory>
+#include <vector>
+
+#include "base/signal.h"
 
 class WaylandClipboard;
 
-class Clipboard : public QObject
+// Keeps the clipboard's contents once the application that copied them quits:
+// every new selection is read and offered again from this process.
+class Clipboard
 {
-    Q_OBJECT
-
 public:
-    explicit Clipboard(QObject* parent = nullptr);
+    Clipboard();
+    ~Clipboard();
 
-private slots:
-    void onDataChanged();
+    Clipboard(const Clipboard &) = delete;
+    Clipboard &operator=(const Clipboard &) = delete;
 
 private:
-    QClipboard* m_qtClipboard = nullptr;
-    WaylandClipboard* m_waylandClipboard = nullptr;
+    void onDataChanged();
+
+    std::unique_ptr<WaylandClipboard> m_waylandClipboard;
+    std::vector<cutefish::base::Subscription> m_subscriptions;
 };
 
 #endif // CLIPBOARD_H

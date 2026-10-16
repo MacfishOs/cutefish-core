@@ -1,26 +1,27 @@
 #pragma once
 
-#include <QFileSystemWatcher>
-#include <QObject>
-#include <QTemporaryDir>
-#include <QTimer>
+#include <functional>
+#include <string>
 
-class XwaylandEnvironment final : public QObject
+#include "base/file.h"
+#include "base/file_watcher.h"
+#include "base/timer.h"
+
+class XwaylandEnvironment final
 {
-    Q_OBJECT
 public:
-    explicit XwaylandEnvironment(QObject* parent = nullptr);
-    QString readinessFile() const;
+    XwaylandEnvironment();
+    std::string readinessFile() const;
     void waitForReady(int timeoutMs = 12000);
-signals:
-    void resolved(bool available);
-    void lost();
+
+    std::function<void(bool available)> onResolved;
+    std::function<void()> onLost;
 
 private:
     void check();
-    QTemporaryDir m_directory;
-    QFileSystemWatcher m_watcher;
-    QTimer m_timeout;
+    cutefish::base::file::TemporaryDirectory m_directory;
+    cutefish::base::FileWatch m_watch;
+    cutefish::base::Timer m_timeout;
     bool m_waiting = false;
     bool m_available = false;
 };

@@ -1,38 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <QFile>
-#include <QGuiApplication>
-#include <QLocale>
-#include <QTranslator>
-
-#include "cutefishapplication.h"
 #include "polkitagentlistener.h"
+
+#include "base/dbus.h"
+#include "ui/application.h"
 
 int main(int argc, char *argv[])
 {
-    QGuiApplication app(argc, argv);
-    Cutefish::Application::prepare();
-    app.setQuitOnLastWindowClosed(false);
+    cutefish::ui::Application app(argc, argv);
+    app.setApplicationId("cutefish-polkit-agent");
 
-    // Translations
-    QLocale locale;
-    QString qmFilePath = QString("%1/%2.qm")
-                                 .arg("/usr/share/cutefish-polkit-agent/translations/")
-                                 .arg(locale.name());
-    if (QFile::exists(qmFilePath)) {
-        QTranslator *translator = new QTranslator(QGuiApplication::instance());
-        if (translator->load(qmFilePath)) {
-            QGuiApplication::installTranslator(translator);
-        } else {
-            translator->deleteLater();
-        }
-    }
+    PolKitAgentListener listener(cutefish::base::dbus::Connection::system());
 
-    PolKitAgentListener listener;
-
-    if (!listener.registerAgent(QStringLiteral("/com/cutefish/PolicyKit1/AuthenticationAgent")))
+    if (!listener.registerAgent("/com/cutefish/PolicyKit1/AuthenticationAgent"))
         return -1;
 
-    return app.exec();
+    return app.run();
 }

@@ -1,19 +1,19 @@
 #ifndef GTKSETTINGS_H
 #define GTKSETTINGS_H
 
-#include <QString>
+#include <string>
 
 struct GtkSettings
 {
-    QString fontFamily;
-    qreal fontPointSize = 9;
+    std::string fontFamily;
+    double fontPointSize = 9;
     // fontconfig's values, as written by writeFontConfig().
     bool fontAntialias = true;
-    QString fontHintStyle = QStringLiteral("hintfull");
-    QString fontRgba = QStringLiteral("rgb");
+    std::string fontHintStyle = "hintfull";
+    std::string fontRgba = "rgb";
     bool darkMode = false;
-    QString iconTheme;
-    QString cursorTheme;
+    std::string iconTheme;
+    std::string cursorTheme;
     int cursorSize = 24;
 };
 

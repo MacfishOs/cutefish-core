@@ -2,77 +2,69 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "application.h"
-#include "languageenvironment.h"
 
-#include "sessionadaptor.h"
-
-// Qt
-#include <QCommandLineParser>
-#include <QDBusConnection>
-#include <QDBusConnectionInterface>
-#include <QDebug>
-#include <QDir>
-#include <QProcess>
-#include <QSocketNotifier>
-#include <QStandardPaths>
-#include <QTimer>
+#include "base/command_line.h"
+#include "base/paths.h"
+#include "base/process.h"
+#include "base/strings.h"
+#include "common/environment.h"
+#include "common/language_environment.h"
+#include "logs.h"
+#include "power.h"
 
 // STL
+#include <filesystem>
 #include <optional>
 
 // System
 #include <cerrno>
 #include <csignal>
+#include <cstdlib>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-std::optional<QStringList> getSystemdEnvironment()
-{
-    auto msg = QDBusMessage::createMethodCall(
-            QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
-            QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
-    msg << QStringLiteral("org.freedesktop.systemd1.Manager") << QStringLiteral("Environment");
-    auto reply = QDBusConnection::sessionBus().call(msg);
-    if (reply.type() == QDBusMessage::ErrorMessage) {
-        return std::nullopt;
-    }
+namespace base = cutefish::base;
+namespace dbus = cutefish::base::dbus;
+using namespace std::chrono_literals;
 
+static std::optional<std::vector<std::string>> getSystemdEnvironment()
+{
+    dbus::Proxy manager(dbus::Connection::session(), "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                        "org.freedesktop.systemd1.Manager");
     // Make sure the returned type is correct.
-    auto arguments = reply.arguments();
-    if (arguments.isEmpty() || arguments[0].userType() != qMetaTypeId<QDBusVariant>()) {
-        return std::nullopt;
-    }
-    auto variant = qdbus_cast<QVariant>(arguments[0]);
-    if (variant.typeId() != QMetaType::QStringList) {
-        return std::nullopt;
-    }
-
-    return variant.toStringList();
+    return manager.property<std::vector<std::string>>("Environment");
 }
 
-bool isShellVariable(const QByteArray &name)
+static bool isShellVariable(const std::string &name)
 {
-    return name == "_" || name.startsWith("SHLVL");
+    return name == "_" || name.starts_with("SHLVL");
 }
 
-bool isSessionVariable(const QByteArray &name)
+static bool isSessionVariable(const std::string &name)
 {
     // Check is variable is specific to session.
     return name == "DISPLAY" || name == "XAUTHORITY" || name == "WAYLAND_DISPLAY"
             || name == "WAYLAND_SOCKET" || //
-            name.startsWith("XDG_");
+            name.starts_with("XDG_");
 }
 
-bool isInputMethodModuleVariable(const QByteArray &name)
+static bool isInputMethodModuleVariable(const std::string &name)
 {
     return name == "GTK_IM_MODULE" || name == "QT_IM_MODULE";
 }
 
-void setEnvironmentVariable(const QByteArray &name, const QByteArray &value)
+static bool isEmptyVariable(const char *name)
 {
-    if (qgetenv(name) != value) {
-        qputenv(name, value);
-    }
+    const char *value = std::getenv(name);
+    return !value || !*value;
+}
+
+static void setEnvironmentVariable(const std::string &name, const std::string &value)
+{
+    const char *current = std::getenv(name.c_str());
+    if (!current || value != current)
+        setenv(name.c_str(), value.c_str(), 1);
 }
 
 static int s_terminationSocket[2] = {-1, -1};
@@ -85,22 +77,20 @@ static void onTerminationSignal(int)
     errno = savedErrno;
 }
 
-Application::Application(int &argc, char **argv)
-    : QCoreApplication(argc, argv)
-    , m_processManager(new ProcessManager)
+Application::Application(int argc, char **argv, base::EventLoop &loop)
+    : m_loop(loop)
+    , m_processManager(std::make_unique<ProcessManager>())
 {
     endSessionOnTerminationSignals();
-    new SessionAdaptor(this);
 
     // connect to D-Bus and register as an object:
-    QDBusConnection::sessionBus().registerService(QStringLiteral("com.cutefish.Session"));
-    QDBusConnection::sessionBus().registerObject(QStringLiteral("/Session"), this);
+    exportSession();
 
-    QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("Cutefish Session"));
+    base::CommandLineParser parser;
+    parser.setApplicationDescription("Cutefish Session");
     parser.addHelpOption();
 
-    parser.process(*this);
+    parser.process(argc, argv);
 
     createConfigDirectory();
     initLanguage();
@@ -109,23 +99,69 @@ Application::Application(int &argc, char **argv)
 
     if (!syncDBusEnvironment()) {
         // Startup error
-        qDebug() << "Could not sync environment to dbus.";
-        qApp->exit(1);
+        CF_WARNING(sessionLog()) << "Could not sync environment to dbus.";
     }
 
     // Import systemd's environment only after ours reached D-Bus; the other
     // order applies LANG and LC_* in the wrong order.
-    qunsetenv("LC_ALL");
+    unsetenv("LC_ALL");
     importSystemdEnvironment();
 
-    QTimer::singleShot(100, m_processManager, &ProcessManager::start);
+    m_startTimer.setSingleShot(true);
+    m_startTimer.onTimeout = [this] {
+        m_processManager->start();
+    };
+    m_startTimer.start(100ms);
 }
 
 Application::~Application()
 {
-    // The process manager has no parent. Deleted here, while the application still
-    // runs, it stops what it started and removes its Xwayland readiness directory.
-    delete m_processManager;
+    // Deleted here, while the loop still exists, the process manager stops
+    // what it started and removes its Xwayland readiness directory.
+    m_processManager.reset();
+    if (m_terminationWatch)
+        m_loop.unwatch(m_terminationWatch);
+}
+
+void Application::reboot()
+{
+    m_processManager->endAfterApplications(ProcessManager::Ending::Restart, [this] {
+        const bool rebooting = Power::reboot();
+        if (rebooting)
+            m_loop.quit(0);
+        return rebooting;
+    });
+}
+
+void Application::powerOff()
+{
+    m_processManager->endAfterApplications(ProcessManager::Ending::Shutdown, [this] {
+        const bool poweringOff = Power::powerOff();
+        if (poweringOff)
+            m_loop.quit(0);
+        return poweringOff;
+    });
+}
+
+bool Application::suspend()
+{
+    return Power::suspend();
+}
+
+void Application::exportSession()
+{
+    dbus::Connection *bus = dbus::Connection::session(&m_loop);
+    if (!bus)
+        return;
+
+    m_sessionObject = std::make_unique<dbus::Object>(bus, "/Session", "com.cutefish.Session");
+    m_sessionObject->addMethod("logout", [this] { logout(); });
+    m_sessionObject->addMethod("reboot", [this] { reboot(); });
+    m_sessionObject->addMethod("powerOff", [this] { powerOff(); });
+    m_sessionObject->addMethod("suspend", [this] { return suspend(); }, {{}, {"result"}});
+    m_sessionObject->addMethod("startDesktopProcess", [this] { startDesktopProcess(); });
+    m_sessionObject->publish();
+    bus->requestName("com.cutefish.Session");
 }
 
 void Application::endSessionOnTerminationSignals()
@@ -135,12 +171,12 @@ void Application::endSessionOnTerminationSignals()
     // A handler, unlike signalfd's blocked mask, is not inherited by child processes.
     if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, s_terminationSocket)
         != 0) {
-        qWarning() << "Cannot handle termination signals";
+        CF_WARNING(sessionLog()) << "Cannot handle termination signals";
         return;
     }
-    auto *notifier = new QSocketNotifier(s_terminationSocket[0], QSocketNotifier::Read, this);
-    connect(notifier, &QSocketNotifier::activated, this, [this, notifier] {
-        notifier->setEnabled(false);
+    m_terminationWatch = m_loop.watch(s_terminationSocket[0], EPOLLIN, [this](uint32_t) {
+        m_loop.unwatch(m_terminationWatch);
+        m_terminationWatch = 0;
         m_processManager->endSession();
     });
     struct sigaction action = {};
@@ -153,60 +189,58 @@ void Application::endSessionOnTerminationSignals()
 
 void Application::initEnvironments()
 {
+    const std::string home = base::paths::home();
+
     // Set defaults
-    if (qEnvironmentVariableIsEmpty("XDG_DATA_HOME"))
-        qputenv("XDG_DATA_HOME",
-                QDir::home().absoluteFilePath(QStringLiteral(".local/share")).toLocal8Bit());
-    if (qEnvironmentVariableIsEmpty("XDG_DESKTOP_DIR"))
-        qputenv("XDG_DESKTOP_DIR",
-                QDir::home().absoluteFilePath(QStringLiteral("Desktop")).toLocal8Bit());
-    if (qEnvironmentVariableIsEmpty("XDG_CONFIG_HOME"))
-        qputenv("XDG_CONFIG_HOME",
-                QDir::home().absoluteFilePath(QStringLiteral(".config")).toLocal8Bit());
-    if (qEnvironmentVariableIsEmpty("XDG_CACHE_HOME"))
-        qputenv("XDG_CACHE_HOME",
-                QDir::home().absoluteFilePath(QStringLiteral(".cache")).toLocal8Bit());
-    if (qEnvironmentVariableIsEmpty("XDG_DATA_DIRS"))
-        qputenv("XDG_DATA_DIRS", "/usr/local/share/:/usr/share/");
-    if (qEnvironmentVariableIsEmpty("XDG_CONFIG_DIRS"))
-        qputenv("XDG_CONFIG_DIRS", "/etc/xdg");
+    if (isEmptyVariable("XDG_DATA_HOME"))
+        setenv("XDG_DATA_HOME", (home + "/.local/share").c_str(), 1);
+    if (isEmptyVariable("XDG_DESKTOP_DIR"))
+        setenv("XDG_DESKTOP_DIR", (home + "/Desktop").c_str(), 1);
+    if (isEmptyVariable("XDG_CONFIG_HOME"))
+        setenv("XDG_CONFIG_HOME", (home + "/.config").c_str(), 1);
+    if (isEmptyVariable("XDG_CACHE_HOME"))
+        setenv("XDG_CACHE_HOME", (home + "/.cache").c_str(), 1);
+    if (isEmptyVariable("XDG_DATA_DIRS"))
+        setenv("XDG_DATA_DIRS", "/usr/local/share/:/usr/share/", 1);
+    if (isEmptyVariable("XDG_CONFIG_DIRS"))
+        setenv("XDG_CONFIG_DIRS", "/etc/xdg", 1);
 
     // Environment
-    qputenv("DESKTOP_SESSION", "Cutefish");
-    qputenv("XDG_CURRENT_DESKTOP", "Cutefish");
-    qputenv("XDG_SESSION_DESKTOP", "Cutefish");
+    setenv("DESKTOP_SESSION", "Cutefish", 1);
+    setenv("XDG_CURRENT_DESKTOP", "Cutefish", 1);
+    setenv("XDG_SESSION_DESKTOP", "Cutefish", 1);
 
     // GLib's plain-text backend: cutefish-services writes the GTK appearance keys into
     // ~/.config/glib-2.0/settings/keyfile, and no dconf daemon is needed.
-    qputenv("GSETTINGS_BACKEND", "keyfile");
+    setenv("GSETTINGS_BACKEND", "keyfile", 1);
 
     // Qt
-    qputenv("QT_QPA_PLATFORM", "wayland");
-    qputenv("GDK_BACKEND", "wayland");
-    if (qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"))
-        qputenv("WAYLAND_DISPLAY", "cutefish-0");
-    qputenv("QT_QPA_PLATFORMTHEME", "cutefish");
+    setenv("QT_QPA_PLATFORM", "wayland", 1);
+    setenv("GDK_BACKEND", "wayland", 1);
+    if (isEmptyVariable("WAYLAND_DISPLAY"))
+        setenv("WAYLAND_DISPLAY", "cutefish-0", 1);
+    setenv("QT_QPA_PLATFORMTHEME", "cutefish", 1);
 
     // ref:
     // https://stackoverflow.com/questions/34399993/qml-performance-issue-when-updating-an-item-in-presence-of-many-non-overlapping
-    qputenv("QT_QPA_UPDATE_IDLE_TIME", "10");
+    setenv("QT_QPA_UPDATE_IDLE_TIME", "10", 1);
 
     // im-config's /etc/profile.d script exports these for Wayland sessions; they would bypass
     // the compositor's text-input protocols. XMODIFIERS stays for Xwayland clients.
-    qunsetenv("GTK_IM_MODULE");
-    qunsetenv("QT_IM_MODULE");
+    unsetenv("GTK_IM_MODULE");
+    unsetenv("QT_IM_MODULE");
 }
 
 void Application::initLanguage()
 {
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    LanguageEnvironment::apply(environment);
-    for (const QString &name : environment.keys()) {
-        if (name == "LANG" || name == "LANGUAGE" || name.startsWith("LC_"))
-            qputenv(name.toUtf8().constData(), environment.value(name).toUtf8());
+    cutefish::core::Environment environment = cutefish::core::processEnvironment();
+    cutefish::core::language::apply(environment);
+    for (const auto &[name, value] : environment) {
+        if (name == "LANG" || name == "LANGUAGE" || name.starts_with("LC_"))
+            setenv(name.c_str(), value.c_str(), 1);
     }
     // Export an empty value to clear LC_ALL in an already-running D-Bus daemon.
-    qputenv("LC_ALL", "");
+    setenv("LC_ALL", "", 1);
 }
 
 bool Application::syncDBusEnvironment()
@@ -215,20 +249,13 @@ bool Application::syncDBusEnvironment()
 
     // At this point all environment variables are set, let's send it to the DBus session server to
     // update the activation environment
-    if (!QStandardPaths::findExecutable(QStringLiteral("dbus-update-activation-environment"))
-                 .isEmpty()) {
-        exitCode = runSync(QStringLiteral("dbus-update-activation-environment"),
-                           {QStringLiteral("--systemd"), QStringLiteral("--all")});
-    }
+    if (!base::paths::findExecutable("dbus-update-activation-environment").empty())
+        exitCode = runSync("dbus-update-activation-environment", {"--systemd", "--all"});
 
     // --all only adds variables, so values exported by an earlier login stay in systemd.
-    const QString systemctl = QStandardPaths::findExecutable(QStringLiteral("systemctl"));
-    if (!systemctl.isEmpty()) {
-        runSync(systemctl,
-                {QStringLiteral("--user"), QStringLiteral("unset-environment"),
-                 QStringLiteral("GTK_IM_MODULE"), QStringLiteral("QT_IM_MODULE"),
-                 QStringLiteral("LC_ALL")});
-    }
+    const std::string systemctl = base::paths::findExecutable("systemctl");
+    if (!systemctl.empty())
+        runSync(systemctl, {"--user", "unset-environment", "GTK_IM_MODULE", "QT_IM_MODULE", "LC_ALL"});
 
     return exitCode == 0;
 }
@@ -238,47 +265,51 @@ bool Application::syncDBusEnvironment()
 // But it won't work if cutefishDE is not started by systemd.
 void Application::importSystemdEnvironment()
 {
-    auto environment = getSystemdEnvironment();
-    if (!environment) {
+    const auto environment = getSystemdEnvironment();
+    if (!environment)
         return;
-    }
 
-    for (auto &envString : environment.value()) {
-        const auto env = envString.toLocal8Bit();
-        const int idx = env.indexOf('=');
-        if (Q_UNLIKELY(idx <= 0)) {
+    for (const std::string &env : *environment) {
+        const size_t idx = env.find('=');
+        if (idx == std::string::npos || idx == 0)
             continue;
-        }
 
-        const auto name = env.left(idx);
+        const std::string name = env.substr(0, idx);
         if (isShellVariable(name) || isSessionVariable(name)
             || isInputMethodModuleVariable(name) || name == "LC_ALL") {
             continue;
         }
-        setEnvironmentVariable(name, env.mid(idx + 1));
+        setEnvironmentVariable(name, env.substr(idx + 1));
     }
 }
 
 void Application::createConfigDirectory()
 {
-    const QString configDir =
-            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    const std::string configDir = base::paths::configHome();
 
-    if (!QDir().mkpath(configDir))
-        qDebug() << "Could not create config directory XDG_CONFIG_HOME: " << configDir;
+    std::error_code error;
+    std::filesystem::create_directories(configDir, error);
+    if (!std::filesystem::is_directory(configDir, error))
+        CF_WARNING(sessionLog()) << "Could not create config directory XDG_CONFIG_HOME: " << configDir;
 }
 
-int Application::runSync(const QString &program, const QStringList &args)
+int Application::runSync(const std::string &program, const std::vector<std::string> &args)
 {
-    QProcess p;
+    base::Process p(&m_loop);
 
-    p.setProcessChannelMode(QProcess::ForwardedChannels);
-    p.start(program, args);
-    p.waitForFinished(-1);
-
-    if (p.exitCode()) {
-        qWarning() << program << args << "exited with code" << p.exitCode();
+    p.setOutputForwarded(true);
+    int exitCode = 0;
+    p.onFinished = [&exitCode](int code, bool) {
+        exitCode = code;
+    };
+    if (!p.start(program, args)) {
+        CF_WARNING(sessionLog()) << program << "could not be started";
+        return 255;
     }
+    p.waitForFinished(std::chrono::hours(24));
 
-    return p.exitCode();
+    if (exitCode)
+        CF_WARNING(sessionLog()) << program << cutefish::base::strings::join(args, " ") << "exited with code" << exitCode;
+
+    return exitCode;
 }

@@ -3,44 +3,45 @@
 
 #pragma once
 
-#include <QDateTime>
-#include <QList>
-#include <QString>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 struct CoredumpFrame {
-    QString function;
-    QString module;
+    std::string function;
+    std::string module;
 };
 
 struct CoredumpThread {
-    QString id;
-    QList<CoredumpFrame> frames;
+    std::string id;
+    std::vector<CoredumpFrame> frames;
 };
 
 // One systemd-coredump journal entry. The stack trace is what systemd-coredump
 // unwound when it took the dump: exported symbols only, no source lines.
 struct Coredump {
-    uint pid = 0;
+    uint32_t pid = 0;
     int signal = 0;
-    QString signalName;
-    QString executable;
-    QString commandLine;
-    QString userUnit;
-    QString cgroup;
-    QDateTime time;
+    std::string signalName;
+    std::string executable;
+    std::string commandLine;
+    std::string userUnit;
+    std::string cgroup;
+    // Milliseconds since the epoch; 0 when unknown.
+    int64_t time = 0;
     // The crashing thread comes first.
-    QList<CoredumpThread> threads;
+    std::vector<CoredumpThread> threads;
 
     // The desktop entry id of an application the runtime started, from the
     // app-cutefish-<id>-<pid>.scope it runs in; empty for anything else.
-    QString applicationId() const;
+    std::string applicationId() const;
     // The pid the runtime started the application with.
-    uint applicationPid() const;
+    uint32_t applicationPid() const;
 
-    QString signalDescription() const;
+    std::string signalDescription() const;
     // Plain text for the clipboard.
-    QString report(const QString &name) const;
+    std::string report(const std::string &name) const;
 
-    static QList<CoredumpThread> parseStackTrace(const QString &message);
-    static QString demangle(const QString &symbol);
+    static std::vector<CoredumpThread> parseStackTrace(const std::string &message);
+    static std::string demangle(const std::string &symbol);
 };

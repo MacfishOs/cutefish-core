@@ -3,64 +3,65 @@
 
 #include "chromiumswitches.h"
 
-#include <QDir>
-#include <QFile>
-#include <QTemporaryDir>
-#include <QTest>
+#include "base/file.h"
 
-static void touch(const QString &path)
+#include <filesystem>
+#include <fstream>
+
+#include <gtest/gtest.h>
+
+namespace fs = std::filesystem;
+using Command = std::vector<std::string>;
+
+static void touch(const std::string &path)
 {
-    QFile file(path);
-    QVERIFY(file.open(QIODevice::WriteOnly));
+    std::ofstream file(path);
+    ASSERT_TRUE(file.good());
 }
 
-class ChromiumSwitchesTest : public QObject
+class ChromiumSwitchesTest : public ::testing::Test
 {
-    Q_OBJECT
-
-private slots:
-    void initTestCase()
+protected:
+    void SetUp() override
     {
-        QVERIFY(m_root.isValid());
-        QVERIFY(QDir(m_root.path()).mkpath("electron-app"));
-        QVERIFY(QDir(m_root.path()).mkpath("bin"));
-        QVERIFY(QDir(m_root.path()).mkpath("plain"));
+        ASSERT_TRUE(m_root.isValid());
+        fs::create_directories(path("electron-app"));
+        fs::create_directories(path("bin"));
+        fs::create_directories(path("plain"));
 
-        touch(m_root.filePath("electron-app/app"));
-        touch(m_root.filePath("electron-app/icudtl.dat"));
-        touch(m_root.filePath("electron-app/chrome_100_percent.pak"));
-        QVERIFY(QFile::link(m_root.filePath("electron-app/app"), m_root.filePath("bin/app")));
+        touch(path("electron-app/app"));
+        touch(path("electron-app/icudtl.dat"));
+        touch(path("electron-app/chrome_100_percent.pak"));
+        fs::create_symlink(path("electron-app/app"), path("bin/app"));
 
-        touch(m_root.filePath("plain/tool"));
-        touch(m_root.filePath("plain/icudtl.dat"));
+        touch(path("plain/tool"));
+        touch(path("plain/icudtl.dat"));
     }
 
-    void switchFollowsTheProgram()
-    {
-        const QString app = m_root.filePath("electron-app/app");
-        QCOMPARE(withChromiumSwitches({app, "claude://new"}),
-                 QStringList({app, "--disable-font-subpixel-positioning", "claude://new"}));
-    }
+    std::string path(const std::string &name) const { return m_root.path() + '/' + name; }
 
-    void symlinkResolvesToTheResources()
-    {
-        QVERIFY(isChromiumProgram(m_root.filePath("bin/app")));
-    }
-
-    void otherProgramsAreLeftAlone()
-    {
-        // icudtl.dat alone is not a Chromium build.
-        const QStringList tool{m_root.filePath("plain/tool"), "--flag"};
-        QCOMPARE(withChromiumSwitches(tool), tool);
-
-        const QStringList missing{m_root.filePath("plain/missing")};
-        QCOMPARE(withChromiumSwitches(missing), missing);
-        QCOMPARE(withChromiumSwitches({}), QStringList());
-    }
-
-private:
-    QTemporaryDir m_root;
+    cutefish::base::file::TemporaryDirectory m_root {fs::temp_directory_path().string()};
 };
 
-QTEST_GUILESS_MAIN(ChromiumSwitchesTest)
-#include "chromium_switches_test.moc"
+TEST_F(ChromiumSwitchesTest, switchFollowsTheProgram)
+{
+    const std::string app = path("electron-app/app");
+    EXPECT_EQ(withChromiumSwitches({app, "claude://new"}),
+              (Command {app, "--disable-font-subpixel-positioning", "claude://new"}));
+}
+
+TEST_F(ChromiumSwitchesTest, symlinkResolvesToTheResources)
+{
+    EXPECT_TRUE(isChromiumProgram(path("bin/app")));
+}
+
+TEST_F(ChromiumSwitchesTest, otherProgramsAreLeftAlone)
+{
+    // icudtl.dat alone is not a Chromium build.
+    const Command tool {path("plain/tool"), "--flag"};
+    EXPECT_EQ(withChromiumSwitches(tool), tool);
+
+    const Command missing {path("plain/missing")};
+    EXPECT_EQ(withChromiumSwitches(missing), missing);
+    EXPECT_EQ(withChromiumSwitches({}), Command());
+}

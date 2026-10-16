@@ -2,36 +2,41 @@
 
 #include "../battery/upowermanager.h"
 #include "dimdisplayaction.h"
-#include "preferences.h"
 
-static constexpr auto s_powerGroup = "Power";
+#include <algorithm>
+
+using namespace cutefish::base;
+
+static constexpr auto s_powerGroup = "Power/";
 
 static int normalizedTimeout(int timeout)
 {
-    return timeout < 0 ? -1 : qMax(1, timeout);
+    return timeout < 0 ? -1 : std::max(1, timeout);
 }
 
-static int readTimeout(const QSettings &settings, const QString &key, int fallback)
+static int readTimeout(const Settings &settings, const std::string &key, int fallback)
 {
-    return settings.contains(key) ? normalizedTimeout(settings.value(key).toInt()) : fallback;
+    return settings.contains(key) ? normalizedTimeout(int(settings.intValue(key))) : fallback;
 }
 
-PowerManager::PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness,
-                           QObject *parent)
-    : QObject(parent)
-    , m_settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat)
+PowerManager::PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness, IdleManager *idle,
+                           Settings &settings, dbus::Connection *session, dbus::Connection *system)
+    : m_settings(settings)
+    , m_session(session)
     , m_upowerManager(upowerManager)
-    , m_dimDisplayAction(new DimDisplayAction(brightness, this))
+    , m_dimDisplayAction(std::make_unique<DimDisplayAction>(idle, brightness, session, system))
 {
     loadSettings();
 
     m_onBattery = m_upowerManager && m_upowerManager->onBattery();
 
     if (m_upowerManager) {
-        connect(m_upowerManager, &UPowerManager::onBatteryChanged, this,
-                &PowerManager::onBatteryChanged);
-        connect(m_upowerManager, &UPowerManager::lidClosedChanged, this,
-                &PowerManager::onLidClosedChanged);
+        m_subscriptions.push_back(m_upowerManager->onBatteryChanged.connect([this] {
+            onBatteryChanged();
+        }));
+        m_subscriptions.push_back(m_upowerManager->lidClosedChanged.connect([this] {
+            onLidClosedChanged();
+        }));
 
         m_dimDisplayAction->setLidPresent(m_upowerManager->lidIsPresent());
     }
@@ -42,13 +47,29 @@ PowerManager::PowerManager(UPowerManager *upowerManager, BrightnessManager *brig
         m_dimDisplayAction->handleLidClosed();
 }
 
+PowerManager::~PowerManager() = default;
+
+bool PowerManager::publish()
+{
+    if (!m_session)
+        return false;
+    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Power",
+                                              "com.cutefish.Services.Power");
+    m_object->addMethod("setBatteryScreenOff", [this](int32_t value) { setBatteryScreenOff(value); },
+                        {{"value"}, {}});
+    m_object->addMethod("setACScreenOff", [this](int32_t value) { setACScreenOff(value); }, {{"value"}, {}});
+    m_object->addMethod("setACPreventSleep", [this](bool value) { setACPreventSleep(value); }, {{"value"}, {}});
+    m_object->addMethod("setDimDisplayTimeout", [this](int32_t value) { setDimDisplayTimeout(value); },
+                        {{"value"}, {}});
+    return m_object->publish();
+}
+
 void PowerManager::loadSettings()
 {
-    m_settings.beginGroup(QLatin1String(s_powerGroup));
-    m_batteryScreenOff = readTimeout(m_settings, QStringLiteral("BatteryScreenOff"), 300);
-    m_acScreenOff = readTimeout(m_settings, QStringLiteral("ACScreenOff"), 1200);
-    m_acPreventSleep = m_settings.value(QStringLiteral("ACPreventSleep"), false).toBool();
-    m_settings.endGroup();
+    const std::string group = s_powerGroup;
+    m_batteryScreenOff = readTimeout(m_settings, group + "BatteryScreenOff", 300);
+    m_acScreenOff = readTimeout(m_settings, group + "ACScreenOff", 1200);
+    m_acPreventSleep = m_settings.boolValue(group + "ACPreventSleep", false);
 }
 
 void PowerManager::applyPolicy()
@@ -60,32 +81,31 @@ void PowerManager::applyPolicy()
     m_dimDisplayAction->setPolicy(timeout, suspendDelay);
 }
 
-void PowerManager::writePowerSetting(const QString &key, const QVariant &value)
+template<typename T>
+void PowerManager::writePowerSetting(const std::string &key, const T &value)
 {
-    m_settings.beginGroup(QLatin1String(s_powerGroup));
-    m_settings.setValue(key, value);
-    m_settings.endGroup();
+    m_settings.setValue(s_powerGroup + key, value);
     m_settings.sync();
 }
 
 void PowerManager::setBatteryScreenOff(int timeout)
 {
     m_batteryScreenOff = normalizedTimeout(timeout);
-    writePowerSetting(QStringLiteral("BatteryScreenOff"), m_batteryScreenOff);
+    writePowerSetting("BatteryScreenOff", m_batteryScreenOff);
     applyPolicy();
 }
 
 void PowerManager::setACScreenOff(int timeout)
 {
     m_acScreenOff = normalizedTimeout(timeout);
-    writePowerSetting(QStringLiteral("ACScreenOff"), m_acScreenOff);
+    writePowerSetting("ACScreenOff", m_acScreenOff);
     applyPolicy();
 }
 
 void PowerManager::setACPreventSleep(bool prevent)
 {
     m_acPreventSleep = prevent;
-    writePowerSetting(QStringLiteral("ACPreventSleep"), m_acPreventSleep);
+    writePowerSetting("ACPreventSleep", m_acPreventSleep);
     applyPolicy();
 }
 

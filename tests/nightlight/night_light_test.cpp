@@ -1,610 +1,577 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "nightlight.h"
-#include "scheduleutils.h"
+#include <gtest/gtest.h>
 
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QFile>
-#include <QSettings>
-#include <QSignalSpy>
-#include <QStandardPaths>
-#include <QTemporaryFile>
-#include <QTest>
-
+#include <cmath>
 #include <cstdlib>
 #include <memory>
+#include <tuple>
 
-#include "displaytypes.h"
-#include "nightlightadaptor.h"
-#include "preferences.h"
+#include "base/dbus.h"
+#include "base/event_loop.h"
+#include "base/file.h"
+#include "base/settings.h"
+#include "display/displaytypes.h"
+#include "nightlight.h"
+#include "scheduleutils.h"
+#include "support/wait.h"
 
+using namespace cutefish::base;
 using namespace cutefish::display;
 using namespace ScheduleUtils;
+using namespace std::chrono;
+using namespace std::chrono_literals;
 
-static const QString displayService = QStringLiteral("com.cutefish.DisplayConfig.NightLightTest");
+static const char displayService[] = "com.cutefish.DisplayConfig.NightLightTest";
 
-static QDateTime at(int day, int hour, int minute = 0)
+static Date october(int day)
 {
-    return QDateTime(QDate(2026, 10, day), QTime(hour, minute), QTimeZone::UTC);
+    return year(2026) / October / day;
 }
 
-static TimesForDate fixed(QTime start, QTime end)
+static DateTime at(int day, int hour, int minute = 0)
 {
-    return [start, end](QDate) {
+    return ScheduleUtils::at(october(day), timeOfDay(hour, minute), zone("UTC"));
+}
+
+static TimesForDate fixed(Milliseconds start, Milliseconds end)
+{
+    return [start, end](Date) {
         return Times {start, end};
     };
 }
 
-static int minutesBetween(const QDateTime &a, const QTime &b)
+static int64_t minutesBetween(const DateTime &a, Milliseconds b)
 {
-    return std::abs(a.time().secsTo(b)) / 60;
+    return std::abs(duration_cast<seconds>(a.timeOfDay() - b).count()) / 60;
+}
+
+static int minutesOfDay(const DateTime &turn)
+{
+    return int(floor<minutes>(turn.timeOfDay()).count());
 }
 
 namespace {
 
 struct SetNightLightCall {
     double strength;
-    uint durationMs;
+    uint32_t durationMs;
 };
 
-// Answers the way the compositor's DisplayConfigService does.
-class FakeDisplayConfig : public QObject
+// Answers the way the compositor's DisplayConfigService does, on a connection
+// of its own.
+class FakeDisplayConfig
 {
-    Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "com.cutefish.DisplayConfig1")
-
 public:
-    FakeDisplayConfig() { ipc::registerTypes(); }
-
-    bool tintable = true;
-    QList<SetNightLightCall> calls;
-
-public slots:
-    // Qt D-Bus matches output types by their full names.
-    QString GetState(QString &seatId, qulonglong &topologyGeneration, qulonglong &appliedRevision,
-                     QList<cutefish::display::ipc::PhysicalDisplay> &physical,
-                     QList<cutefish::display::ipc::LogicalDisplay> &logical,
-                     QList<cutefish::display::ipc::Placement> &placements, QString &previewToken,
-                     qulonglong &previewDeadlineMs)
+    explicit FakeDisplayConfig(bool tintable)
+        : m_bus(dbus::Connection::open(dbus::Connection::Bus::Session))
+        , m_object(m_bus.get(), "/com/cutefish/DisplayConfig1", "com.cutefish.DisplayConfig1")
     {
-        seatId = QStringLiteral("seat0");
-        topologyGeneration = 1;
-        appliedRevision = 1;
-        ipc::PhysicalDisplay display;
-        display.sessionId = QStringLiteral("internal");
-        display.capabilities = tintable ? ipc::ColorTransformCapability : 0;
-        physical = {display};
-        logical.clear();
-        placements.clear();
-        previewToken.clear();
-        previewDeadlineMs = 0;
-        return QStringLiteral("test-instance");
+        m_object.addMethod("GetState", [tintable] {
+            PhysicalDisplay display;
+            display.sessionId = "internal";
+            display.capabilities = tintable ? ColorTransformCapability : 0;
+            return std::make_tuple(std::string("test-instance"), std::string("seat0"), uint64_t(1), uint64_t(1),
+                                   std::vector<PhysicalDisplay> {display}, std::vector<LogicalDisplay>(),
+                                   std::vector<Placement>(), std::string(), uint64_t(0));
+        });
+        m_object.addMethod("SetNightLight", [this](double strength, uint32_t durationMs) {
+            calls.push_back({strength, durationMs});
+        });
+        m_object.addSignal("StateChanged", "tt");
+        EXPECT_TRUE(m_object.publish());
+        EXPECT_TRUE(m_bus->requestName(displayService));
     }
 
-    void SetNightLight(double strength, uint durationMs)
-    {
-        calls.append({strength, durationMs});
-    }
-
-signals:
-    void StateChanged(qulonglong topologyGeneration, qulonglong appliedRevision);
-};
-
-} // namespace
-
-class NightLightTest : public QObject
-{
-    Q_OBJECT
+    std::vector<SetNightLightCall> calls;
 
 private:
-    QDBusConnection m_bus = QDBusConnection::connectToBus(QDBusConnection::SessionBus,
-                                                         QStringLiteral("night-light-compositor"));
-    std::unique_ptr<FakeDisplayConfig> m_display;
-    QDateTime m_now = at(2, 12);
+    std::unique_ptr<dbus::Connection> m_bus;
+    dbus::Object m_object;
+};
 
-    void startCompositor(bool tintable = true)
+class NightLightTest : public testing::Test
+{
+protected:
+    EventLoop loop;
+    file::TemporaryDirectory directory {"/tmp", "night-light-test"};
+    std::unique_ptr<FakeDisplayConfig> display;
+    // The file as each service read it, kept while any of them lives.
+    std::vector<std::unique_ptr<Settings>> files;
+    DateTime now = at(2, 12);
+
+    void SetUp() override
     {
-        m_display = std::make_unique<FakeDisplayConfig>();
-        m_display->tintable = tintable;
-        m_bus.registerObject(QStringLiteral("/com/cutefish/DisplayConfig1"), m_display.get(),
-                             QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals);
-        QVERIFY(m_bus.registerService(displayService));
+        ASSERT_TRUE(directory.isValid());
+        startCompositor();
     }
 
-    void stopCompositor()
+    std::string path() const { return directory.path() + "/services.conf"; }
+
+    void startCompositor(bool tintable = true) { display = std::make_unique<FakeDisplayConfig>(tintable); }
+
+    void stopCompositor() { display.reset(); }
+
+    Settings &settings()
     {
-        m_bus.unregisterService(displayService);
-        m_bus.unregisterObject(QStringLiteral("/com/cutefish/DisplayConfig1"));
-        m_display.reset();
+        files.push_back(std::make_unique<Settings>(path()));
+        return *files.back();
     }
 
     std::unique_ptr<NightLight> start()
     {
-        return std::make_unique<NightLight>(nullptr, [this] {
-            return m_now;
-        });
+        return std::make_unique<NightLight>(
+                settings(),
+                [this] {
+                    return now;
+                },
+                displayService);
     }
 
-    QVariant saved(const QString &key, const QString &group = QStringLiteral("NightLight"))
+    std::unique_ptr<ScheduledFeature> darkMode()
     {
-        QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
-        return settings.value(group + QLatin1Char('/') + key);
+        auto feature = std::make_unique<ScheduledFeature>(
+                ScheduledFeature::Keys {"Appearance", "DarkMode", "DarkModeSchedule", "DarkModeHoldUntil", {}, {}},
+                settings(), [this] {
+                    return now;
+                });
+        feature->start();
+        return feature;
     }
 
-    static ScheduledFeature::Keys darkModeKeys()
+    // What the file holds, as another process reads it.
+    std::optional<std::string> saved(const std::string &key, const std::string &group = "NightLight")
     {
-        return {QStringLiteral("Appearance"), QStringLiteral("DarkMode"),
-                QStringLiteral("DarkModeSchedule"), QStringLiteral("DarkModeHoldUntil"), {}, {}};
+        return Settings(path()).rawValue(group + '/' + key);
     }
 
-private slots:
-    void initTestCase()
+    void write(const std::string &key, const std::string &value)
     {
-        QStandardPaths::setTestModeEnabled(true);
-        // DisplayClient's service name for a compositor under test.
-        qputenv("CUTEFISH_DISPLAY_CONFIG_SERVICE", displayService.toUtf8());
-        QVERIFY(m_bus.isConnected());
+        Settings file(path());
+        file.setValue(key, value);
     }
 
-    void init()
+    bool callsReach(size_t count)
     {
-        QFile::remove(Preferences::file(QStringLiteral("services")));
-        m_now = at(2, 12);
-        startCompositor();
-    }
-
-    void cleanup() { stopCompositor(); }
-
-    // --- Where a day stands on a schedule. ---
-
-    void anOvernightScheduleIsOnAcrossMidnight()
-    {
-        const auto times = fixed(QTime(18, 0), QTime(6, 0));
-        auto position = ScheduleUtils::position(at(2, 12), times);
-        QVERIFY(!position.enabled);
-        QCOMPARE(position.next, at(2, 18));
-        position = ScheduleUtils::position(at(2, 18), times);
-        QVERIFY(position.enabled);
-        QCOMPARE(position.next, at(3, 6));
-        position = ScheduleUtils::position(at(3, 3), times);
-        QVERIFY(position.enabled);
-        QCOMPARE(position.next, at(3, 6));
-        position = ScheduleUtils::position(at(3, 6), times);
-        QVERIFY(!position.enabled);
-        QCOMPARE(position.next, at(3, 18));
-    }
-
-    void aDaytimeScheduleIsOnBetweenItsTimes()
-    {
-        const auto times = fixed(QTime(9, 0), QTime(17, 0));
-        auto position = ScheduleUtils::position(at(2, 8), times);
-        QVERIFY(!position.enabled);
-        QCOMPARE(position.next, at(2, 9));
-        position = ScheduleUtils::position(at(2, 12), times);
-        QVERIFY(position.enabled);
-        QCOMPARE(position.next, at(2, 17));
-        position = ScheduleUtils::position(at(2, 20), times);
-        QVERIFY(!position.enabled);
-        QCOMPARE(position.next, at(3, 9));
-    }
-
-    void equalTimesNeverTurnItOn()
-    {
-        const auto position = ScheduleUtils::position(at(2, 12), fixed(QTime(7, 0), QTime(7, 0)));
-        QVERIFY(!position.enabled);
-        QVERIFY(!position.next.isValid());
-    }
-
-    // Tomorrow's sunrise is not today's: the turn comes from the day it falls on.
-    void theNextTurnUsesItsOwnDaysTimes()
-    {
-        const TimesForDate times = [](QDate date) {
-            return Times {QTime(18, 0), QTime(6, date.day())};
-        };
-        const auto position = ScheduleUtils::position(at(2, 22), times);
-        QVERIFY(position.enabled);
-        QCOMPARE(position.next, at(3, 6, 3));
-    }
-
-    // Europe/Berlin repeats 02:00 to 03:00 on 2026-10-25: each 02:30 waits for its own 02:45.
-    void aRepeatedHourTurnsAtItsOwnOccurrence()
-    {
-        using Resolution = QDateTime::TransitionResolution;
-        const QTimeZone zone("Europe/Berlin");
-        const QDate date(2026, 10, 25);
-        const auto times = fixed(QTime(18, 0), QTime(2, 45));
-        const QDateTime first(date, QTime(2, 30), zone, Resolution::PreferBefore);
-        const QDateTime second(date, QTime(2, 30), zone, Resolution::PreferAfter);
-        QCOMPARE(first.secsTo(second), 3600);
-
-        auto position = ScheduleUtils::position(first, times);
-        QVERIFY(position.enabled);
-        QCOMPARE(position.next, QDateTime(date, QTime(2, 45), zone, Resolution::PreferBefore));
-
-        position = ScheduleUtils::position(second, times);
-        QVERIFY(position.enabled);
-        QVERIFY(position.next > second);
-        QCOMPARE(position.next, QDateTime(date, QTime(2, 45), zone, Resolution::PreferAfter));
-    }
-
-    // Against NOAA's solar calculator and the Julian-date sunrise equation,
-    // which agree to a few minutes.
-    void sunTimesMatchTheAlmanac()
-    {
-        auto sun = sunTimes(QDate(2026, 6, 21), 31.2333, 121.4667, QTimeZone("Asia/Shanghai"));
-        QVERIFY(sun);
-        QVERIFY(minutesBetween(sun->sunrise, QTime(4, 50)) <= 3);
-        QVERIFY(minutesBetween(sun->sunset, QTime(19, 0)) <= 3);
-        QCOMPARE(sun->sunrise.date(), QDate(2026, 6, 21));
-
-        sun = sunTimes(QDate(2026, 12, 21), 51.5083, -0.1253, QTimeZone("Europe/London"));
-        QVERIFY(sun);
-        QVERIFY(minutesBetween(sun->sunrise, QTime(8, 3)) <= 3);
-        QVERIFY(minutesBetween(sun->sunset, QTime(15, 53)) <= 3);
-
-        sun = sunTimes(QDate(2026, 7, 4), 40.7142, -74.0064, QTimeZone("America/New_York"));
-        QVERIFY(sun);
-        QVERIFY(minutesBetween(sun->sunrise, QTime(5, 29)) <= 3);
-        QVERIFY(minutesBetween(sun->sunset, QTime(20, 30)) <= 3);
-        QCOMPARE(sun->sunset.date(), QDate(2026, 7, 4));
-    }
-
-    void thePolarDayAndNightHaveNoTurns()
-    {
-        QVERIFY(!sunTimes(QDate(2026, 6, 21), 69.6489, 18.9551, QTimeZone("Europe/Oslo")));
-        QVERIFY(!sunTimes(QDate(2026, 12, 21), 69.6489, 18.9551, QTimeZone("Europe/Oslo")));
-    }
-
-    void zoneTablesGiveTheZonesCity()
-    {
-        QTemporaryFile table;
-        QVERIFY(table.open());
-        table.write("# comment\n"
-                    "CN\t+3114+12128\tAsia/Shanghai\tBeijing Time\n"
-                    "US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)\n"
-                    "XX\tnonsense\tBroken/Zone\n");
-        table.close();
-
-        auto coordinates = zoneCoordinates("Asia/Shanghai", {table.fileName()});
-        QVERIFY(coordinates);
-        QVERIFY(qAbs(coordinates->latitude - (31 + 14 / 60.0)) < 1e-9);
-        QVERIFY(qAbs(coordinates->longitude - (121 + 28 / 60.0)) < 1e-9);
-        coordinates = zoneCoordinates("America/New_York", {table.fileName()});
-        QVERIFY(coordinates);
-        QVERIFY(qAbs(coordinates->latitude - (40 + 42 / 60.0 + 51 / 3600.0)) < 1e-9);
-        QVERIFY(qAbs(coordinates->longitude + (74 + 0 / 60.0 + 23 / 3600.0)) < 1e-9);
-        QVERIFY(!zoneCoordinates("Broken/Zone", {table.fileName()}));
-        QVERIFY(!zoneCoordinates("UTC", {table.fileName()}));
-    }
-
-    // --- The service. ---
-
-    void availabilityFollowsTheCompositorsDisplays()
-    {
-        auto nightLight = start();
-        QTRY_VERIFY(nightLight->available());
-
-        stopCompositor();
-        QTRY_VERIFY(!nightLight->available());
-        startCompositor(false);
-        QTest::qWait(100);
-        QVERIFY(!nightLight->available());
-    }
-
-    void theSavedStateReachesTheCompositorOnceItIsLoaded()
-    {
-        {
-            QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
-            settings.setValue(QStringLiteral("NightLight/Enabled"), true);
-            settings.setValue(QStringLiteral("NightLight/Temperature"), 0.3);
-        }
-        auto nightLight = start();
-        QTRY_COMPARE(m_display->calls.size(), 1);
-        QCOMPARE(m_display->calls.first().strength, 0.3);
-        QCOMPARE(m_display->calls.first().durationMs, 1000u);
-
-        // A compositor that starts again is told again.
-        stopCompositor();
-        startCompositor();
-        QTRY_COMPARE(m_display->calls.size(), 1);
-        QCOMPARE(m_display->calls.first().strength, 0.3);
-    }
-
-    void aManualToggleTakesASecondAndIsSaved()
-    {
-        auto nightLight = start();
-        QTRY_VERIFY(nightLight->available());
-        QSignalSpy changed(nightLight.get(), &NightLight::enabledChanged);
-
-        nightLight->setEnabled(true);
-        QCOMPARE(changed.size(), 1);
-        QTRY_COMPARE(m_display->calls.size(), 2);
-        QCOMPARE(m_display->calls.last().strength, 0.5);
-        QCOMPARE(m_display->calls.last().durationMs, 1000u);
-        QCOMPARE(saved(QStringLiteral("Enabled")).toBool(), true);
-
-        nightLight->setEnabled(false);
-        QTRY_COMPARE(m_display->calls.size(), 3);
-        QCOMPARE(m_display->calls.last().strength, 0.0);
-    }
-
-    void aTemperatureChangedWhileOffIsOnlySaved()
-    {
-        auto nightLight = start();
-        QTRY_VERIFY(nightLight->available());
-        QTRY_COMPARE(m_display->calls.size(), 1);
-
-        nightLight->setTemperature(0.8);
-        QTest::qWait(100);
-        QCOMPARE(m_display->calls.size(), 1);
-        QCOMPARE(saved(QStringLiteral("Temperature")).toDouble(), 0.8);
-
-        nightLight->setEnabled(true);
-        QTRY_COMPARE(m_display->calls.size(), 2);
-        QCOMPARE(m_display->calls.last().strength, 0.8);
-        nightLight->setTemperature(2);
-        QCOMPARE(nightLight->temperature(), 1.0);
-    }
-
-    void aPreviewShowsTheTemperatureWhileOff()
-    {
-        auto nightLight = start();
-        QTRY_VERIFY(nightLight->available());
-        QTRY_COMPARE(m_display->calls.size(), 1);
-
-        nightLight->setPreview(true);
-        QTRY_COMPARE(m_display->calls.size(), 2);
-        QCOMPARE(m_display->calls.last().strength, 0.5);
-        QCOMPARE(m_display->calls.last().durationMs, 1000u);
-
-        nightLight->setTemperature(0.8);
-        QTRY_COMPARE(m_display->calls.size(), 3);
-        QCOMPARE(m_display->calls.last().strength, 0.8);
-        QCOMPARE(m_display->calls.last().durationMs, 100u);
-
-        nightLight->setPreview(false);
-        QTRY_COMPARE(m_display->calls.size(), 4);
-        QCOMPARE(m_display->calls.last().strength, 0.0);
-        QCOMPARE(m_display->calls.last().durationMs, 1000u);
-        QVERIFY(!nightLight->enabled());
-        QCOMPARE(saved(QStringLiteral("Temperature")).toDouble(), 0.8);
-        QCOMPARE(saved(QStringLiteral("Enabled")).toBool(), false);
-    }
-
-    void aPreviewWhileOnOnlyQuickensTheSlider()
-    {
-        auto nightLight = start();
-        QTRY_VERIFY(nightLight->available());
-        nightLight->setEnabled(true);
-        QTRY_COMPARE(m_display->calls.size(), 2);
-
-        nightLight->setPreview(true);
-        nightLight->setTemperature(0.8);
-        QTRY_COMPARE(m_display->calls.size(), 3);
-        QCOMPARE(m_display->calls.last().durationMs, 100u);
-        nightLight->setPreview(false);
-        QTest::qWait(100);
-        QCOMPARE(m_display->calls.size(), 3);
-        QCOMPARE(m_display->calls.last().strength, 0.8);
-    }
-
-    void aPreviewEndsWhenItsCallerLeaves()
-    {
-        auto nightLight = start();
-        QTRY_VERIFY(nightLight->available());
-        QTRY_COMPARE(m_display->calls.size(), 1);
-        const QString path = QStringLiteral("/com/cutefish/Services/NightLight");
-        // The service's own route: through the adaptor, which must reach QDBusContext.
-        new NightLightAdaptor(nightLight.get());
-        QDBusConnection service = QDBusConnection::sessionBus();
-        QVERIFY(service.registerObject(path, nightLight.get()));
-
-        const QString name = QStringLiteral("night-light-settings");
-        {
-            // The connection closes only once no handle refers to it.
-            QDBusConnection settings =
-                    QDBusConnection::connectToBus(QDBusConnection::SessionBus, name);
-            QDBusMessage message = QDBusMessage::createMethodCall(
-                    service.baseService(), path, QStringLiteral("com.cutefish.Services.NightLight"),
-                    QStringLiteral("setPreview"));
-            message << true;
-            settings.asyncCall(message);
-        }
-        QTRY_VERIFY(nightLight->previewing());
-        QTRY_COMPARE(m_display->calls.size(), 2);
-        QCOMPARE(m_display->calls.last().strength, 0.5);
-
-        QDBusConnection::disconnectFromBus(name);
-        QTRY_VERIFY(!nightLight->previewing());
-        QTRY_COMPARE(m_display->calls.size(), 3);
-        QCOMPARE(m_display->calls.last().strength, 0.0);
-        service.unregisterObject(path);
-    }
-
-    void aCustomScheduleTurnsOnWithinItsHours()
-    {
-        m_now = at(2, 20);
-        auto nightLight = start();
-        QTRY_VERIFY(nightLight->available());
-
-        nightLight->setSchedule(NightLight::Custom);
-        QVERIFY(nightLight->enabled());
-        QCOMPARE(nightLight->nextCheckpoint(), at(3, 6));
-        QTRY_COMPARE(m_display->calls.size(), 2);
-        QCOMPARE(m_display->calls.last().strength, 0.5);
-        QCOMPARE(m_display->calls.last().durationMs, 1000u);
-
-        // Moving the end before now turns it off at once.
-        nightLight->setCustomEnd(19 * 60);
-        QVERIFY(!nightLight->enabled());
-        QCOMPARE(nightLight->nextCheckpoint(), at(3, 18));
-    }
-
-    void aScheduledTurnTakesAMinute()
-    {
-        m_now = at(2, 17);
-        auto nightLight = start();
-        nightLight->setSchedule(NightLight::Custom);
-        QTRY_VERIFY(nightLight->available());
-        QVERIFY(!nightLight->enabled());
-        QCOMPARE(nightLight->nextCheckpoint(), at(2, 18));
-
-        m_now = at(2, 18);
-        nightLight->checkpointForTesting();
-        QVERIFY(nightLight->enabled());
-        QTRY_COMPARE(m_display->calls.size(), 2);
-        QCOMPARE(m_display->calls.last().durationMs, 60000u);
-        QCOMPARE(nightLight->nextCheckpoint(), at(3, 6));
-    }
-
-    // ScheduledFeature: the user's toggle holds until the schedule's next turn.
-    void aManualToggleHoldsUntilTheNextTurn()
-    {
-        m_now = at(2, 20);
-        auto nightLight = start();
-        nightLight->setSchedule(NightLight::Custom);
-        QVERIFY(nightLight->enabled());
-
-        m_now = at(2, 21);
-        nightLight->setEnabled(false);
-        m_now = at(2, 23);
-        nightLight->checkpointForTesting();
-        QVERIFY(!nightLight->enabled());
-
-        m_now = at(3, 6);
-        nightLight->checkpointForTesting();
-        QVERIFY(!nightLight->enabled());
-        QCOMPARE(nightLight->nextCheckpoint(), at(3, 18));
-        m_now = at(3, 18);
-        nightLight->checkpointForTesting();
-        QVERIFY(nightLight->enabled());
-    }
-
-    void aManualToggleHoldsAcrossSessionsUntilItsTurn()
-    {
-        m_now = at(2, 20);
-        auto nightLight = start();
-        nightLight->setSchedule(NightLight::Custom);
-        m_now = at(2, 21);
-        nightLight->setEnabled(false);
-        nightLight.reset();
-
-        m_now = at(2, 23);
-        nightLight = start();
-        QVERIFY(!nightLight->enabled());
-        QCOMPARE(nightLight->nextCheckpoint(), at(3, 6));
-        QTRY_COMPARE(m_display->calls.size(), 1);
-        QCOMPARE(m_display->calls.last().strength, 0.0);
-        nightLight.reset();
-
-        // Once its turn has passed, the schedule decides again.
-        m_now = at(3, 19);
-        nightLight = start();
-        QVERIFY(nightLight->enabled());
-        QVERIFY(!saved(QStringLiteral("HoldUntil")).isValid());
-    }
-
-    void aResumeKeepsAToggleUnlessItsTurnPassedDuringTheSleep()
-    {
-        m_now = at(2, 12);
-        auto nightLight = start();
-        nightLight->setSchedule(NightLight::Custom);
-        nightLight->setEnabled(true);
-
-        m_now = at(2, 13);
-        nightLight->resumeForTesting();
-        QVERIFY(nightLight->enabled());
-        QCOMPARE(nightLight->nextCheckpoint(), at(2, 18));
-
-        // Asleep through the evening and the night.
-        m_now = at(3, 7);
-        nightLight->resumeForTesting();
-        QVERIFY(!nightLight->enabled());
-        QCOMPARE(nightLight->nextCheckpoint(), at(3, 18));
-    }
-
-    void theSunTimesAreTheScheduleTurnsToCome()
-    {
-        const auto minutes = [](const QDateTime &turn) {
-            return turn.time().hour() * 60 + turn.time().minute();
-        };
-        m_now = at(2, 12);
-        auto nightLight = start();
-        nightLight->setSchedule(NightLight::SunsetToSunrise);
-        QVERIFY(!nightLight->enabled());
-        QCOMPARE(nightLight->sunset(), minutes(nightLight->nextCheckpoint()));
-
-        m_now = nightLight->nextCheckpoint();
-        nightLight->checkpointForTesting();
-        QVERIFY(nightLight->enabled());
-        QCOMPARE(nightLight->sunrise(), minutes(nightLight->nextCheckpoint()));
-        // Today's sunset has passed; tomorrow's is a minute or two away from it.
-        QVERIFY(std::abs(nightLight->sunset() - minutes(m_now)) <= 3);
-    }
-
-    void theSessionStartsWhereTheScheduleIs()
-    {
-        {
-            QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
-            settings.setValue(QStringLiteral("NightLight/Schedule"), int(NightLight::Custom));
-            settings.setValue(QStringLiteral("NightLight/Enabled"), false);
-        }
-        m_now = at(2, 22);
-        auto nightLight = start();
-        QVERIFY(nightLight->enabled());
-        QTRY_COMPARE(m_display->calls.size(), 1);
-        QCOMPARE(m_display->calls.first().strength, 0.5);
-    }
-
-    // --- A feature without custom times, the way dark mode keeps one. ---
-
-    void aFeatureWithoutCustomTimesFollowsOnlyTheSun()
-    {
-        {
-            QSettings settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat);
-            settings.setValue(QStringLiteral("Appearance/DarkModeSchedule"),
-                              int(ScheduledFeature::Custom));
-        }
-        ScheduledFeature darkMode(darkModeKeys(), nullptr, [this] {
-            return m_now;
-        });
-        darkMode.start();
-        QCOMPARE(darkMode.schedule(), int(ScheduledFeature::SunsetToSunrise));
-
-        darkMode.setSchedule(ScheduledFeature::Never);
-        darkMode.setSchedule(ScheduledFeature::Custom);
-        QCOMPARE(darkMode.schedule(), int(ScheduledFeature::Never));
-        QVERIFY(!darkMode.nextCheckpoint().isValid());
-
-        darkMode.setSchedule(ScheduledFeature::SunsetToSunrise);
-        QVERIFY(!darkMode.enabled());
-        m_now = darkMode.nextCheckpoint();
-        darkMode.checkpointForTesting();
-        QVERIFY(darkMode.enabled());
-        QCOMPARE(saved(QStringLiteral("DarkMode"), QStringLiteral("Appearance")).toBool(), true);
-    }
-
-    void aFeatureKeepsItsHoldUnderItsOwnKeys()
-    {
-        ScheduledFeature darkMode(darkModeKeys(), nullptr, [this] {
-            return m_now;
-        });
-        darkMode.start();
-        darkMode.setSchedule(ScheduledFeature::SunsetToSunrise);
-        darkMode.setEnabled(true);
-        const QVariant hold = saved(QStringLiteral("DarkModeHoldUntil"), QStringLiteral("Appearance"));
-        QCOMPARE(hold.toLongLong(), darkMode.nextCheckpoint().toMSecsSinceEpoch());
-        QVERIFY(!saved(QStringLiteral("HoldUntil")).isValid());
-
-        ScheduledFeature restarted(darkModeKeys(), nullptr, [this] {
-            return m_now;
-        });
-        restarted.start();
-        QVERIFY(restarted.enabled());
+        return testsupport::waitFor(loop, [&] { return display && display->calls.size() == count; });
     }
 };
 
-QTEST_GUILESS_MAIN(NightLightTest)
-#include "night_light_test.moc"
+} // namespace
+
+// --- Where a day stands on a schedule. ---
+
+TEST(SchedulePositionTest, AnOvernightScheduleIsOnAcrossMidnight)
+{
+    const auto times = fixed(timeOfDay(18, 0), timeOfDay(6, 0));
+    auto position = ScheduleUtils::position(at(2, 12), times);
+    EXPECT_FALSE(position.enabled);
+    EXPECT_EQ(position.next, at(2, 18));
+    position = ScheduleUtils::position(at(2, 18), times);
+    EXPECT_TRUE(position.enabled);
+    EXPECT_EQ(position.next, at(3, 6));
+    position = ScheduleUtils::position(at(3, 3), times);
+    EXPECT_TRUE(position.enabled);
+    EXPECT_EQ(position.next, at(3, 6));
+    position = ScheduleUtils::position(at(3, 6), times);
+    EXPECT_FALSE(position.enabled);
+    EXPECT_EQ(position.next, at(3, 18));
+}
+
+TEST(SchedulePositionTest, ADaytimeScheduleIsOnBetweenItsTimes)
+{
+    const auto times = fixed(timeOfDay(9, 0), timeOfDay(17, 0));
+    auto position = ScheduleUtils::position(at(2, 8), times);
+    EXPECT_FALSE(position.enabled);
+    EXPECT_EQ(position.next, at(2, 9));
+    position = ScheduleUtils::position(at(2, 12), times);
+    EXPECT_TRUE(position.enabled);
+    EXPECT_EQ(position.next, at(2, 17));
+    position = ScheduleUtils::position(at(2, 20), times);
+    EXPECT_FALSE(position.enabled);
+    EXPECT_EQ(position.next, at(3, 9));
+}
+
+TEST(SchedulePositionTest, EqualTimesNeverTurnItOn)
+{
+    const auto position = ScheduleUtils::position(at(2, 12), fixed(timeOfDay(7, 0), timeOfDay(7, 0)));
+    EXPECT_FALSE(position.enabled);
+    EXPECT_FALSE(position.next.isValid());
+}
+
+// Tomorrow's sunrise is not today's: the turn comes from the day it falls on.
+TEST(SchedulePositionTest, TheNextTurnUsesItsOwnDaysTimes)
+{
+    const TimesForDate times = [](Date date) {
+        return Times {timeOfDay(18, 0), timeOfDay(6, int(unsigned(date.day())))};
+    };
+    const auto position = ScheduleUtils::position(at(2, 22), times);
+    EXPECT_TRUE(position.enabled);
+    EXPECT_EQ(position.next, at(3, 6, 3));
+}
+
+// Europe/Berlin repeats 02:00 to 03:00 on 2026-10-25: each 02:30 waits for its own 02:45.
+TEST(SchedulePositionTest, ARepeatedHourTurnsAtItsOwnOccurrence)
+{
+    const Zone berlin = zone("Europe/Berlin");
+    ASSERT_TRUE(berlin);
+    const Date date = october(25);
+    const auto times = fixed(timeOfDay(18, 0), timeOfDay(2, 45));
+    const DateTime first = ScheduleUtils::at(date, timeOfDay(2, 30), berlin, false);
+    const DateTime second = ScheduleUtils::at(date, timeOfDay(2, 30), berlin, true);
+    EXPECT_EQ(first.msecsTo(second), 3600 * 1000);
+
+    auto position = ScheduleUtils::position(first, times);
+    EXPECT_TRUE(position.enabled);
+    EXPECT_EQ(position.next, ScheduleUtils::at(date, timeOfDay(2, 45), berlin, false));
+
+    position = ScheduleUtils::position(second, times);
+    EXPECT_TRUE(position.enabled);
+    EXPECT_GT(position.next, second);
+    EXPECT_EQ(position.next, ScheduleUtils::at(date, timeOfDay(2, 45), berlin, true));
+}
+
+// Against NOAA's solar calculator and the Julian-date sunrise equation,
+// which agree to a few minutes.
+TEST(SunTimesTest, SunTimesMatchTheAlmanac)
+{
+    auto sun = sunTimes(year(2026) / June / 21, 31.2333, 121.4667, zone("Asia/Shanghai"));
+    ASSERT_TRUE(sun);
+    EXPECT_LE(minutesBetween(sun->sunrise, timeOfDay(4, 50)), 3);
+    EXPECT_LE(minutesBetween(sun->sunset, timeOfDay(19, 0)), 3);
+    EXPECT_EQ(sun->sunrise.date(), year(2026) / June / 21);
+
+    sun = sunTimes(year(2026) / December / 21, 51.5083, -0.1253, zone("Europe/London"));
+    ASSERT_TRUE(sun);
+    EXPECT_LE(minutesBetween(sun->sunrise, timeOfDay(8, 3)), 3);
+    EXPECT_LE(minutesBetween(sun->sunset, timeOfDay(15, 53)), 3);
+
+    sun = sunTimes(year(2026) / July / 4, 40.7142, -74.0064, zone("America/New_York"));
+    ASSERT_TRUE(sun);
+    EXPECT_LE(minutesBetween(sun->sunrise, timeOfDay(5, 29)), 3);
+    EXPECT_LE(minutesBetween(sun->sunset, timeOfDay(20, 30)), 3);
+    EXPECT_EQ(sun->sunset.date(), year(2026) / July / 4);
+}
+
+TEST(SunTimesTest, ThePolarDayAndNightHaveNoTurns)
+{
+    EXPECT_FALSE(sunTimes(year(2026) / June / 21, 69.6489, 18.9551, zone("Europe/Oslo")));
+    EXPECT_FALSE(sunTimes(year(2026) / December / 21, 69.6489, 18.9551, zone("Europe/Oslo")));
+}
+
+TEST(SunTimesTest, ZoneTablesGiveTheZonesCity)
+{
+    file::TemporaryFile table("/tmp", "zone-table");
+    ASSERT_TRUE(table.isValid());
+    ASSERT_TRUE(table.write("# comment\n"
+                            "CN\t+3114+12128\tAsia/Shanghai\tBeijing Time\n"
+                            "US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)\n"
+                            "XX\tnonsense\tBroken/Zone\n"));
+
+    auto coordinates = zoneCoordinates("Asia/Shanghai", {table.path()});
+    ASSERT_TRUE(coordinates);
+    EXPECT_LT(std::abs(coordinates->latitude - (31 + 14 / 60.0)), 1e-9);
+    EXPECT_LT(std::abs(coordinates->longitude - (121 + 28 / 60.0)), 1e-9);
+    coordinates = zoneCoordinates("America/New_York", {table.path()});
+    ASSERT_TRUE(coordinates);
+    EXPECT_LT(std::abs(coordinates->latitude - (40 + 42 / 60.0 + 51 / 3600.0)), 1e-9);
+    EXPECT_LT(std::abs(coordinates->longitude + (74 + 0 / 60.0 + 23 / 3600.0)), 1e-9);
+    EXPECT_FALSE(zoneCoordinates("Broken/Zone", {table.path()}));
+    EXPECT_FALSE(zoneCoordinates("UTC", {table.path()}));
+}
+
+// --- The service. ---
+
+TEST_F(NightLightTest, AvailabilityFollowsTheCompositorsDisplays)
+{
+    auto nightLight = start();
+    EXPECT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+
+    stopCompositor();
+    EXPECT_TRUE(testsupport::waitFor(loop, [&] { return !nightLight->available(); }));
+    startCompositor(false);
+    testsupport::wait(loop, 100ms);
+    EXPECT_FALSE(nightLight->available());
+}
+
+TEST_F(NightLightTest, TheSavedStateReachesTheCompositorOnceItIsLoaded)
+{
+    write("NightLight/Enabled", "true");
+    write("NightLight/Temperature", "0.3");
+    auto nightLight = start();
+    ASSERT_TRUE(callsReach(1));
+    EXPECT_EQ(display->calls.front().strength, 0.3);
+    EXPECT_EQ(display->calls.front().durationMs, 1000u);
+
+    // A compositor that starts again is told again.
+    stopCompositor();
+    startCompositor();
+    ASSERT_TRUE(callsReach(1));
+    EXPECT_EQ(display->calls.front().strength, 0.3);
+}
+
+TEST_F(NightLightTest, AManualToggleTakesASecondAndIsSaved)
+{
+    auto nightLight = start();
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+    int changed = 0;
+    auto subscription = nightLight->enabledChanged.connect([&changed](bool) { ++changed; });
+
+    nightLight->setEnabled(true);
+    EXPECT_EQ(changed, 1);
+    ASSERT_TRUE(callsReach(2));
+    EXPECT_EQ(display->calls.back().strength, 0.5);
+    EXPECT_EQ(display->calls.back().durationMs, 1000u);
+    EXPECT_EQ(saved("Enabled"), "true");
+
+    nightLight->setEnabled(false);
+    ASSERT_TRUE(callsReach(3));
+    EXPECT_EQ(display->calls.back().strength, 0.0);
+}
+
+TEST_F(NightLightTest, ATemperatureChangedWhileOffIsOnlySaved)
+{
+    auto nightLight = start();
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+    ASSERT_TRUE(callsReach(1));
+
+    nightLight->setTemperature(0.8);
+    testsupport::wait(loop, 100ms);
+    EXPECT_EQ(display->calls.size(), 1u);
+    EXPECT_EQ(saved("Temperature"), "0.8");
+
+    nightLight->setEnabled(true);
+    ASSERT_TRUE(callsReach(2));
+    EXPECT_EQ(display->calls.back().strength, 0.8);
+    nightLight->setTemperature(2);
+    EXPECT_EQ(nightLight->temperature(), 1.0);
+}
+
+TEST_F(NightLightTest, APreviewShowsTheTemperatureWhileOff)
+{
+    auto nightLight = start();
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+    ASSERT_TRUE(callsReach(1));
+
+    nightLight->setPreview(true);
+    ASSERT_TRUE(callsReach(2));
+    EXPECT_EQ(display->calls.back().strength, 0.5);
+    EXPECT_EQ(display->calls.back().durationMs, 1000u);
+
+    nightLight->setTemperature(0.8);
+    ASSERT_TRUE(callsReach(3));
+    EXPECT_EQ(display->calls.back().strength, 0.8);
+    EXPECT_EQ(display->calls.back().durationMs, 100u);
+
+    nightLight->setPreview(false);
+    ASSERT_TRUE(callsReach(4));
+    EXPECT_EQ(display->calls.back().strength, 0.0);
+    EXPECT_EQ(display->calls.back().durationMs, 1000u);
+    EXPECT_FALSE(nightLight->enabled());
+    EXPECT_EQ(saved("Temperature"), "0.8");
+    EXPECT_EQ(saved("Enabled").value_or("false"), "false");
+}
+
+TEST_F(NightLightTest, APreviewWhileOnOnlyQuickensTheSlider)
+{
+    auto nightLight = start();
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+    nightLight->setEnabled(true);
+    ASSERT_TRUE(callsReach(2));
+
+    nightLight->setPreview(true);
+    nightLight->setTemperature(0.8);
+    ASSERT_TRUE(callsReach(3));
+    EXPECT_EQ(display->calls.back().durationMs, 100u);
+    nightLight->setPreview(false);
+    testsupport::wait(loop, 100ms);
+    EXPECT_EQ(display->calls.size(), 3u);
+    EXPECT_EQ(display->calls.back().strength, 0.8);
+}
+
+TEST_F(NightLightTest, APreviewEndsWhenItsCallerLeaves)
+{
+    auto nightLight = start();
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+    ASSERT_TRUE(callsReach(1));
+    // The service's own route: through its D-Bus object, which hears the caller.
+    dbus::Connection *service = dbus::Connection::session();
+    ASSERT_TRUE(nightLight->publish(service));
+
+    auto client = dbus::Connection::open(dbus::Connection::Bus::Session);
+    dbus::Message call = client->newMethodCall(service->uniqueName(), "/com/cutefish/Services/NightLight",
+                                                 "com.cutefish.Services.NightLight", "setPreview");
+    call.append(true);
+    client->send(call);
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->previewing(); }));
+    ASSERT_TRUE(callsReach(2));
+    EXPECT_EQ(display->calls.back().strength, 0.5);
+
+    client.reset();
+    EXPECT_TRUE(testsupport::waitFor(loop, [&] { return !nightLight->previewing(); }));
+    ASSERT_TRUE(callsReach(3));
+    EXPECT_EQ(display->calls.back().strength, 0.0);
+}
+
+TEST_F(NightLightTest, ACustomScheduleTurnsOnWithinItsHours)
+{
+    now = at(2, 20);
+    auto nightLight = start();
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+
+    nightLight->setSchedule(NightLight::Custom);
+    EXPECT_TRUE(nightLight->enabled());
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(3, 6));
+    ASSERT_TRUE(callsReach(2));
+    EXPECT_EQ(display->calls.back().strength, 0.5);
+    EXPECT_EQ(display->calls.back().durationMs, 1000u);
+
+    // Moving the end before now turns it off at once.
+    nightLight->setCustomEnd(19 * 60);
+    EXPECT_FALSE(nightLight->enabled());
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(3, 18));
+}
+
+TEST_F(NightLightTest, AScheduledTurnTakesAMinute)
+{
+    now = at(2, 17);
+    auto nightLight = start();
+    nightLight->setSchedule(NightLight::Custom);
+    ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->available(); }));
+    EXPECT_FALSE(nightLight->enabled());
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(2, 18));
+
+    now = at(2, 18);
+    nightLight->checkpointForTesting();
+    EXPECT_TRUE(nightLight->enabled());
+    ASSERT_TRUE(callsReach(2));
+    EXPECT_EQ(display->calls.back().durationMs, 60000u);
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(3, 6));
+}
+
+// ScheduledFeature: the user's toggle holds until the schedule's next turn.
+TEST_F(NightLightTest, AManualToggleHoldsUntilTheNextTurn)
+{
+    now = at(2, 20);
+    auto nightLight = start();
+    nightLight->setSchedule(NightLight::Custom);
+    EXPECT_TRUE(nightLight->enabled());
+
+    now = at(2, 21);
+    nightLight->setEnabled(false);
+    now = at(2, 23);
+    nightLight->checkpointForTesting();
+    EXPECT_FALSE(nightLight->enabled());
+
+    now = at(3, 6);
+    nightLight->checkpointForTesting();
+    EXPECT_FALSE(nightLight->enabled());
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(3, 18));
+    now = at(3, 18);
+    nightLight->checkpointForTesting();
+    EXPECT_TRUE(nightLight->enabled());
+}
+
+TEST_F(NightLightTest, AManualToggleHoldsAcrossSessionsUntilItsTurn)
+{
+    now = at(2, 20);
+    auto nightLight = start();
+    nightLight->setSchedule(NightLight::Custom);
+    now = at(2, 21);
+    nightLight->setEnabled(false);
+    nightLight.reset();
+
+    now = at(2, 23);
+    nightLight = start();
+    EXPECT_FALSE(nightLight->enabled());
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(3, 6));
+    ASSERT_TRUE(callsReach(1));
+    EXPECT_EQ(display->calls.back().strength, 0.0);
+    nightLight.reset();
+
+    // Once its turn has passed, the schedule decides again.
+    now = at(3, 19);
+    nightLight = start();
+    EXPECT_TRUE(nightLight->enabled());
+    EXPECT_FALSE(saved("HoldUntil"));
+}
+
+TEST_F(NightLightTest, AResumeKeepsAToggleUnlessItsTurnPassedDuringTheSleep)
+{
+    now = at(2, 12);
+    auto nightLight = start();
+    nightLight->setSchedule(NightLight::Custom);
+    nightLight->setEnabled(true);
+
+    now = at(2, 13);
+    nightLight->resumeForTesting();
+    EXPECT_TRUE(nightLight->enabled());
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(2, 18));
+
+    // Asleep through the evening and the night.
+    now = at(3, 7);
+    nightLight->resumeForTesting();
+    EXPECT_FALSE(nightLight->enabled());
+    EXPECT_EQ(nightLight->nextCheckpoint(), at(3, 18));
+}
+
+TEST_F(NightLightTest, TheSunTimesAreTheScheduleTurnsToCome)
+{
+    now = at(2, 12);
+    auto nightLight = start();
+    nightLight->setSchedule(NightLight::SunsetToSunrise);
+    EXPECT_FALSE(nightLight->enabled());
+    EXPECT_EQ(nightLight->sunset(), minutesOfDay(nightLight->nextCheckpoint()));
+
+    now = nightLight->nextCheckpoint();
+    nightLight->checkpointForTesting();
+    EXPECT_TRUE(nightLight->enabled());
+    EXPECT_EQ(nightLight->sunrise(), minutesOfDay(nightLight->nextCheckpoint()));
+    // Today's sunset has passed; tomorrow's is a minute or two away from it.
+    EXPECT_LE(std::abs(nightLight->sunset() - minutesOfDay(now)), 3);
+}
+
+TEST_F(NightLightTest, TheSessionStartsWhereTheScheduleIs)
+{
+    write("NightLight/Schedule", std::to_string(int(NightLight::Custom)));
+    write("NightLight/Enabled", "false");
+    now = at(2, 22);
+    auto nightLight = start();
+    EXPECT_TRUE(nightLight->enabled());
+    ASSERT_TRUE(callsReach(1));
+    EXPECT_EQ(display->calls.front().strength, 0.5);
+}
+
+// --- A feature without custom times, the way dark mode keeps one. ---
+
+TEST_F(NightLightTest, AFeatureWithoutCustomTimesFollowsOnlyTheSun)
+{
+    write("Appearance/DarkModeSchedule", std::to_string(int(ScheduledFeature::Custom)));
+    auto feature = darkMode();
+    EXPECT_EQ(feature->schedule(), int(ScheduledFeature::SunsetToSunrise));
+
+    feature->setSchedule(ScheduledFeature::Never);
+    feature->setSchedule(ScheduledFeature::Custom);
+    EXPECT_EQ(feature->schedule(), int(ScheduledFeature::Never));
+    EXPECT_FALSE(feature->nextCheckpoint().isValid());
+
+    feature->setSchedule(ScheduledFeature::SunsetToSunrise);
+    EXPECT_FALSE(feature->enabled());
+    now = feature->nextCheckpoint();
+    feature->checkpointForTesting();
+    EXPECT_TRUE(feature->enabled());
+    EXPECT_EQ(saved("DarkMode", "Appearance"), "true");
+}
+
+TEST_F(NightLightTest, AFeatureKeepsItsHoldUnderItsOwnKeys)
+{
+    auto feature = darkMode();
+    feature->setSchedule(ScheduledFeature::SunsetToSunrise);
+    feature->setEnabled(true);
+    EXPECT_EQ(saved("DarkModeHoldUntil", "Appearance"), std::to_string(feature->nextCheckpoint().toMSecsSinceEpoch()));
+    EXPECT_FALSE(saved("HoldUntil"));
+
+    auto restarted = darkMode();
+    EXPECT_TRUE(restarted->enabled());
+}

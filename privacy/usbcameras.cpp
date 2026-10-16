@@ -3,61 +3,78 @@
 
 #include "usbcameras.h"
 
-#include <QDebug>
-#include <QDir>
-#include <QFile>
+#include "base/file.h"
+#include "base/logging.h"
+#include "base/strings.h"
 
-static const QByteArray kVideoClass = QByteArrayLiteral("0e");
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <filesystem>
+#include <unistd.h>
+#include <vector>
 
-static QByteArray readAttribute(const QString &path)
+static const cutefish::base::LogCategory kLog("cutefish.privacy");
+
+static constexpr char kVideoClass[] = "0e";
+
+static std::string readAttribute(const std::string &path)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return QByteArray();
-
-    return file.readAll().trimmed();
+    const auto contents = cutefish::base::file::read(path);
+    return contents ? std::string(cutefish::base::strings::trimmed(*contents)) : std::string();
 }
 
-static bool writeAttribute(const QString &path, const QByteArray &value)
+static bool writeAttribute(const std::string &path, const std::string &value)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(value) != value.size()) {
-        qWarning() << "cutefish-privacy: cannot write" << path << file.errorString();
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    const bool written = fd >= 0 && ::write(fd, value.data(), value.size()) == ssize_t(value.size());
+    const int error = errno;
+    if (fd >= 0)
+        ::close(fd);
+    if (!written) {
+        CF_WARNING(kLog) << "cutefish-privacy: cannot write" << path << std::strerror(error);
         return false;
     }
 
     return true;
 }
 
-UsbCameras::UsbCameras(const QString &sysfs)
+UsbCameras::UsbCameras(const std::string &sysfs)
     : m_sysfs(sysfs)
 {
 }
 
 void UsbCameras::setAuthorized(bool authorized)
 {
-    const QDir devices(m_sysfs + QStringLiteral("/bus/usb/devices"));
-    const QByteArray value = authorized ? QByteArrayLiteral("1") : QByteArrayLiteral("0");
-    QStringList probe;
+    const std::string devices = m_sysfs + "/bus/usb/devices";
+    const std::string value = authorized ? "1" : "0";
+    std::vector<std::string> names;
+    std::vector<std::string> probe;
+
+    std::error_code error;
+    for (const auto &item : std::filesystem::directory_iterator(devices, error))
+        names.push_back(item.path().filename().string());
+    std::sort(names.begin(), names.end());
 
     // Interfaces are named bus-port:configuration.interface; sorted, the video
     // control interface comes before the streaming ones its driver claims.
-    for (const QString &name : devices.entryList(QDir::AllEntries | QDir::NoDotAndDotDot, QDir::Name)) {
-        if (!name.contains(QLatin1Char(':')))
+    for (const std::string &name : names) {
+        if (name.find(':') == std::string::npos)
             continue;
 
-        const QString path = devices.filePath(name);
-        if (readAttribute(path + QStringLiteral("/bInterfaceClass")) != kVideoClass)
+        const std::string path = devices + '/' + name;
+        if (readAttribute(path + "/bInterfaceClass") != kVideoClass)
             continue;
 
-        if (readAttribute(path + QStringLiteral("/authorized")) == value)
+        if (readAttribute(path + "/authorized") == value)
             continue;
 
-        if (writeAttribute(path + QStringLiteral("/authorized"), value) && authorized)
-            probe.append(name);
+        if (writeAttribute(path + "/authorized", value) && authorized)
+            probe.push_back(name);
     }
 
     // Authorizing an interface does not bind a driver to it again.
-    for (const QString &name : std::as_const(probe))
-        writeAttribute(m_sysfs + QStringLiteral("/bus/usb/drivers_probe"), name.toLatin1());
+    for (const std::string &name : probe)
+        writeAttribute(m_sysfs + "/bus/usb/drivers_probe", name);
 }

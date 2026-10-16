@@ -3,9 +3,12 @@
 
 #include "scheduleutils.h"
 
-#include <QFile>
+#include "base/file.h"
+#include "base/strings.h"
 
 #include <cmath>
+
+using namespace std::chrono;
 
 namespace ScheduleUtils {
 
@@ -18,60 +21,113 @@ static double radians(double degrees)
 
 // One ISO 6709 angle of zone.tab: a sign, the degrees in `degreeDigits`
 // digits, then minutes and optionally seconds.
-static std::optional<double> parseAngle(const QByteArray &text, int degreeDigits)
+static std::optional<double> parseAngle(std::string_view text, size_t degreeDigits)
 {
-    if (text.isEmpty() || (text[0] != '+' && text[0] != '-'))
+    if (text.empty() || (text[0] != '+' && text[0] != '-'))
         return std::nullopt;
-    const QByteArray digits = text.mid(1);
+    const std::string_view digits = text.substr(1);
     if (digits.size() != degreeDigits + 2 && digits.size() != degreeDigits + 4)
         return std::nullopt;
-    bool degreesOk = false, minutesOk = false, secondsOk = true;
-    const int degrees = digits.left(degreeDigits).toInt(&degreesOk);
-    const int minutes = digits.mid(degreeDigits, 2).toInt(&minutesOk);
-    const int seconds =
-            digits.size() > degreeDigits + 2 ? digits.mid(degreeDigits + 2).toInt(&secondsOk) : 0;
-    if (!degreesOk || !minutesOk || !secondsOk)
+    const auto degrees = cutefish::base::strings::toNumber<int>(digits.substr(0, degreeDigits));
+    const auto minutes = cutefish::base::strings::toNumber<int>(digits.substr(degreeDigits, 2));
+    const auto seconds = digits.size() > degreeDigits + 2
+            ? cutefish::base::strings::toNumber<int>(digits.substr(degreeDigits + 2))
+            : std::optional<int>(0);
+    if (!degrees || !minutes || !seconds)
         return std::nullopt;
-    const double value = degrees + minutes / 60.0 + seconds / 3600.0;
+    const double value = *degrees + *minutes / 60.0 + *seconds / 3600.0;
     return text[0] == '-' ? -value : value;
 }
 
-Position position(const QDateTime &now, const TimesForDate &times)
+Date DateTime::date() const
 {
-    const QDate today = now.date();
+    return Date(floor<days>(zone->to_local(time)));
+}
+
+Milliseconds DateTime::timeOfDay() const
+{
+    const local_time<Milliseconds> local = zone->to_local(time);
+    return local - floor<days>(local);
+}
+
+Zone systemZone()
+{
+    try {
+        return current_zone();
+    } catch (const std::exception &) {
+        return locate_zone("UTC");
+    }
+}
+
+Zone zone(const std::string &id)
+{
+    try {
+        return locate_zone(id);
+    } catch (const std::exception &) {
+        return nullptr;
+    }
+}
+
+DateTime currentDateTime()
+{
+    return {floor<Milliseconds>(system_clock::now()), systemZone()};
+}
+
+DateTime fromMSecsSinceEpoch(int64_t msecs, Zone zone)
+{
+    return {sys_time<Milliseconds>(Milliseconds(msecs)), zone};
+}
+
+DateTime at(Date date, Milliseconds timeOfDay, Zone zone, bool later)
+{
+    const local_time<Milliseconds> local = local_days(date) + timeOfDay;
+    const local_info info = zone->get_info(floor<seconds>(local));
+    seconds offset = info.first.offset;
+    if (info.result == local_info::ambiguous && later)
+        offset = info.second.offset;
+    return {sys_time<Milliseconds>(local.time_since_epoch() - offset), zone};
+}
+
+Milliseconds timeOfDay(int hours, int minutes, int seconds)
+{
+    return std::chrono::hours(hours) + std::chrono::minutes(minutes) + std::chrono::seconds(seconds);
+}
+
+Position position(const DateTime &now, const TimesForDate &times)
+{
+    const Date today = now.date();
     const Times day = times(today);
     if (day.start == day.end)
         return {false, {}};
 
-    const auto at = [&now](QDate date, QTime time) {
-        const QDateTime turn(date, time, now.timeZone());
+    const auto turnAt = [&now](Date date, Milliseconds time) {
+        const DateTime turn = at(date, time, now.zone);
         // When the clocks go back, the first occurrence of a repeated time may have passed.
-        return turn > now ? turn
-                          : QDateTime(date, time, now.timeZone(),
-                                      QDateTime::TransitionResolution::PreferAfter);
+        return turn > now ? turn : at(date, time, now.zone, true);
     };
-    const QTime time = now.time();
-    const QDate tomorrow = today.addDays(1);
+    const Milliseconds time = now.timeOfDay();
+    const Date tomorrow = Date(sys_days(today) + days(1));
     if (day.start < day.end) {
         if (time < day.start)
-            return {false, at(today, day.start)};
+            return {false, turnAt(today, day.start)};
         if (time < day.end)
-            return {true, at(today, day.end)};
-        return {false, at(tomorrow, times(tomorrow).start)};
+            return {true, turnAt(today, day.end)};
+        return {false, turnAt(tomorrow, times(tomorrow).start)};
     }
     if (time < day.end)
-        return {true, at(today, day.end)};
+        return {true, turnAt(today, day.end)};
     if (time < day.start)
-        return {false, at(today, day.start)};
-    return {true, at(tomorrow, times(tomorrow).end)};
+        return {false, turnAt(today, day.start)};
+    return {true, turnAt(tomorrow, times(tomorrow).end)};
 }
 
-std::optional<SunTimes> sunTimes(QDate date, double latitude, double longitude,
-                                 const QTimeZone &zone)
+std::optional<SunTimes> sunTimes(Date date, double latitude, double longitude, Zone zone)
 {
     // The fractional year, the equation of time in minutes and the solar
     // declination, from NOAA's General Solar Position Calculations.
-    const double gamma = 2 * kPi / date.daysInYear() * (date.dayOfYear() - 1);
+    const int daysInYear = date.year().is_leap() ? 366 : 365;
+    const int dayOfYear = int((sys_days(date) - sys_days(date.year() / January / 1)).count()) + 1;
+    const double gamma = 2 * kPi / daysInYear * (dayOfYear - 1);
     const double equationOfTime = 229.18
             * (0.000075 + 0.001868 * std::cos(gamma) - 0.032077 * std::sin(gamma)
                - 0.014615 * std::cos(2 * gamma) - 0.040849 * std::sin(2 * gamma));
@@ -88,42 +144,42 @@ std::optional<SunTimes> sunTimes(QDate date, double latitude, double longitude,
     const double hourAngle = std::acos(cosHourAngle) * 180.0 / kPi;
 
     // Minutes from UTC midnight, which may fall on the day before or after.
-    const QDateTime midnight(date, QTime(0, 0), QTimeZone::UTC);
-    const auto at = [&](double minutes) {
-        return midnight.addSecs(qint64(std::lround(minutes * 60))).toTimeZone(zone);
+    const sys_time<Milliseconds> midnight = sys_days(date);
+    const auto turnAt = [&](double minutes) {
+        return DateTime {midnight + seconds(std::lround(minutes * 60)), zone};
     };
-    return SunTimes {at(720 - 4 * (longitude + hourAngle) - equationOfTime),
-                     at(720 - 4 * (longitude - hourAngle) - equationOfTime)};
+    return SunTimes {turnAt(720 - 4 * (longitude + hourAngle) - equationOfTime),
+                     turnAt(720 - 4 * (longitude - hourAngle) - equationOfTime)};
 }
 
-QStringList zoneTables()
+std::vector<std::string> zoneTables()
 {
-    return {QStringLiteral("/usr/share/zoneinfo/zone1970.tab"),
-            QStringLiteral("/usr/share/zoneinfo/zone.tab")};
+    return {"/usr/share/zoneinfo/zone1970.tab", "/usr/share/zoneinfo/zone.tab"};
 }
 
-std::optional<Coordinates> zoneCoordinates(const QByteArray &zoneId, const QStringList &tables)
+std::optional<Coordinates> zoneCoordinates(const std::string &zoneId,
+                                           const std::vector<std::string> &tables)
 {
-    if (zoneId.isEmpty())
+    if (zoneId.empty())
         return std::nullopt;
-    for (const QString &path : tables) {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    for (const std::string &path : tables) {
+        const std::optional<std::string> contents = cutefish::base::file::read(path);
+        if (!contents)
             continue;
-        while (!file.atEnd()) {
-            const QByteArray line = file.readLine().trimmed();
-            if (line.isEmpty() || line.startsWith('#'))
+        for (const std::string_view rawLine : cutefish::base::strings::splitViews(*contents, '\n')) {
+            const std::string_view line = cutefish::base::strings::trimmed(rawLine);
+            if (line.empty() || line.front() == '#')
                 continue;
             // Country codes, coordinates, zone, comment.
-            const QList<QByteArray> fields = line.split('\t');
+            const std::vector<std::string_view> fields = cutefish::base::strings::splitViews(line, '\t');
             if (fields.size() < 3 || fields[2] != zoneId)
                 continue;
-            const QByteArray &iso = fields[1];
-            int split = 1;
+            const std::string_view iso = fields[1];
+            size_t split = 1;
             while (split < iso.size() && iso[split] != '+' && iso[split] != '-')
                 ++split;
-            const auto latitude = parseAngle(iso.left(split), 2);
-            const auto longitude = parseAngle(iso.mid(split), 3);
+            const auto latitude = parseAngle(iso.substr(0, split), 2);
+            const auto longitude = parseAngle(iso.substr(split), 3);
             if (latitude && longitude)
                 return Coordinates {*latitude, *longitude};
         }

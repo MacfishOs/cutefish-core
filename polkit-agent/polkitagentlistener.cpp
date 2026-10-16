@@ -5,236 +5,226 @@
 #include "authsession.h"
 #include "dialog.h"
 
-#include <QCoreApplication>
-#include <QDBusConnection>
-#include <QDBusMetaType>
-#include <QDBusObjectPath>
-#include <QDBusReply>
-#include <QDBusServiceWatcher>
-#include <QDBusVariant>
-#include <QLocale>
-#include <QDebug>
-
 #include <pwd.h>
 #include <unistd.h>
 
-static const QString login1Service = QStringLiteral("org.freedesktop.login1");
-static const QString polkitService = QStringLiteral("org.freedesktop.PolicyKit1");
-static const QString cancelledError = QStringLiteral("org.freedesktop.PolicyKit1.Error.Cancelled");
-static const QString failedError = QStringLiteral("org.freedesktop.PolicyKit1.Error.Failed");
+#include "base/event_loop.h"
+#include "base/locale.h"
+#include "base/logging.h"
+#include "base/strings.h"
+
+using namespace cutefish::base;
+using namespace cutefish::base::strings;
+
+static const char login1Service[] = "org.freedesktop.login1";
+static const char polkitService[] = "org.freedesktop.PolicyKit1";
+static const char cancelledError[] = "org.freedesktop.PolicyKit1.Error.Cancelled";
+static const char failedError[] = "org.freedesktop.PolicyKit1.Error.Failed";
 
 static const int maxTries = 3;
 
-QDBusArgument &operator<<(QDBusArgument &argument, const PolkitIdentity &identity)
+static const LogCategory &log()
 {
-    argument.beginStructure();
-    argument << identity.kind << identity.details;
-    argument.endStructure();
-    return argument;
+    static const LogCategory category("cutefish.polkit");
+    return category;
 }
 
-const QDBusArgument &operator>>(const QDBusArgument &argument, PolkitIdentity &identity)
+static std::string loginSessionId(dbus::Connection *bus)
 {
-    argument.beginStructure();
-    argument >> identity.kind >> identity.details;
-    argument.endStructure();
-    return argument;
-}
-
-static QString loginSessionId()
-{
-    QDBusConnection bus = QDBusConnection::systemBus();
-
-    QDBusMessage sessionCall = QDBusMessage::createMethodCall(login1Service,
-                                                              QStringLiteral("/org/freedesktop/login1"),
-                                                              QStringLiteral("org.freedesktop.login1.Manager"),
-                                                              QStringLiteral("GetSessionByPID"));
-    sessionCall << uint(QCoreApplication::applicationPid());
-
-    const QDBusReply<QDBusObjectPath> session = bus.call(sessionCall);
-
-    if (!session.isValid()) {
-        qWarning() << "Cannot find the login session:" << session.error().message();
-        return QString();
+    const dbus::Proxy manager(bus, login1Service, "/org/freedesktop/login1", "org.freedesktop.login1.Manager");
+    const dbus::Reply session = manager.call("GetSessionByPID", uint32_t(::getpid()));
+    const auto path = session.value<dbus::ObjectPath>();
+    if (!path) {
+        CF_WARNING(log()) << "Cannot find the login session:" << session.error().message;
+        return {};
     }
 
-    QDBusMessage idCall = QDBusMessage::createMethodCall(login1Service,
-                                                         session.value().path(),
-                                                         QStringLiteral("org.freedesktop.DBus.Properties"),
-                                                         QStringLiteral("Get"));
-    idCall << QStringLiteral("org.freedesktop.login1.Session") << QStringLiteral("Id");
-
-    const QDBusReply<QDBusVariant> id = bus.call(idCall);
-
-    return id.isValid() ? id.value().variant().toString() : QString();
+    const dbus::Proxy properties(bus, login1Service, path->path, "org.freedesktop.login1.Session");
+    return properties.property<std::string>("Id").value_or(std::string());
 }
 
-static QString userName(uint uid)
+static std::string userName(uint32_t uid)
 {
     const struct passwd *entry = getpwuid(uid);
 
-    return entry ? QString::fromLocal8Bit(entry->pw_name) : QString();
+    return entry ? std::string(entry->pw_name) : std::string();
 }
 
-// The dialog's own placeholder stands in for the plain password prompt, so it
-// stays translated.
-static QString promptLabel(const QString &prompt)
+// The dialog's own placeholder stands in for the plain password prompt.
+static std::string promptLabel(const std::string &prompt)
 {
-    QString label = prompt.trimmed();
+    std::string label(trimmed(prompt));
 
-    while (label.endsWith(QLatin1Char(':')) || label.endsWith(QChar(0xFF1A)))
-        label.chop(1);
+    for (;;) {
+        if (endsWith(label, ":"))
+            label.pop_back();
+        else if (endsWith(label, "\xEF\xBC\x9A"))
+            label.resize(label.size() - 3);
+        else
+            break;
+    }
 
-    label = label.trimmed();
+    label = std::string(trimmed(label));
 
-    if (label.compare(QLatin1String("Password"), Qt::CaseInsensitive) == 0)
-        return QString();
+    if (equalsIgnoreAsciiCase(label, "Password"))
+        return {};
 
     return label;
 }
 
-PolKitAgentListener::PolKitAgentListener(QObject *parent)
-    : QObject(parent)
-    , m_hasResponse(false)
-    , m_requestPending(false)
-    , m_numTries(0)
+PolKitAgentListener::PolKitAgentListener(dbus::Connection *bus)
+    : m_bus(bus)
 {
-    qDBusRegisterMetaType<PolkitIdentity>();
-    qDBusRegisterMetaType<PolkitIdentityList>();
-    qDBusRegisterMetaType<PolkitDetails>();
 }
 
-bool PolKitAgentListener::registerAgent(const QString &objectPath)
+PolKitAgentListener::~PolKitAgentListener()
 {
-    QDBusConnection bus = QDBusConnection::systemBus();
+    releaseSession();
+    releaseDialog();
+}
 
-    if (!bus.registerObject(objectPath, this, QDBusConnection::ExportAllSlots)) {
-        qWarning() << "Cannot export the authentication agent on the system bus";
+bool PolKitAgentListener::registerAgent(const std::string &objectPath)
+{
+    if (!m_bus)
+        return false;
+
+    m_object = std::make_unique<dbus::Object>(m_bus, objectPath, "org.freedesktop.PolicyKit1.AuthenticationAgent");
+    m_object->addMethod("BeginAuthentication", "sssa{ss}sa(sa{sv})", "",
+                        [this](dbus::MethodCall &call) {
+                            beginAuthentication(call);
+                        },
+                        {{"actionId", "message", "iconName", "details", "cookie", "identities"}, {}});
+    m_object->addMethod("CancelAuthentication", [this](const std::string &cookie) {
+        cancelAuthentication(cookie);
+    }, {{"cookie"}, {}});
+    if (!m_object->publish()) {
+        CF_WARNING(log()) << "Cannot export the authentication agent on the system bus";
         return false;
     }
 
     m_objectPath = objectPath;
 
     // polkitd forgets its agents when it restarts, e.g. on an upgrade.
-    QDBusServiceWatcher *watcher = new QDBusServiceWatcher(polkitService, bus,
-                                                           QDBusServiceWatcher::WatchForOwnerChange, this);
-    connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this, &PolKitAgentListener::onPolkitOwnerChanged);
+    dbus::MatchRule rule;
+    rule.sender = "org.freedesktop.DBus";
+    rule.path = "/org/freedesktop/DBus";
+    rule.interface = "org.freedesktop.DBus";
+    rule.member = "NameOwnerChanged";
+    rule.arg0 = polkitService;
+    m_ownerChanged = m_bus->subscribe(rule, [this](const dbus::Message &message) {
+        std::string name;
+        std::string oldOwner;
+        std::string newOwner;
+        if (message.read(name, oldOwner, newOwner))
+            onPolkitOwnerChanged(oldOwner, newOwner);
+    });
 
     return sendRegistration();
 }
 
 bool PolKitAgentListener::sendRegistration()
 {
-    const QString sessionId = loginSessionId();
+    const std::string sessionId = loginSessionId(m_bus);
 
-    if (sessionId.isEmpty())
+    if (sessionId.empty())
         return false;
 
-    QDBusArgument subject;
-    subject.beginStructure();
-    subject << QStringLiteral("unix-session") << QVariantMap { { QStringLiteral("session-id"), sessionId } };
-    subject.endStructure();
+    const dbus::Proxy authority(m_bus, polkitService, "/org/freedesktop/PolicyKit1/Authority",
+                                "org.freedesktop.PolicyKit1.Authority");
+    const std::tuple<std::string, dbus::VariantMap> subject {"unix-session",
+                                                              {{"session-id", dbus::Variant(sessionId)}}};
+    const dbus::Reply result = authority.call("RegisterAuthenticationAgent", subject,
+                                              Locale::system().name() + ".UTF-8", m_objectPath);
 
-    QDBusMessage call = QDBusMessage::createMethodCall(polkitService,
-                                                       QStringLiteral("/org/freedesktop/PolicyKit1/Authority"),
-                                                       QStringLiteral("org.freedesktop.PolicyKit1.Authority"),
-                                                       QStringLiteral("RegisterAuthenticationAgent"));
-    call << QVariant::fromValue(subject)
-         << QLocale::system().name() + QStringLiteral(".UTF-8")
-         << m_objectPath;
-
-    const QDBusMessage result = QDBusConnection::systemBus().call(call);
-
-    if (result.type() == QDBusMessage::ErrorMessage) {
-        qWarning() << "Cannot register the authentication agent:" << result.errorMessage();
+    if (result.isError()) {
+        CF_WARNING(log()) << "Cannot register the authentication agent:" << result.error().message;
         return false;
     }
 
     return true;
 }
 
-void PolKitAgentListener::onPolkitOwnerChanged(const QString &service, const QString &oldOwner, const QString &newOwner)
+void PolKitAgentListener::onPolkitOwnerChanged(const std::string &oldOwner, const std::string &newOwner)
 {
-    Q_UNUSED(service);
-
     // The requests belong to the polkitd that is gone; their cookies mean
     // nothing to the next one.
-    if (!oldOwner.isEmpty())
+    if (!oldOwner.empty())
         dropRequests();
 
-    if (!newOwner.isEmpty())
+    if (!newOwner.empty())
         sendRegistration();
 }
 
 void PolKitAgentListener::dropRequests()
 {
     releaseSession();
-
-    if (m_dialog) {
-        m_dialog->deleteLater();
-        m_dialog.clear();
-    }
+    releaseDialog();
 
     m_hasResponse = false;
     m_response.clear();
     m_requestPending = false;
 
-    while (!m_queue.isEmpty())
-        reply(m_queue.takeFirst(), Withdrawn);
+    while (!m_queue.empty()) {
+        Request request = std::move(m_queue.front());
+        m_queue.pop_front();
+        reply(request, Withdrawn);
+    }
 }
 
-void PolKitAgentListener::BeginAuthentication(const QString &actionId,
-                                              const QString &message,
-                                              const QString &iconName,
-                                              const PolkitDetails &details,
-                                              const QString &cookie,
-                                              const PolkitIdentityList &identities)
+void PolKitAgentListener::beginAuthentication(dbus::MethodCall &call)
 {
-    Q_UNUSED(actionId);
-    Q_UNUSED(iconName);
-    Q_UNUSED(details);
-
-    setDelayedReply(true);
+    std::string actionId;
+    std::string message;
+    std::string iconName;
+    std::map<std::string, std::string> details;
+    std::string cookie;
+    std::vector<Identity> identities;
+    if (!call.read(actionId, message, iconName, details, cookie, identities)) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Unexpected arguments");
+        return;
+    }
 
     // polkitd lists administrators in no useful order; prefer the one at the
     // keyboard.
-    const uint sessionUid = getuid();
-    QString user;
+    const uint32_t sessionUid = getuid();
+    std::string user;
 
-    for (const PolkitIdentity &identity : identities) {
-        if (identity.kind != QLatin1String("unix-user"))
+    for (const auto &[kind, identityDetails] : identities) {
+        if (kind != "unix-user")
             continue;
 
-        const uint uid = identity.details.value(QStringLiteral("uid")).toUInt();
+        const auto uidValue = identityDetails.find("uid");
+        const uint32_t uid = uidValue == identityDetails.end() ? 0 : uidValue->second.value<uint32_t>();
 
-        if (user.isEmpty() || uid == sessionUid)
+        if (user.empty() || uid == sessionUid)
             user = userName(uid);
 
         if (uid == sessionUid)
             break;
     }
 
-    if (user.isEmpty()) {
-        connection().send(QDBusContext::message().createErrorReply(failedError,
-                                                                   QStringLiteral("No user to authenticate as")));
+    if (user.empty()) {
+        call.replyError(failedError, "No user to authenticate as");
         return;
     }
 
-    m_queue.append({ message, cookie, user, QDBusContext::message() });
+    m_queue.push_back({message, cookie, user, call});
 
     startNext();
 }
 
-void PolKitAgentListener::CancelAuthentication(const QString &cookie)
+void PolKitAgentListener::cancelAuthentication(const std::string &cookie)
 {
-    for (int i = 0; i < m_queue.size(); ++i) {
-        if (m_queue.at(i).cookie != cookie)
+    for (size_t i = 0; i < m_queue.size(); ++i) {
+        if (m_queue[i].cookie != cookie)
             continue;
 
         if (i == 0 && m_dialog) {
             finishCurrent(Withdrawn);
         } else {
-            reply(m_queue.takeAt(i), Withdrawn);
+            Request request = std::move(m_queue[i]);
+            m_queue.erase(m_queue.begin() + long(i));
+            reply(request, Withdrawn);
         }
 
         return;
@@ -243,17 +233,19 @@ void PolKitAgentListener::CancelAuthentication(const QString &cookie)
 
 void PolKitAgentListener::startNext()
 {
-    if (m_dialog || m_queue.isEmpty())
+    if (m_dialog || m_queue.empty())
         return;
 
-    const Request &request = m_queue.first();
+    const Request &request = m_queue.front();
 
-    m_dialog = new Dialog(request.message, request.user);
+    m_dialog = std::make_unique<Dialog>(request.message, request.user);
 
-    connect(m_dialog.data(), &Dialog::accepted, this, &PolKitAgentListener::onDialogAccepted);
-    connect(m_dialog.data(), &Dialog::cancel, this, [this] {
+    m_dialog->onAccepted = [this] {
+        onDialogAccepted();
+    };
+    m_dialog->onCancel = [this] {
         finishCurrent(Dismissed);
-    });
+    };
 
     m_dialog->show();
 
@@ -264,17 +256,23 @@ void PolKitAgentListener::startNext()
 
 void PolKitAgentListener::startSession()
 {
-    const Request &request = m_queue.first();
+    const Request &request = m_queue.front();
 
     m_hasResponse = false;
     m_response.clear();
     m_requestPending = false;
 
-    m_session = new AuthSession(this);
+    m_session = std::make_unique<AuthSession>();
 
-    connect(m_session.data(), &AuthSession::request, this, &PolKitAgentListener::onRequest);
-    connect(m_session.data(), &AuthSession::notice, this, &PolKitAgentListener::onNotice);
-    connect(m_session.data(), &AuthSession::completed, this, &PolKitAgentListener::onCompleted);
+    m_session->onRequest = [this](const std::string &prompt, bool echo) {
+        onRequest(prompt, echo);
+    };
+    m_session->onNotice = [this](const std::string &text, bool error) {
+        onNotice(text, error);
+    };
+    m_session->onCompleted = [this](bool gainedAuthorization) {
+        onCompleted(gainedAuthorization);
+    };
 
     m_session->start(request.user, request.cookie);
 }
@@ -284,51 +282,59 @@ void PolKitAgentListener::releaseSession()
     if (!m_session)
         return;
 
-    m_session->disconnect(this);
-    m_session->deleteLater();
-    m_session.clear();
+    // It may be what is calling; it goes on the next turn.
+    std::shared_ptr<AuthSession> session(std::move(m_session));
+    session->onRequest = nullptr;
+    session->onNotice = nullptr;
+    session->onCompleted = nullptr;
+    EventLoop::current()->post([session] {});
+}
+
+void PolKitAgentListener::releaseDialog()
+{
+    if (!m_dialog)
+        return;
+
+    // A button of it may be what is calling; it goes on the next turn.
+    std::shared_ptr<Dialog> dialog(std::move(m_dialog));
+    dialog->onAccepted = nullptr;
+    dialog->onCancel = nullptr;
+    dialog->hide();
+    EventLoop::current()->post([dialog] {});
 }
 
 void PolKitAgentListener::finishCurrent(Outcome outcome)
 {
     releaseSession();
-
-    if (m_dialog) {
-        m_dialog->deleteLater();
-        m_dialog.clear();
-    }
+    releaseDialog();
 
     m_hasResponse = false;
     m_response.clear();
     m_requestPending = false;
 
-    reply(m_queue.takeFirst(), outcome);
+    Request request = std::move(m_queue.front());
+    m_queue.pop_front();
+    reply(request, outcome);
 
     startNext();
 }
 
-void PolKitAgentListener::reply(const Request &request, Outcome outcome)
+void PolKitAgentListener::reply(Request &request, Outcome outcome)
 {
-    QDBusMessage message;
-
     switch (outcome) {
     case Completed:
-        message = request.call.createReply();
+        request.call.reply();
         break;
     case Dismissed:
-        message = request.call.createErrorReply(cancelledError,
-                                                QStringLiteral("The authentication dialog was dismissed"));
+        request.call.replyError(cancelledError, "The authentication dialog was dismissed");
         break;
     case Withdrawn:
-        message = request.call.createErrorReply(cancelledError,
-                                                QStringLiteral("The request was cancelled"));
+        request.call.replyError(cancelledError, "The request was cancelled");
         break;
     }
-
-    QDBusConnection::systemBus().send(message);
 }
 
-void PolKitAgentListener::onRequest(const QString &prompt, bool echo)
+void PolKitAgentListener::onRequest(const std::string &prompt, bool echo)
 {
     if (m_hasResponse) {
         m_session->respond(m_response);
@@ -341,7 +347,7 @@ void PolKitAgentListener::onRequest(const QString &prompt, bool echo)
     m_dialog->setRequest(promptLabel(prompt), echo);
 }
 
-void PolKitAgentListener::onNotice(const QString &text, bool error)
+void PolKitAgentListener::onNotice(const std::string &text, bool error)
 {
     m_dialog->setNotice(text, error);
 }
@@ -366,9 +372,9 @@ void PolKitAgentListener::onCompleted(bool gainedAuthorization)
 
 void PolKitAgentListener::onDialogAccepted()
 {
-    const QString response = m_dialog->password();
+    const std::string response = m_dialog->password();
 
-    m_dialog->setNotice(QString(), false);
+    m_dialog->setNotice({}, false);
 
     if (m_requestPending && m_session) {
         m_requestPending = false;

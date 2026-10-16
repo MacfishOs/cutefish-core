@@ -1,49 +1,55 @@
 #ifndef CUTEFISH_RECORDER_RECORDER_H
 #define CUTEFISH_RECORDER_RECORDER_H
 
-#include <QObject>
-#include <QRect>
-#include <QString>
-#include <QThread>
+#include "capture_session.h"
+#include "task_thread.h"
 
-#include "capturesession.h"
+#include "base/geometry.h"
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace cutefish::base {
+class EventLoop;
+}
 
 class AudioCapture;
 class CaptureClient;
 class Encoder;
-class QSocketNotifier;
 struct wl_display;
 
 // One recording until stop(), written under a hidden name next to the file and
-// renamed once it is complete.
-class Recorder : public QObject
+// renamed once it is complete. The encoder works on a thread of its own.
+class Recorder
 {
-    Q_OBJECT
-
 public:
     struct Options {
         //! The output to record, by wl_output name.
-        QString output;
+        std::string output;
         //! Part of that output in global logical coordinates; empty for all of it.
-        QRect region;
+        cutefish::base::Rect region;
         //! Or a window, by its ext_foreign_toplevel_handle_v1 identifier.
-        QString window;
+        std::string window;
         bool cursor = false;
         bool microphone = false;
         //! A PipeWire node name; empty for the default input.
-        QString microphoneTarget;
-        QString path;
+        std::string microphoneTarget;
+        std::string path;
     };
 
-    explicit Recorder(const Options &options, QObject *parent = nullptr);
-    ~Recorder() override;
+    Recorder(const Options &options, cutefish::base::EventLoop &loop);
+    ~Recorder();
 
-    bool start(QString *error);
+    Recorder(const Recorder &) = delete;
+    Recorder &operator=(const Recorder &) = delete;
+
+    bool start(std::string *error);
     void stop();
 
-signals:
-    void started();
-    void finished(bool ok, const QString &error);
+    std::function<void()> onStarted;
+    std::function<void(bool ok, const std::string &error)> onFinished;
 
 private:
     //! A session for the source, replacing the one there is.
@@ -51,22 +57,30 @@ private:
     void dispatch();
     void captureNext();
     //! The part of a frame of this size that is recorded.
-    QRect cropFor(const QSize &frame) const;
+    cutefish::base::Rect cropFor(const cutefish::base::Size &frame) const;
     void onFrame(const CaptureSession::Frame &frame);
-    void onEncoderFinished(bool ok, const QString &error);
-    QString partialPath() const;
+    void onEncoderFinished(bool ok, const std::string &error);
+    std::string partialPath() const;
+    //! Runs @p task on this thread's loop, unless the recorder is gone by then.
+    void toMain(std::function<void()> task);
 
     Options m_options;
+    cutefish::base::EventLoop &m_loop;
+    std::shared_ptr<int> m_alive = std::make_shared<int>(0);
+    const std::weak_ptr<int> m_lifetime = m_alive;
     wl_display *m_display = nullptr;
-    QSocketNotifier *m_notifier = nullptr;
-    CaptureClient *m_client = nullptr;
-    CaptureSession *m_session = nullptr;
+    int m_displayWatch = 0;
+    int m_prepareHook = 0;
+    std::unique_ptr<CaptureClient> m_client;
+    std::unique_ptr<CaptureSession> m_session;
+    //! Replaced sessions, until the encoder is done with their buffers.
+    std::vector<std::unique_ptr<CaptureSession>> m_replaced;
     CaptureSession::Memory m_memory = CaptureSession::Memory::DmaBuf;
     int m_generation = 0;
-    AudioCapture *m_audio = nullptr;
-    QThread m_encoderThread;
-    Encoder *m_encoder = nullptr;
-    QRect m_outputGeometry;
+    std::unique_ptr<AudioCapture> m_audio;
+    TaskThread m_encoderThread;
+    std::unique_ptr<Encoder> m_encoder;
+    cutefish::base::Rect m_outputGeometry;
     bool m_stopping = false;
     bool m_done = false;
 };

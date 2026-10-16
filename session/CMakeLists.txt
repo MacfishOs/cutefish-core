@@ -1,6 +1,8 @@
 project(cutefish-session)
 set(TARGET cutefish-session)
 
+pkg_check_modules(Systemd REQUIRED IMPORTED_TARGET libsystemd)
+
 set(SOURCES
     application.cpp
     autostartentries.cpp
@@ -15,17 +17,11 @@ set(SOURCES
     userdirectories.cpp
 )
 
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     com.cutefish.Session.xml
-                     application.h Application
-                     sessionadaptor SessionAdaptor)
-set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
-
-add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES})
+add_executable(${TARGET} ${SOURCES})
 target_link_libraries(${TARGET}
-        Cutefish::Application
-        Qt6::Core
-        Qt6::DBus
+        cutefish-core-common
+        Cutefish::ToolkitBase
+        PkgConfig::Systemd
 )
 
 install(TARGETS ${TARGET} DESTINATION ${CMAKE_INSTALL_BINDIR})

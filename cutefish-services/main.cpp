@@ -3,9 +3,12 @@
 
 #include "application.h"
 
+#include "ui/application.h"
+
 int main(int argc, char *argv[])
 {
-    Application a(argc, argv);
-    a.setQuitOnLastWindowClosed(false);
-    return a.exec();
+    cutefish::ui::Application app(argc, argv);
+    app.setApplicationId("cutefish-services");
+    Application services;
+    return app.run();
 }

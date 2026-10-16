@@ -4,50 +4,36 @@
 #ifndef POLKITAGENTLISTENER_H
 #define POLKITAGENTLISTENER_H
 
-#include <QObject>
-#include <QString>
-#include <QPointer>
-#include <QList>
-#include <QMap>
-#include <QVariantMap>
-#include <QDBusContext>
-#include <QDBusMessage>
-#include <QDBusArgument>
+#include <deque>
+#include <map>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <vector>
 
-struct PolkitIdentity
-{
-    QString kind;
-    QVariantMap details;
-};
-
-typedef QList<PolkitIdentity> PolkitIdentityList;
-typedef QMap<QString, QString> PolkitDetails;
-
-QDBusArgument &operator<<(QDBusArgument &argument, const PolkitIdentity &identity);
-const QDBusArgument &operator>>(const QDBusArgument &argument, PolkitIdentity &identity);
-
-Q_DECLARE_METATYPE(PolkitIdentity)
+#include "base/dbus.h"
 
 class Dialog;
 class AuthSession;
-class PolKitAgentListener : public QObject, protected QDBusContext
+
+// org.freedesktop.PolicyKit1.AuthenticationAgent for the session: one dialog
+// at a time, answered through polkit's helper.
+class PolKitAgentListener
 {
-    Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.PolicyKit1.AuthenticationAgent")
-
 public:
-    explicit PolKitAgentListener(QObject *parent = nullptr);
+    // a(sa{sv}): each identity's kind and details.
+    using Identity = std::tuple<std::string, cutefish::base::dbus::VariantMap>;
 
-    bool registerAgent(const QString &objectPath);
+    explicit PolKitAgentListener(cutefish::base::dbus::Connection *bus);
+    ~PolKitAgentListener();
 
-public slots:
-    void BeginAuthentication(const QString &actionId,
-                             const QString &message,
-                             const QString &iconName,
-                             const PolkitDetails &details,
-                             const QString &cookie,
-                             const PolkitIdentityList &identities);
-    void CancelAuthentication(const QString &cookie);
+    PolKitAgentListener(const PolKitAgentListener &) = delete;
+    PolKitAgentListener &operator=(const PolKitAgentListener &) = delete;
+
+    bool registerAgent(const std::string &objectPath);
+
+    // The open dialog, for tests.
+    Dialog *dialog() const { return m_dialog.get(); }
 
 private:
     enum Outcome {
@@ -57,42 +43,48 @@ private:
     };
 
     struct Request {
-        QString message;
-        QString cookie;
-        QString user;
-        QDBusMessage call;
+        std::string message;
+        std::string cookie;
+        std::string user;
+        cutefish::base::dbus::MethodCall call;
     };
 
+    void beginAuthentication(cutefish::base::dbus::MethodCall &call);
+    void cancelAuthentication(const std::string &cookie);
+
     bool sendRegistration();
-    void onPolkitOwnerChanged(const QString &service, const QString &oldOwner, const QString &newOwner);
+    void onPolkitOwnerChanged(const std::string &oldOwner, const std::string &newOwner);
     void dropRequests();
 
     void startNext();
     void startSession();
     void releaseSession();
+    void releaseDialog();
     void finishCurrent(Outcome outcome);
-    void reply(const Request &request, Outcome outcome);
+    void reply(Request &request, Outcome outcome);
 
-    void onRequest(const QString &prompt, bool echo);
-    void onNotice(const QString &text, bool error);
+    void onRequest(const std::string &prompt, bool echo);
+    void onNotice(const std::string &text, bool error);
     void onCompleted(bool gainedAuthorization);
     void onDialogAccepted();
 
-private:
-    QString m_objectPath;
+    cutefish::base::dbus::Connection *m_bus;
+    std::string m_objectPath;
+    std::unique_ptr<cutefish::base::dbus::Object> m_object;
+    cutefish::base::dbus::Match m_ownerChanged;
 
     // polkitd sends requests concurrently; the first one owns the dialog.
-    QList<Request> m_queue;
+    std::deque<Request> m_queue;
 
-    QPointer<Dialog> m_dialog;
-    QPointer<AuthSession> m_session;
+    std::unique_ptr<Dialog> m_dialog;
+    std::unique_ptr<AuthSession> m_session;
 
     // A response typed before PAM asked for one.
-    QString m_response;
-    bool m_hasResponse;
-    bool m_requestPending;
+    std::string m_response;
+    bool m_hasResponse = false;
+    bool m_requestPending = false;
 
-    int m_numTries;
+    int m_numTries = 0;
 };
 
 #endif // POLKITAGENTLISTENER_H

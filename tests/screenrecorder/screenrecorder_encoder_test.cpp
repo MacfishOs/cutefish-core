@@ -1,10 +1,12 @@
 #include "encoder.h"
 
-#include <QSignalSpy>
-#include <QTemporaryDir>
-#include <QTest>
+#include "base/file.h"
+
+#include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <vector>
 
 #include <drm_fourcc.h>
@@ -18,26 +20,37 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-static constexpr qint64 kOriginNs = 1'000'000'000'000;
-static constexpr qint64 kFrameNs = 33'333'333;
+using cutefish::base::Rect;
+using cutefish::base::Size;
+
+static constexpr int64_t kOriginNs = 1'000'000'000'000;
+static constexpr int64_t kFrameNs = 33'333'333;
 static constexpr char kRenderNode[] = "/dev/dri/renderD128";
 
-static QImage frame(const QSize &size, int index)
+static void fill(Image &image, uint32_t argb)
 {
-    QImage image(size, QImage::Format_ARGB32_Premultiplied);
-    image.fill(QColor::fromHsv((index * 12) % 360, 200, 220));
+    for (int y = 0; y < image.height; ++y) {
+        auto *row = reinterpret_cast<uint32_t *>(image.mutableBits() + size_t(y) * image.stride);
+        std::fill(row, row + image.width, argb);
+    }
+}
+
+static Image frame(const Size &size, int index)
+{
+    Image image = Image::allocate(size.width(), size.height());
+    // A different opaque colour for every frame.
+    const auto channel = [index](int shift) { return uint32_t((index * 37 + shift) % 200 + 40); };
+    fill(image, 0xff000000 | channel(0) << 16 | channel(70) << 8 | channel(140));
     return image;
 }
 
-static QByteArray tone(int frames, int offset)
+static std::vector<float> tone(int frames, int offset)
 {
-    QByteArray samples(frames * Encoder::kChannels * int(sizeof(float)), Qt::Uninitialized);
-    auto *data = reinterpret_cast<float *>(samples.data());
+    std::vector<float> samples(size_t(frames) * Encoder::kChannels);
     for (int i = 0; i < frames; ++i) {
-        const float value = 0.3f * std::sin(2.0f * float(M_PI) * 440.0f * float(offset + i)
-                                            / Encoder::kSampleRate);
-        data[i * 2] = value;
-        data[i * 2 + 1] = value;
+        const float value = 0.3f * std::sin(2.0f * float(M_PI) * 440.0f * float(offset + i) / Encoder::kSampleRate);
+        samples[size_t(i) * 2] = value;
+        samples[size_t(i) * 2 + 1] = value;
     }
     return samples;
 }
@@ -47,27 +60,35 @@ namespace {
 struct Probe {
     int videoStreams = 0;
     int audioStreams = 0;
-    QSize size;
+    Size size;
     int sampleRate = 0;
     double duration = 0;
     AVCodecID videoCodec = AV_CODEC_ID_NONE;
     AVCodecID audioCodec = AV_CODEC_ID_NONE;
 };
 
+struct Luma {
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> pixels;
+
+    int at(int x, int y) const { return pixels[size_t(y) * width + x]; }
+};
+
 } // namespace
 
-static Probe probe(const QString &path)
+static Probe probe(const std::string &path)
 {
     Probe result;
     AVFormatContext *format = nullptr;
-    if (avformat_open_input(&format, QFile::encodeName(path).constData(), nullptr, nullptr) < 0)
+    if (avformat_open_input(&format, path.c_str(), nullptr, nullptr) < 0)
         return result;
     avformat_find_stream_info(format, nullptr);
     for (unsigned i = 0; i < format->nb_streams; ++i) {
         const AVCodecParameters *codec = format->streams[i]->codecpar;
         if (codec->codec_type == AVMEDIA_TYPE_VIDEO) {
             ++result.videoStreams;
-            result.size = QSize(codec->width, codec->height);
+            result.size = Size(codec->width, codec->height);
             result.videoCodec = codec->codec_id;
         } else if (codec->codec_type == AVMEDIA_TYPE_AUDIO) {
             ++result.audioStreams;
@@ -81,11 +102,11 @@ static Probe probe(const QString &path)
 }
 
 // The luma plane of the last frame in the file.
-static QImage lastLuma(const QString &path)
+static Luma lastLuma(const std::string &path)
 {
-    QImage result;
+    Luma result;
     AVFormatContext *format = nullptr;
-    if (avformat_open_input(&format, QFile::encodeName(path).constData(), nullptr, nullptr) < 0)
+    if (avformat_open_input(&format, path.c_str(), nullptr, nullptr) < 0)
         return result;
     avformat_find_stream_info(format, nullptr);
     const int stream = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
@@ -97,10 +118,12 @@ static QImage lastLuma(const QString &path)
     AVFrame *decoded = av_frame_alloc();
     const auto take = [&] {
         while (avcodec_receive_frame(context, decoded) >= 0) {
-            result = QImage(decoded->width, decoded->height, QImage::Format_Grayscale8);
+            result.width = decoded->width;
+            result.height = decoded->height;
+            result.pixels.resize(size_t(decoded->width) * decoded->height);
             for (int y = 0; y < decoded->height; ++y)
-                memcpy(result.scanLine(y), decoded->data[0] + y * decoded->linesize[0],
-                       size_t(decoded->width));
+                memcpy(result.pixels.data() + size_t(y) * decoded->width,
+                       decoded->data[0] + y * decoded->linesize[0], size_t(decoded->width));
         }
     };
     while (av_read_frame(format, packet) >= 0) {
@@ -141,17 +164,16 @@ public:
 
     bool isValid() const { return m_gbm != nullptr; }
 
-    CaptureSession::DmaBuf allocate(const QSize &size)
+    DmaBuf allocate(const Size &size)
     {
         const auto width = uint32_t(size.width());
         const auto height = uint32_t(size.height());
         const uint64_t linear = DRM_FORMAT_MOD_LINEAR;
-        gbm_bo *bo = gbm_bo_create_with_modifiers2(m_gbm, width, height, DRM_FORMAT_XRGB8888,
-                                                   &linear, 1, GBM_BO_USE_RENDERING);
+        gbm_bo *bo = gbm_bo_create_with_modifiers2(m_gbm, width, height, DRM_FORMAT_XRGB8888, &linear, 1,
+                                                   GBM_BO_USE_RENDERING);
         if (!bo)
-            bo = gbm_bo_create(m_gbm, width, height, DRM_FORMAT_XRGB8888,
-                               GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
-        CaptureSession::DmaBuf dmabuf;
+            bo = gbm_bo_create(m_gbm, width, height, DRM_FORMAT_XRGB8888, GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+        DmaBuf dmabuf;
         if (!bo)
             return dmabuf;
         dmabuf.fd = gbm_bo_get_fd(bo);
@@ -181,173 +203,186 @@ private:
     std::vector<std::pair<gbm_bo *, int>> m_buffers;
 };
 
-} // namespace
+// What the encoder reported through its callbacks.
+struct Reports {
+    int started = 0;
+    std::vector<int> done;
+    int needsSharedMemory = 0;
+    std::vector<std::pair<bool, std::string>> finished;
 
-class ScreenRecorderEncoderTest : public QObject
-{
-    Q_OBJECT
-
-private slots:
-    void writesVideoAndSoundUntilTheStop();
-    void laterSizesAreScaledIntoTheFirst();
-    void oddSizesAreTrimmedToEven();
-    void aRecordingWithoutFramesFails();
-    void replacedBuffersLoseTheirImports();
+    void watch(Encoder &encoder)
+    {
+        encoder.onStarted = [this] { ++started; };
+        encoder.onFrameDone = [this](int buffer) { done.push_back(buffer); };
+        encoder.onNeedsSharedMemory = [this] { ++needsSharedMemory; };
+        encoder.onFinished = [this](bool ok, const std::string &error) { finished.emplace_back(ok, error); };
+    }
 };
 
-void ScreenRecorderEncoderTest::writesVideoAndSoundUntilTheStop()
+} // namespace
+
+class ScreenRecorderEncoderTest : public ::testing::Test
 {
-    QTemporaryDir directory;
-    const QString path = directory.filePath(QStringLiteral("recording.mp4"));
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(m_directory.isValid());
+    }
+
+    std::string filePath(const std::string &name) const { return m_directory.path() + '/' + name; }
+
+    static const std::map<int, unsigned int> &imported(const Encoder &encoder) { return encoder.m_imported; }
+    static void *display(const Encoder &encoder) { return encoder.m_display; }
+
+    cutefish::base::file::TemporaryDirectory m_directory{std::filesystem::temp_directory_path().string(),
+                                                         "recorder-test-"};
+};
+
+TEST_F(ScreenRecorderEncoderTest, WritesVideoAndSoundUntilTheStop)
+{
+    const std::string path = filePath("recording.mp4");
     Encoder encoder;
-    QSignalSpy started(&encoder, &Encoder::started);
-    QSignalSpy done(&encoder, &Encoder::frameDone);
-    QSignalSpy finished(&encoder, &Encoder::finished);
+    Reports reports;
+    reports.watch(encoder);
 
     encoder.open(path, true);
     // Sound from before the first frame is cut at it.
     for (int chunk = -5; chunk < 100; ++chunk)
         encoder.encodeAudio(tone(480, chunk * 480), kOriginNs + chunk * 10'000'000);
     for (int i = 0; i < 30; ++i) {
-        const QImage image = frame(QSize(320, 240), i);
+        const Image image = frame(Size(320, 240), i);
         encoder.encodeVideo(image, image.rect(), kOriginNs + i * kFrameNs, i);
     }
     // The screen stood still for half a second before the stop.
     encoder.finish(kOriginNs + 1'500'000'000);
 
-    QCOMPARE(started.count(), 1);
-    QCOMPARE(done.count(), 30);
-    QCOMPARE(done.last().at(0).toInt(), 29);
-    QCOMPARE(finished.count(), 1);
-    QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
+    EXPECT_EQ(reports.started, 1);
+    ASSERT_EQ(reports.done.size(), 30u);
+    EXPECT_EQ(reports.done.back(), 29);
+    ASSERT_EQ(reports.finished.size(), 1u);
+    ASSERT_TRUE(reports.finished.front().first) << reports.finished.front().second;
 
     const Probe file = probe(path);
-    QCOMPARE(file.videoStreams, 1);
-    QCOMPARE(file.audioStreams, 1);
-    QCOMPARE(file.videoCodec, AV_CODEC_ID_H264);
-    QCOMPARE(file.audioCodec, AV_CODEC_ID_AAC);
-    QCOMPARE(file.size, QSize(320, 240));
-    QCOMPARE(file.sampleRate, Encoder::kSampleRate);
-    QVERIFY2(std::abs(file.duration - 1.5) < 0.1, qPrintable(QString::number(file.duration)));
+    EXPECT_EQ(file.videoStreams, 1);
+    EXPECT_EQ(file.audioStreams, 1);
+    EXPECT_EQ(file.videoCodec, AV_CODEC_ID_H264);
+    EXPECT_EQ(file.audioCodec, AV_CODEC_ID_AAC);
+    EXPECT_EQ(file.size, Size(320, 240));
+    EXPECT_EQ(file.sampleRate, Encoder::kSampleRate);
+    EXPECT_LT(std::abs(file.duration - 1.5), 0.1) << file.duration;
 }
 
-void ScreenRecorderEncoderTest::laterSizesAreScaledIntoTheFirst()
+TEST_F(ScreenRecorderEncoderTest, LaterSizesAreScaledIntoTheFirst)
 {
-    QTemporaryDir directory;
-    const QString path = directory.filePath(QStringLiteral("window.mp4"));
+    const std::string path = filePath("window.mp4");
     Encoder encoder;
-    QSignalSpy finished(&encoder, &Encoder::finished);
+    Reports reports;
+    reports.watch(encoder);
 
     encoder.open(path, false);
-    const QImage first = frame(QSize(320, 240), 0);
+    const Image first = frame(Size(320, 240), 0);
     encoder.encodeVideo(first, first.rect(), kOriginNs, -1);
     // The window became twice as wide: it is shown whole, with bars above and below.
-    QImage wide(QSize(640, 240), QImage::Format_ARGB32_Premultiplied);
-    wide.fill(Qt::white);
+    Image wide = Image::allocate(640, 240);
+    fill(wide, 0xffffffff);
     encoder.encodeVideo(wide, wide.rect(), kOriginNs + kFrameNs, -1);
     encoder.finish(kOriginNs + 2 * kFrameNs);
 
-    QCOMPARE(finished.count(), 1);
-    QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
-    QCOMPARE(probe(path).size, QSize(320, 240));
+    ASSERT_EQ(reports.finished.size(), 1u);
+    ASSERT_TRUE(reports.finished.front().first) << reports.finished.front().second;
+    EXPECT_EQ(probe(path).size, Size(320, 240));
 
-    const QImage luma = lastLuma(path);
-    QCOMPARE(luma.size(), QSize(320, 240));
-    QVERIFY(qGray(luma.pixel(160, 10)) < 40);
-    QVERIFY(qGray(luma.pixel(160, 230)) < 40);
-    QVERIFY(qGray(luma.pixel(160, 120)) > 200);
+    const Luma luma = lastLuma(path);
+    ASSERT_EQ(luma.width, 320);
+    ASSERT_EQ(luma.height, 240);
+    EXPECT_LT(luma.at(160, 10), 40);
+    EXPECT_LT(luma.at(160, 230), 40);
+    EXPECT_GT(luma.at(160, 120), 200);
 }
 
-void ScreenRecorderEncoderTest::oddSizesAreTrimmedToEven()
+TEST_F(ScreenRecorderEncoderTest, OddSizesAreTrimmedToEven)
 {
-    QTemporaryDir directory;
-    const QString path = directory.filePath(QStringLiteral("portion.mp4"));
+    const std::string path = filePath("portion.mp4");
     Encoder encoder;
-    QSignalSpy finished(&encoder, &Encoder::finished);
+    Reports reports;
+    reports.watch(encoder);
 
     encoder.open(path, false);
-    const QImage screen = frame(QSize(400, 300), 3);
-    encoder.encodeVideo(screen, QRect(11, 21, 201, 151), kOriginNs, -1);
+    const Image screen = frame(Size(400, 300), 3);
+    encoder.encodeVideo(screen, Rect(11, 21, 201, 151), kOriginNs, -1);
     encoder.finish(kOriginNs + kFrameNs);
 
-    QCOMPARE(finished.count(), 1);
-    QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
-    QCOMPARE(probe(path).size, QSize(200, 150));
+    ASSERT_EQ(reports.finished.size(), 1u);
+    ASSERT_TRUE(reports.finished.front().first) << reports.finished.front().second;
+    EXPECT_EQ(probe(path).size, Size(200, 150));
 }
 
-void ScreenRecorderEncoderTest::aRecordingWithoutFramesFails()
+TEST_F(ScreenRecorderEncoderTest, ARecordingWithoutFramesFails)
 {
-    QTemporaryDir directory;
-    const QString path = directory.filePath(QStringLiteral("empty.mp4"));
+    const std::string path = filePath("empty.mp4");
     Encoder encoder;
-    QSignalSpy finished(&encoder, &Encoder::finished);
+    Reports reports;
+    reports.watch(encoder);
 
     encoder.open(path, true);
     encoder.encodeAudio(tone(480, 0), kOriginNs);
     encoder.finish(kOriginNs + kFrameNs);
 
-    QCOMPARE(finished.count(), 1);
-    QVERIFY(!finished.first().at(0).toBool());
-    QVERIFY(!QFile::exists(path));
+    ASSERT_EQ(reports.finished.size(), 1u);
+    EXPECT_FALSE(reports.finished.front().first);
+    EXPECT_FALSE(std::filesystem::exists(path));
 }
 
-void ScreenRecorderEncoderTest::replacedBuffersLoseTheirImports()
+TEST_F(ScreenRecorderEncoderTest, ReplacedBuffersLoseTheirImports)
 {
     RenderNode gpu;
     if (!gpu.isValid())
-        QSKIP("no render node to allocate DMA-BUFs on");
+        GTEST_SKIP() << "no render node to allocate DMA-BUFs on";
 
-    QTemporaryDir directory;
-    const QString path = directory.filePath(QStringLiteral("resized.mp4"));
-    const QString node = QString::fromLatin1(kRenderNode);
+    const std::string path = filePath("resized.mp4");
+    const std::string node = kRenderNode;
     Encoder encoder;
-    QSignalSpy shm(&encoder, &Encoder::needsSharedMemory);
-    QSignalSpy done(&encoder, &Encoder::frameDone);
-    QSignalSpy finished(&encoder, &Encoder::finished);
+    Reports reports;
+    reports.watch(encoder);
     encoder.open(path, false);
 
     // Three buffers taking turns, the way a session hands them out.
-    qint64 presentedNs = kOriginNs;
-    const auto record = [&](const QSize &size, int firstBuffer) {
-        CaptureSession::DmaBuf buffers[3];
-        for (CaptureSession::DmaBuf &buffer : buffers)
+    int64_t presentedNs = kOriginNs;
+    const auto record = [&](const Size &size, int firstBuffer) {
+        DmaBuf buffers[3];
+        for (DmaBuf &buffer : buffers)
             buffer = gpu.allocate(size);
         for (int i = 0; i < 6; ++i) {
-            encoder.encodeDmaBuf(buffers[i % 3], node, QRect(QPoint(), size), presentedNs,
-                                 firstBuffer + i % 3);
+            encoder.encodeDmaBuf(buffers[i % 3], node, Rect(size), presentedNs, firstBuffer + i % 3);
             presentedNs += kFrameNs;
         }
         return buffers[0].isValid() && buffers[1].isValid() && buffers[2].isValid();
     };
 
-    QVERIFY(record(QSize(320, 240), 0));
-    if (!shm.isEmpty())
-        QSKIP("this device cannot convert DMA-BUF frames with VA-API");
-    QCOMPARE(encoder.m_imported.size(), size_t(3));
+    ASSERT_TRUE(record(Size(320, 240), 0));
+    if (reports.needsSharedMemory)
+        GTEST_SKIP() << "this device cannot convert DMA-BUF frames with VA-API";
+    ASSERT_EQ(imported(encoder).size(), 3u);
     std::vector<unsigned int> surfaces;
-    for (const auto &[buffer, surface] : encoder.m_imported)
+    for (const auto &[buffer, surface] : imported(encoder))
         surfaces.push_back(surface);
 
     // The window was resized: the session frees its buffers for three new ones.
     gpu.freeBuffers();
     encoder.forgetBuffers();
-    QVERIFY(encoder.m_imported.empty());
+    EXPECT_TRUE(imported(encoder).empty());
     for (unsigned int surface : surfaces) {
         VASurfaceStatus status = VASurfaceReady;
-        QVERIFY(vaQuerySurfaceStatus(encoder.m_display, surface, &status) != VA_STATUS_SUCCESS);
+        EXPECT_NE(vaQuerySurfaceStatus(display(encoder), surface, &status), VA_STATUS_SUCCESS);
     }
 
-    QVERIFY(record(QSize(640, 240), 3));
-    QVERIFY(shm.isEmpty());
-    QCOMPARE(encoder.m_imported.size(), size_t(3));
+    ASSERT_TRUE(record(Size(640, 240), 3));
+    EXPECT_EQ(reports.needsSharedMemory, 0);
+    EXPECT_EQ(imported(encoder).size(), 3u);
     encoder.finish(presentedNs);
 
-    QCOMPARE(done.count(), 12);
-    QCOMPARE(finished.count(), 1);
-    QVERIFY2(finished.first().at(0).toBool(), qPrintable(finished.first().at(1).toString()));
-    QCOMPARE(probe(path).size, QSize(320, 240));
+    EXPECT_EQ(reports.done.size(), 12u);
+    ASSERT_EQ(reports.finished.size(), 1u);
+    ASSERT_TRUE(reports.finished.front().first) << reports.finished.front().second;
+    EXPECT_EQ(probe(path).size, Size(320, 240));
 }
-
-QTEST_GUILESS_MAIN(ScreenRecorderEncoderTest)
-
-#include "screenrecorder_encoder_test.moc"

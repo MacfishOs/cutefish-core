@@ -5,57 +5,70 @@
 
 #include "coredump.h"
 
-#include <QObject>
-#include <QString>
+#include <functional>
+#include <memory>
+#include <string>
 
-class QQmlEngine;
-class QQuickWindow;
+#include "base/dbus.h"
 
-// One open crash window. Exposed to QML as `crash`. An application dialog
-// offers to reopen it; the session restarts its own processes by itself.
-class CrashDialog : public QObject
+namespace cutefish::ui {
+class DialogButton;
+class Label;
+class TextArea;
+class View;
+class Window;
+}
+
+// One open crash window. An application dialog offers to reopen it; the
+// session restarts its own processes by itself.
+class CrashDialog
 {
-    Q_OBJECT
-    Q_PROPERTY(bool sessionProcess READ sessionProcess CONSTANT)
-    Q_PROPERTY(QString name READ name CONSTANT)
-    Q_PROPERTY(QString icon READ icon CONSTANT)
-    Q_PROPERTY(QString fixedFont READ fixedFont CONSTANT)
-    Q_PROPERTY(QString reason READ reason NOTIFY dumpChanged)
-    Q_PROPERTY(QString report READ report NOTIFY dumpChanged)
-
 public:
     enum class Kind { Application, SessionProcess };
 
-    CrashDialog(QQmlEngine *engine, Kind kind, const QString &id, const QString &name,
-                const QString &icon, const QString &fixedFont, QObject *parent = nullptr);
-    ~CrashDialog() override;
+    CrashDialog(Kind kind, const std::string &id, const std::string &name, const std::string &icon,
+                const std::string &fixedFont);
+    ~CrashDialog();
+
+    CrashDialog(const CrashDialog &) = delete;
+    CrashDialog &operator=(const CrashDialog &) = delete;
 
     bool sessionProcess() const { return m_kind == Kind::SessionProcess; }
-    QString name() const { return m_name; }
-    QString icon() const { return m_icon; }
-    QString fixedFont() const { return m_fixedFont; }
-    QString reason() const;
-    QString report() const;
+    const std::string &name() const { return m_name; }
+    std::string reason() const;
+    std::string report() const;
 
     void setDump(const Coredump &dump);
-    bool show();
+    void show();
 
-    Q_INVOKABLE void reopen();
-    Q_INVOKABLE void close();
+    void reopen();
+    void close();
 
-Q_SIGNALS:
-    void dumpChanged();
-    void finished();
+    // Reopen, Close, OK, Escape or the compositor closed it.
+    std::function<void()> onFinished;
+
+    cutefish::ui::Window *window() const { return m_window.get(); }
 
 private:
-    QQmlEngine *m_engine;
+    class Content;
+
+    void update();
+    void setDetailsShown(bool shown);
+    void accept();
+
     Kind m_kind;
-    QString m_id;
-    QString m_name;
-    QString m_icon;
-    QString m_fixedFont;
+    std::string m_id;
+    std::string m_name;
+    std::string m_icon;
+    std::string m_fixedFont;
     Coredump m_dump;
     bool m_hasDump = false;
     bool m_finished = false;
-    QQuickWindow *m_window = nullptr;
+    bool m_detailsShown = false;
+    bool m_reopening = false;
+    std::unique_ptr<cutefish::ui::Window> m_window;
+    cutefish::ui::Label *m_text = nullptr;
+    cutefish::ui::View *m_reportFrame = nullptr;
+    cutefish::ui::TextArea *m_report = nullptr;
+    cutefish::ui::DialogButton *m_detailsButton = nullptr;
 };

@@ -1,77 +1,100 @@
 #include "xwaylandenvironment.h"
 
+#include <cstdlib>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <QDebug>
-#include <QDir>
-#include <QFile>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QRegularExpression>
+#include "base/json.h"
+#include "base/paths.h"
+#include "logs.h"
 
-XwaylandEnvironment::XwaylandEnvironment(QObject* parent)
-    : QObject(parent)
-    , m_directory(QDir(qEnvironmentVariable("XDG_RUNTIME_DIR", QDir::tempPath()))
-                      .filePath("cutefish-session-x11-XXXXXX"))
+static bool isLocalDisplay(const std::string& display)
 {
-    m_timeout.setSingleShot(true);
-    connect(&m_timeout, &QTimer::timeout, this, [this] {
-        m_waiting = false;
-        qWarning() << "Xwayland readiness timed out; continuing with native Wayland";
-        emit resolved(false);
-    });
-    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &XwaylandEnvironment::check);
-    if (m_directory.isValid())
-        m_watcher.addPath(m_directory.path());
+    if (display.size() < 2 || display.front() != ':')
+        return false;
+    for (size_t i = 1; i < display.size(); ++i) {
+        if (display[i] < '0' || display[i] > '9')
+            return false;
+    }
+    return true;
 }
 
-QString XwaylandEnvironment::readinessFile() const
+XwaylandEnvironment::XwaylandEnvironment()
+    : m_directory(cutefish::base::paths::runtimeDirectory(), "cutefish-session-x11-")
 {
-    return m_directory.isValid() ? m_directory.filePath("ready.json") : QString();
+    m_timeout.setSingleShot(true);
+    m_timeout.onTimeout = [this] {
+        m_waiting = false;
+        CF_WARNING(sessionLog()) << "Xwayland readiness timed out; continuing with native Wayland";
+        if (onResolved)
+            onResolved(false);
+    };
+    if (m_directory.isValid())
+        m_watch = cutefish::base::FileWatch::directory(m_directory.path(), [this](const std::string&) {
+            check();
+        });
+}
+
+std::string XwaylandEnvironment::readinessFile() const
+{
+    return m_directory.isValid() ? m_directory.path() + "/ready.json" : std::string();
 }
 
 void XwaylandEnvironment::waitForReady(int timeoutMs)
 {
-    qunsetenv("DISPLAY");
-    qunsetenv("XAUTHORITY");
+    unsetenv("DISPLAY");
+    unsetenv("XAUTHORITY");
     m_waiting = true;
-    m_timeout.start(timeoutMs);
+    m_timeout.start(std::chrono::milliseconds(timeoutMs));
     check();
 }
 
 void XwaylandEnvironment::check()
 {
-    QFile file(readinessFile());
-    if (!file.exists()) {
+    const std::string path = readinessFile();
+    if (path.empty() || ::access(path.c_str(), F_OK) != 0) {
         if (m_available) {
             m_available = false;
-            qunsetenv("DISPLAY");
-            qunsetenv("XAUTHORITY");
-            emit lost();
+            unsetenv("DISPLAY");
+            unsetenv("XAUTHORITY");
+            if (onLost)
+                onLost();
         }
         return;
     }
-    if (!m_waiting || !file.open(QIODevice::ReadOnly))
+    if (!m_waiting)
         return;
-    const auto bytes = file.read(4097);
-    if (bytes.size() > 4096)
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
         return;
-    const auto document = QJsonDocument::fromJson(bytes);
-    const auto object = document.object();
-    const auto display = object.value("DISPLAY").toString();
-    const auto authority = object.value("XAUTHORITY").toString();
-    static const QRegularExpression displayPattern(QStringLiteral("^:[0-9]+$"));
+    std::string bytes(4097, '\0');
+    size_t length = 0;
+    while (length < bytes.size()) {
+        const ssize_t n = ::read(fd, bytes.data() + length, bytes.size() - length);
+        if (n <= 0)
+            break;
+        length += size_t(n);
+    }
+    ::close(fd);
+    if (length > 4096)
+        return;
+    bytes.resize(length);
+    const auto document = cutefish::base::json::Value::parse(bytes);
+    if (!document || !document->isObject())
+        return;
+    const std::string display = (*document)["DISPLAY"].toString();
+    const std::string authority = (*document)["XAUTHORITY"].toString();
     struct stat st {};
-    if (!displayPattern.match(display).hasMatch() || !QDir::isAbsolutePath(authority) ||
-        authority.contains(QChar::Null) ||
-        lstat(QFile::encodeName(authority).constData(), &st) != 0 || !S_ISREG(st.st_mode) ||
-        st.st_uid != getuid() || (st.st_mode & 0777) != 0600)
+    if (!isLocalDisplay(display) || !authority.starts_with('/') || authority.find('\0') != std::string::npos ||
+        lstat(authority.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != getuid() ||
+        (st.st_mode & 0777) != 0600)
         return;
-    qputenv("DISPLAY", display.toUtf8());
-    qputenv("XAUTHORITY", authority.toUtf8());
+    setenv("DISPLAY", display.c_str(), 1);
+    setenv("XAUTHORITY", authority.c_str(), 1);
     m_waiting = false;
     m_available = true;
     m_timeout.stop();
-    emit resolved(true);
+    if (onResolved)
+        onResolved(true);
 }

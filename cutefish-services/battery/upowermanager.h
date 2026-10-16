@@ -9,41 +9,54 @@
 #ifndef UPOWERMANAGER_H
 #define UPOWERMANAGER_H
 
-#include <QObject>
-#include <QDBusInterface>
-#include <QHash>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/dbus.h"
+#include "base/settings.h"
+#include "base/signal.h"
 
 class Battery;
 
-class UPowerManager : public QObject
+class UPowerManager
 {
-    Q_OBJECT
-
 public:
-    explicit UPowerManager(QObject *parent = nullptr);
+    // UPower on `system`; the primary battery is published on `session`.
+    UPowerManager(cutefish::base::dbus::Connection *system, cutefish::base::dbus::Connection *session,
+                  cutefish::base::Settings &settings);
+    ~UPowerManager();
 
-    bool onBattery() const;
-    bool lidIsPresent() const;
-    bool lidIsClosed() const;
+    UPowerManager(const UPowerManager &) = delete;
+    UPowerManager &operator=(const UPowerManager &) = delete;
 
-signals:
-    void onBatteryChanged();
-    void lidClosedChanged();
+    bool onBattery() const { return m_onBattery; }
+    bool lidIsPresent() const { return m_lidIsPresent; }
+    bool lidIsClosed() const { return m_lidIsClosed; }
 
-private slots:
-    void onPropertiesChanged(const QString &ifaceName, const QVariantMap &changedProps, const QStringList &invalidatedProps);
-    void onDeviceAdded(const QDBusObjectPath &path);
-    void onDeviceRemoved(const QDBusObjectPath &path);
+    cutefish::base::Signal<> onBatteryChanged;
+    cutefish::base::Signal<> lidClosedChanged;
 
 private:
-    void addDevice(const QString &path);
+    void onPropertiesChanged(const cutefish::base::dbus::VariantMap &changed,
+                             const std::vector<std::string> &invalidated);
+    void addDevice(const std::string &path);
+    void removeDevice(const std::string &path);
+    // Gives the D-Bus path to a primary battery when none holds it.
+    void publishBattery();
 
-    QDBusInterface m_interface;
+    cutefish::base::dbus::Connection *m_session;
+    cutefish::base::Settings &m_settings;
+    cutefish::base::dbus::Proxy m_interface;
+    std::vector<cutefish::base::dbus::Match> m_matches;
     // Primary batteries by UPower device path.
-    QHash<QString, Battery *> m_batteries;
-    bool m_onBattery;
-    bool m_lidIsPresent;
-    bool m_lidIsClosed;
+    std::map<std::string, std::unique_ptr<Battery>> m_batteries;
+    // The battery on /com/cutefish/Services/Battery.
+    Battery *m_published = nullptr;
+    bool m_onBattery = false;
+    bool m_lidIsPresent = false;
+    bool m_lidIsClosed = false;
 };
 
 #endif // UPOWERMANAGER_H

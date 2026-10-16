@@ -2,63 +2,61 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "restartpolicy.h"
+#include "logs.h"
 
-#include <QDebug>
-#include <QTimer>
-
-RestartPolicy::RestartPolicy(const QString &name, std::function<void()> restart, QObject *parent)
-    : RestartPolicy(name, std::move(restart), Limits(), parent)
+RestartPolicy::RestartPolicy(const std::string &name, std::function<void()> restart)
+    : RestartPolicy(name, std::move(restart), Limits())
 {
 }
 
-RestartPolicy::RestartPolicy(const QString &name, std::function<void()> restart,
-                             const Limits &limits, QObject *parent)
-    : QObject(parent)
-    , m_name(name)
+RestartPolicy::RestartPolicy(const std::string &name, std::function<void()> restart,
+                             const Limits &limits)
+    : m_name(name)
     , m_restart(std::move(restart))
     , m_limits(limits)
-    , m_timer(new QTimer(this))
 {
-    m_timer->setSingleShot(true);
-    connect(m_timer, &QTimer::timeout, this, [this] {
+    m_timer.setSingleShot(true);
+    m_timer.onTimeout = [this] {
         if (!m_stopped)
             m_restart();
-    });
+    };
 }
 
 void RestartPolicy::started()
 {
-    m_uptime.start();
+    m_startedAt = std::chrono::steady_clock::now();
 }
 
-void RestartPolicy::exited(int code, QProcess::ExitStatus status)
+void RestartPolicy::exited(int code, bool crashed)
 {
-    if (m_stopped || m_timer->isActive())
+    if (m_stopped || m_timer.isActive())
         return;
 
-    if (m_uptime.isValid() && m_uptime.elapsed() >= m_limits.stableUptimeMs)
+    if (m_startedAt
+        && std::chrono::steady_clock::now() - *m_startedAt >= std::chrono::milliseconds(m_limits.stableUptimeMs))
         m_restarts = 0;
     if (m_restarts >= m_limits.maxRestarts) {
-        qCritical() << m_name << "failed" << m_restarts << "times; not restarting it again";
+        CF_CRITICAL(sessionLog()) << m_name << "failed" << m_restarts << "times; not restarting it again";
         m_gaveUp = true;
         return;
     }
 
     const int delay = m_limits.delayMs + m_restarts * m_limits.backoffMs;
     ++m_restarts;
-    qWarning() << m_name << "exited" << code << status << "- restarting in" << delay << "ms";
-    m_timer->start(delay);
+    CF_WARNING(sessionLog()) << m_name << "exited" << code << (crashed ? "(crashed)" : "(normally)")
+                             << "- restarting in" << delay << "ms";
+    m_timer.start(std::chrono::milliseconds(delay));
 }
 
 void RestartPolicy::stop()
 {
     m_stopped = true;
-    m_timer->stop();
+    m_timer.stop();
 }
 
 bool RestartPolicy::isPending() const
 {
-    return m_timer->isActive();
+    return m_timer.isActive();
 }
 
 bool RestartPolicy::hasGivenUp() const

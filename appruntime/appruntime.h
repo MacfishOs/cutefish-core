@@ -1,77 +1,66 @@
 #ifndef APPRUNTIME_H
 #define APPRUNTIME_H
 
-#include "booster.h"
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
 
-#include <QHash>
-#include <QObject>
-#include <QProcessEnvironment>
-#include <QStringList>
-#include <QTimer>
-
-class ApplicationRegistry;
+#include "base/signal.h"
+#include "base/timer.h"
+#include "common/environment.h"
 
 /**
  * Owns every application start of the session: nothing else in the desktop
  * spawns applications, so the runtime is the single place that knows which
  * application a process belongs to and can therefore quit it again.
  *
- * startProcess() is the only place that actually creates a process; it hands
- * applications that can use it to the Booster first.
+ * startProcess() is the only place that actually creates a process.
  */
-class AppRuntime : public QObject
+class AppRuntime
 {
-    Q_OBJECT
-
 public:
-    explicit AppRuntime(QObject *parent = nullptr);
+    AppRuntime();
 
     // What every launched application gets, apart from its activation token.
-    static QProcessEnvironment applicationEnvironment();
+    static cutefish::core::Environment applicationEnvironment();
 
-public slots:
-    uint launchApplication(const QString &appId, const QStringList &arguments);
-    uint launchApplication(const QString &appId, const QStringList &arguments,
-                           const QString &activationToken);
-    uint launchCommand(const QString &appId, const QStringList &command,
-                       const QString &workingDirectory);
-    uint launchCommand(const QString &appId, const QStringList &command,
-                       const QString &workingDirectory, const QString &activationToken);
-    bool quitApplication(const QString &appId);
+    uint32_t launchApplication(const std::string &appId, const std::vector<std::string> &arguments,
+                               const std::string &activationToken = {});
+    uint32_t launchCommand(const std::string &appId, const std::vector<std::string> &command,
+                           const std::string &workingDirectory, const std::string &activationToken = {});
+    bool quitApplication(const std::string &appId);
     bool quitAll();
-    bool quitByPid(uint pid);
-    bool forceQuitByPid(uint pid);
-    bool isRunning(const QString &appId) const;
-    QStringList runningApplications() const;
-    QList<uint> pidsForApplication(const QString &appId) const;
+    bool quitByPid(uint32_t pid);
+    bool forceQuitByPid(uint32_t pid);
+    bool isRunning(const std::string &appId) const;
+    std::vector<std::string> runningApplications() const;
+    std::vector<uint32_t> pidsForApplication(const std::string &appId) const;
 
-signals:
-    void applicationLaunched(const QString &appId, uint pid);
-    void applicationQuit(const QString &appId, uint pid);
+    cutefish::base::Signal<const std::string &, uint32_t> applicationLaunched;
+    cutefish::base::Signal<const std::string &, uint32_t> applicationQuit;
 
 private:
     struct Instance {
-        QString appId;
+        std::string appId;
         // Kernel start time of the process; a recycled pid has a different one.
-        qulonglong startTime = 0;
+        uint64_t startTime = 0;
     };
 
-    uint startProcess(const QString &appId, const QStringList &command,
-                      const QString &workingDirectory, const QString &activationToken);
-    bool terminate(uint pid);
+    uint32_t startProcess(const std::string &appId, const std::vector<std::string> &command,
+                          const std::string &workingDirectory, const std::string &activationToken);
+    bool terminate(uint32_t pid);
     void reap();
 
-    static bool isAlive(uint pid);
-    static bool isSafeTarget(uint pid);
-    static bool isOwnedByUser(uint pid);
-    static uint parentPid(uint pid);
-    static qulonglong startTime(uint pid);
+    static bool isAlive(uint32_t pid);
+    static bool isSafeTarget(uint32_t pid);
+    static bool isOwnedByUser(uint32_t pid);
+    static uint32_t parentPid(uint32_t pid);
+    static uint64_t startTime(uint32_t pid);
 
-    ApplicationRegistry *m_registry;
-    Booster m_booster;
     // pid -> instance
-    QHash<uint, Instance> m_instances;
-    QTimer m_reaper;
+    std::map<uint32_t, Instance> m_instances;
+    cutefish::base::Timer m_reaper;
 };
 
 #endif // APPRUNTIME_H

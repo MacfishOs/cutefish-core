@@ -1,13 +1,13 @@
 #include "shellconnection.h"
 
+#include "logs.h"
+
+#include <chrono>
 #include <cstring>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <thread>
 #include <unistd.h>
-
-#include <QDebug>
-#include <QElapsedTimer>
-#include <QThread>
 
 // One byte of payload so the ancillary data has a datagram to ride on.
 static bool sendFd(int socket, int fd)
@@ -37,32 +37,25 @@ static bool sendFd(int socket, int fd)
     return sendmsg(socket, &message, MSG_NOSIGNAL) == 1;
 }
 
-ShellConnection::ShellConnection(QObject* parent)
-    : QObject(parent)
-{
-}
-
 ShellConnection::~ShellConnection()
 {
     if (m_fd >= 0)
         close(m_fd);
 }
 
-bool ShellConnection::connectToCompositor(const QString& path, int timeoutMs)
+bool ShellConnection::connectToCompositor(const std::string& path, int timeoutMs)
 {
-    const QByteArray native = path.toUtf8();
     sockaddr_un address {};
     address.sun_family = AF_UNIX;
-    if (static_cast<size_t>(native.size()) >= sizeof(address.sun_path)) {
-        qWarning() << "Compositor control socket path is too long:" << path;
+    if (path.size() >= sizeof(address.sun_path)) {
+        CF_WARNING(sessionLog()) << "Compositor control socket path is too long:" << path;
         return false;
     }
-    std::memcpy(address.sun_path, native.constData(), native.size());
+    std::memcpy(address.sun_path, path.data(), path.size());
 
     // The compositor creates the socket while it is starting; the ready
     // notification only says the Wayland display is up.
-    QElapsedTimer timer;
-    timer.start();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     while (true) {
         const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd < 0)
@@ -74,11 +67,11 @@ bool ShellConnection::connectToCompositor(const QString& path, int timeoutMs)
         }
         close(fd);
 
-        if (timer.elapsed() >= timeoutMs) {
-            qWarning() << "Cannot reach the compositor control socket" << path;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            CF_WARNING(sessionLog()) << "Cannot reach the compositor control socket" << path;
             return false;
         }
-        QThread::msleep(50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     return true;
@@ -91,14 +84,14 @@ int ShellConnection::createShellConnection()
 
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) != 0) {
-        qWarning() << "Cannot create the shell Wayland socketpair";
+        CF_WARNING(sessionLog()) << "Cannot create the shell Wayland socketpair";
         return -1;
     }
 
     const bool sent = sendFd(m_fd, pair[0]);
     close(pair[0]);
     if (!sent) {
-        qWarning() << "Cannot pass the shell connection to the compositor";
+        CF_WARNING(sessionLog()) << "Cannot pass the shell connection to the compositor";
         close(pair[1]);
         return -1;
     }

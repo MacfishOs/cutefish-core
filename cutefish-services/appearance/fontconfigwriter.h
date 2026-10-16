@@ -1,20 +1,28 @@
 #ifndef FONTCONFIGWRITER_H
 #define FONTCONFIGWRITER_H
 
-#include <QString>
+#include <string>
+#include <vector>
 
 struct FontConfig
 {
-    QString family;
-    QString fixedFamily;
+    std::string family;
+    std::string fixedFamily;
     bool antialias = true;
-    QString hintStyle = QStringLiteral("hintfull");
-    QString rgba = QStringLiteral("rgb");
+    std::string hintStyle = "hintfull";
+    std::string rgba = "rgb";
     // Last resort for Han, kana and hangul the families above lack.
-    QString cjkFamily = QStringLiteral("Noto Sans CJK SC");
+    std::string cjkFamily = "Noto Sans CJK SC";
 };
 
 // Writes ~/.config/fontconfig/conf.d/99-cutefish.conf, falling back to installed families.
 void writeFontConfig(const FontConfig &config);
+
+// The UI font a language starts with; empty when it has none of its own.
+std::string fontForLocale(const std::string &localeName);
+
+// The first Chinese, Japanese or Korean language decides the forms of Han text
+// that carries no language of its own.
+std::string cjkFontForLanguages(const std::vector<std::string> &languages);
 
 #endif

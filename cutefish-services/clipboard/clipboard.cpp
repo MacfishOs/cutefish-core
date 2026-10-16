@@ -1,55 +1,44 @@
 #include "clipboard.h"
 
-#include <QGuiApplication>
-#include <QMimeData>
-#include <QVariant>
+#include <algorithm>
 
 #include "waylandclipboard.h"
 
-Clipboard::Clipboard(QObject* parent)
-    : QObject(parent)
-    , m_qtClipboard(QGuiApplication::clipboard())
-{
-    if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
-        m_waylandClipboard = new WaylandClipboard(this);
-        connect(m_waylandClipboard, &WaylandClipboard::dataChanged, this,
-                &Clipboard::onDataChanged);
-        connect(m_waylandClipboard, &WaylandClipboard::availabilityChanged, this,
-                &Clipboard::onDataChanged);
-    }
+static const char kMarker[] = "application/x-cutefish-clipboard";
 
-    if (m_qtClipboard) {
-        connect(m_qtClipboard, &QClipboard::dataChanged, this, &Clipboard::onDataChanged);
-    }
+Clipboard::Clipboard()
+    : m_waylandClipboard(std::make_unique<WaylandClipboard>())
+{
+    m_subscriptions.push_back(m_waylandClipboard->dataChanged.connect([this] {
+        onDataChanged();
+    }));
+    m_subscriptions.push_back(m_waylandClipboard->availabilityChanged.connect([this] {
+        onDataChanged();
+    }));
 }
+
+Clipboard::~Clipboard() = default;
 
 void Clipboard::onDataChanged()
 {
-    const bool useWaylandClipboard = m_waylandClipboard && m_waylandClipboard->isAvailable();
-    const QMimeData* mimeData = useWaylandClipboard
-        ? m_waylandClipboard->mimeData()
-        : (m_qtClipboard ? m_qtClipboard->mimeData(QClipboard::Clipboard) : nullptr);
-
-    if (!mimeData || mimeData->formats().isEmpty())
+    if (!m_waylandClipboard->isAvailable())
+        return;
+    const ClipboardData *data = m_waylandClipboard->data();
+    if (!data || data->empty())
         return;
 
-    if (mimeData->hasFormat(QStringLiteral("application/x-cutefish-clipboard")) &&
-        mimeData->data(QStringLiteral("application/x-cutefish-clipboard")) ==
-            QByteArrayLiteral("1"))
+    const auto marker = std::find_if(data->begin(), data->end(), [](const auto &entry) {
+        return entry.first == kMarker;
+    });
+    if (marker != data->end() && marker->second == "1")
         return;
 
-    QMimeData* newMimeData = new QMimeData;
-    for (const QString& format : mimeData->formats())
-        newMimeData->setData(format, mimeData->data(format));
-    if (!useWaylandClipboard && mimeData->hasImage())
-        newMimeData->setImageData(mimeData->imageData());
-
-    newMimeData->setData(QStringLiteral("application/x-cutefish-clipboard"),
-                         QByteArrayLiteral("1"));
-
-    if (useWaylandClipboard) {
-        m_waylandClipboard->setMimeData(newMimeData);
-    } else {
-        m_qtClipboard->setMimeData(newMimeData, QClipboard::Clipboard);
+    ClipboardData copy;
+    for (const auto &entry : *data) {
+        if (entry.first != kMarker)
+            copy.push_back(entry);
     }
+    copy.emplace_back(kMarker, "1");
+
+    m_waylandClipboard->setData(std::move(copy));
 }

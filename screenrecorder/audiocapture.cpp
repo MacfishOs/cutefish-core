@@ -13,8 +13,7 @@ const pw_stream_events AudioCapture::s_events = [] {
     return events;
 }();
 
-AudioCapture::AudioCapture(QObject *parent)
-    : QObject(parent)
+AudioCapture::AudioCapture()
 {
     pw_init(nullptr, nullptr);
 }
@@ -25,11 +24,11 @@ AudioCapture::~AudioCapture()
     pw_deinit();
 }
 
-bool AudioCapture::start(const QString &target, QString *error)
+bool AudioCapture::start(const std::string &target, std::string *error)
 {
     m_loop = pw_thread_loop_new("cutefish-recorder-audio", nullptr);
     if (!m_loop) {
-        *error = QStringLiteral("cannot start a PipeWire loop");
+        *error = "cannot start a PipeWire loop";
         return false;
     }
 
@@ -37,15 +36,15 @@ bool AudioCapture::start(const QString &target, QString *error)
             PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY, "Capture", PW_KEY_MEDIA_ROLE,
             "Production", PW_KEY_APP_NAME, "Screen Recording", PW_KEY_NODE_NAME,
             "cutefish-screenrecorder", nullptr);
-    if (!target.isEmpty())
-        pw_properties_set(properties, PW_KEY_TARGET_OBJECT, target.toUtf8().constData());
+    if (!target.empty())
+        pw_properties_set(properties, PW_KEY_TARGET_OBJECT, target.c_str());
 
     pw_thread_loop_lock(m_loop);
     m_stream = pw_stream_new_simple(pw_thread_loop_get_loop(m_loop), "Screen Recording",
                                     properties, &s_events, this);
     if (!m_stream) {
         pw_thread_loop_unlock(m_loop);
-        *error = QStringLiteral("cannot create a PipeWire stream");
+        *error = "cannot create a PipeWire stream";
         return false;
     }
 
@@ -64,7 +63,7 @@ bool AudioCapture::start(const QString &target, QString *error)
             params, 1);
     if (result < 0 || pw_thread_loop_start(m_loop) < 0) {
         pw_thread_loop_unlock(m_loop);
-        *error = QStringLiteral("cannot connect to the microphone");
+        *error = "cannot connect to the microphone";
         return false;
     }
     pw_thread_loop_unlock(m_loop);
@@ -92,13 +91,13 @@ void AudioCapture::process()
     if (!buffer)
         return;
     const spa_data &data = buffer->buffer->datas[0];
-    if (data.data && data.chunk && data.chunk->size > 0) {
-        const auto *bytes = static_cast<const char *>(data.data) + data.chunk->offset;
-        const qsizetype size = data.chunk->size;
-        const qint64 frames = size / qsizetype(sizeof(float) * Encoder::kChannels);
+    if (data.data && data.chunk && data.chunk->size > 0 && onSamples) {
+        const auto *samples = reinterpret_cast<const float *>(static_cast<const char *>(data.data)
+                                                              + data.chunk->offset);
+        const int64_t frames = data.chunk->size / int64_t(sizeof(float) * Encoder::kChannels);
         // The buffer is complete now; its first sample is that much older.
-        const qint64 capturedNs = monotonicNs() - frames * 1000000000 / Encoder::kSampleRate;
-        emit samples(QByteArray(bytes, size), capturedNs);
+        const int64_t capturedNs = monotonicNs() - frames * 1000000000 / Encoder::kSampleRate;
+        onSamples(std::vector<float>(samples, samples + frames * Encoder::kChannels), capturedNs);
     }
     pw_stream_queue_buffer(m_stream, buffer);
 }

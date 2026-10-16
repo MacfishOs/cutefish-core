@@ -1,97 +1,128 @@
+#include <cstdlib>
+#include <string>
 #include <unistd.h>
+#include <vector>
 
-#include <QCoreApplication>
-#include <QSignalSpy>
-#include <QTest>
+#include <gtest/gtest.h>
 
 #include "compositorprocess.h"
+#include "testutil.h"
 
-class LifecycleTest : public QObject
+using cutefish::base::EventLoop;
+using sessiontest::runUntil;
+
+static std::string selfPath()
 {
-    Q_OBJECT
-private slots:
+    char path[4096];
+    const ssize_t length = ::readlink("/proc/self/exe", path, sizeof(path) - 1);
+    return length > 0 ? std::string(path, size_t(length)) : std::string();
+}
 
-    void readyAndStop()
-    {
-        qputenv("SESSION_TEST_CHILD", "ready");
-        CompositorProcess process;
-        QSignalSpy ready(&process, &CompositorProcess::ready);
-        QSignalSpy failed(&process, &CompositorProcess::failed);
-        QSignalSpy exited(&process, &CompositorProcess::exited);
-        process.start(QCoreApplication::applicationFilePath(), "test-socket", "test-control");
-        QTRY_COMPARE(ready.count(), 1);
-        QVERIFY(process.isReady());
-        process.stop();
-        QVERIFY(!process.isReady());
-        QCOMPARE(failed.count(), 0);
-        QCOMPARE(exited.count(), 0);
-    }
-
-    void forwardsXwaylandReadinessPath()
-    {
-        qputenv("SESSION_TEST_CHILD", "xwayland");
-        CompositorProcess process;
-        QSignalSpy ready(&process, &CompositorProcess::ready);
-        process.start(QCoreApplication::applicationFilePath(), "test-socket", "test-control", 1000,
-                      "/test-ready.json");
-        QTRY_COMPARE(ready.count(), 1);
-        process.stop();
-    }
-
-    void startupFailure()
-    {
-        qputenv("SESSION_TEST_CHILD", "exit");
-        CompositorProcess process;
-        QSignalSpy failed(&process, &CompositorProcess::failed);
-        process.start(QCoreApplication::applicationFilePath(), "test-socket", "test-control");
-        QTRY_COMPARE(failed.count(), 1);
-        QVERIFY(!process.isReady());
-    }
-
-    void timeout()
-    {
-        qputenv("SESSION_TEST_CHILD", "hang");
-        CompositorProcess process;
-        QSignalSpy failed(&process, &CompositorProcess::failed);
-        process.start(QCoreApplication::applicationFilePath(), "test-socket", "test-control", 30);
-        QTRY_COMPARE(failed.count(), 1);
-        QVERIFY(!process.isReady());
-    }
-
-    void missingExecutable()
-    {
-        CompositorProcess process;
-        QSignalSpy failed(&process, &CompositorProcess::failed);
-        process.start("/does-not-exist/cutefish-compositor", "test-socket", "test-control");
-        QCOMPARE(failed.count(), 1);
-    }
+struct Counts
+{
+    int ready = 0;
+    int failed = 0;
+    int exited = 0;
 };
+
+static void track(CompositorProcess& process, Counts& counts)
+{
+    process.onReady = [&counts] { ++counts.ready; };
+    process.onFailed = [&counts](const std::string&) { ++counts.failed; };
+    process.onExited = [&counts](int) { ++counts.exited; };
+}
+
+TEST(SessionLifecycle, readyAndStop)
+{
+    EventLoop loop;
+    setenv("SESSION_TEST_CHILD", "ready", 1);
+    CompositorProcess process;
+    Counts counts;
+    track(process, counts);
+    process.start(selfPath(), "test-socket", "test-control");
+    ASSERT_TRUE(runUntil(loop, [&] { return counts.ready == 1; }));
+    EXPECT_TRUE(process.isReady());
+    process.stop();
+    EXPECT_FALSE(process.isReady());
+    EXPECT_EQ(counts.failed, 0);
+    EXPECT_EQ(counts.exited, 0);
+}
+
+TEST(SessionLifecycle, forwardsXwaylandReadinessPath)
+{
+    EventLoop loop;
+    setenv("SESSION_TEST_CHILD", "xwayland", 1);
+    CompositorProcess process;
+    Counts counts;
+    track(process, counts);
+    process.start(selfPath(), "test-socket", "test-control", 1000, "/test-ready.json");
+    ASSERT_TRUE(runUntil(loop, [&] { return counts.ready == 1; }));
+    process.stop();
+}
+
+TEST(SessionLifecycle, startupFailure)
+{
+    EventLoop loop;
+    setenv("SESSION_TEST_CHILD", "exit", 1);
+    CompositorProcess process;
+    Counts counts;
+    track(process, counts);
+    process.start(selfPath(), "test-socket", "test-control");
+    ASSERT_TRUE(runUntil(loop, [&] { return counts.failed == 1; }));
+    EXPECT_FALSE(process.isReady());
+}
+
+TEST(SessionLifecycle, timeout)
+{
+    EventLoop loop;
+    setenv("SESSION_TEST_CHILD", "hang", 1);
+    CompositorProcess process;
+    Counts counts;
+    track(process, counts);
+    process.start(selfPath(), "test-socket", "test-control", 30);
+    ASSERT_TRUE(runUntil(loop, [&] { return counts.failed == 1; }));
+    EXPECT_FALSE(process.isReady());
+}
+
+TEST(SessionLifecycle, missingExecutable)
+{
+    EventLoop loop;
+    CompositorProcess process;
+    Counts counts;
+    track(process, counts);
+    process.start("/does-not-exist/cutefish-compositor", "test-socket", "test-control");
+    EXPECT_EQ(counts.failed, 1);
+}
+
+// Runs as the compositor: checks its command line and confirms startup.
+static int runChild(const std::string& mode, int argc, char** argv)
+{
+    if (mode == "exit")
+        return 1;
+    // --socket <name> --ready-fd <fd> --shell-control-socket <path>
+    const std::vector<std::string> arguments(argv, argv + argc);
+    if (arguments.size() != (mode == "xwayland" ? 9u : 7u) || arguments.at(2) != "test-socket"
+        || arguments.at(6) != "test-control")
+        return 2;
+    if (mode == "xwayland"
+        && (arguments.at(7) != "--xwayland-ready-file" || arguments.at(8) != "/test-ready.json"))
+        return 4;
+    if (mode == "ready" || mode == "xwayland") {
+        const int fd = std::atoi(arguments.at(4).c_str());
+        if (write(fd, "R", 1) != 1)
+            return 3;
+        close(fd);
+    }
+    // Until the session ends it.
+    for (;;)
+        pause();
+}
 
 int main(int argc, char** argv)
 {
-    QCoreApplication app(argc, argv);
-    const auto mode = qgetenv("SESSION_TEST_CHILD");
-    if (!mode.isEmpty()) {
-        if (mode == "exit")
-            return 1;
-        // --socket <name> --ready-fd <fd> --shell-control-socket <path>
-        if (app.arguments().size() != (mode == "xwayland" ? 9 : 7) ||
-            app.arguments().at(2) != "test-socket" || app.arguments().at(6) != "test-control")
-            return 2;
-        if (mode == "xwayland" &&
-            (app.arguments().at(7) != "--xwayland-ready-file" ||
-             app.arguments().at(8) != "/test-ready.json"))
-            return 4;
-        if (mode == "ready" || mode == "xwayland") {
-            const int fd = app.arguments().at(4).toInt();
-            if (write(fd, "R", 1) != 1)
-                return 3;
-            close(fd);
-        }
-        return app.exec();
-    }
-    LifecycleTest test;
-    return QTest::qExec(&test, argc, argv);
+    const char* mode = std::getenv("SESSION_TEST_CHILD");
+    if (mode && *mode)
+        return runChild(mode, argc, argv);
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }
-
-#include "lifecycle_test.moc"

@@ -1,5 +1,0 @@
-<RCC>
-    <qresource prefix="/crash">
-        <file>CrashDialog.qml</file>
-    </qresource>
-</RCC>

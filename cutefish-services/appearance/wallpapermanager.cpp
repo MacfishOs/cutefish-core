@@ -1,153 +1,176 @@
 #include "wallpapermanager.h"
 
-#include <QCryptographicHash>
-#include <QDir>
-#include <QSet>
-#include <QDirIterator>
-#include <QFile>
-#include <QFileInfo>
-#include <QRunnable>
-#include <QSaveFile>
-#include <QSettings>
-#include <QStandardPaths>
-#include <QThreadPool>
+#include <algorithm>
+#include <filesystem>
+#include <set>
 
-static QStringList systemWallpaperDirectories()
+#include "base/file.h"
+#include "base/hash.h"
+#include "base/paths.h"
+#include "base/strings.h"
+
+using namespace cutefish::base;
+using namespace cutefish::base::strings;
+namespace fs = std::filesystem;
+
+// An absolute path, "." and ".." resolved by name, no trailing separator.
+static std::string absolutePath(const std::string &path)
 {
-    const QString userDataPath = QDir::cleanPath(
-            QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+    std::error_code error;
+    std::string result = fs::absolute(path, error).lexically_normal().string();
+    while (result.size() > 1 && result.back() == '/')
+        result.pop_back();
+    return result;
+}
 
-    QStringList directories;
-    const QStringList dataPaths =
-            QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
-    for (const QString &dataPath : dataPaths) {
-        if (QDir::cleanPath(dataPath) == userDataPath)
-            continue;
+static bool isFile(const std::string &path)
+{
+    std::error_code error;
+    return fs::is_regular_file(path, error);
+}
 
-        directories.append(QDir(dataPath).absoluteFilePath(
-                QStringLiteral("backgrounds/cutefishos")));
-    }
+static bool isDirectory(const std::string &path)
+{
+    std::error_code error;
+    return fs::is_directory(path, error);
+}
 
+static bool exists(const std::string &path)
+{
+    std::error_code error;
+    return fs::exists(path, error);
+}
+
+static void removeRecursively(const std::string &path)
+{
+    std::error_code error;
+    fs::remove_all(path, error);
+}
+
+static bool contains(const std::vector<std::string> &list, const std::string &value)
+{
+    return std::find(list.begin(), list.end(), value) != list.end();
+}
+
+static void removeAll(std::vector<std::string> &list, const std::string &value)
+{
+    std::erase(list, value);
+}
+
+static std::vector<std::string> systemWallpaperDirectories()
+{
+    std::vector<std::string> directories;
+    for (const std::string &dataPath : paths::dataDirectories())
+        directories.push_back(absolutePath(dataPath) + "/backgrounds/cutefishos");
     return directories;
 }
 
-static bool isSystemWallpaper(const QString &path)
+static bool isSystemWallpaper(const std::string &path)
 {
-    const QString wallpaperPath = QFileInfo(path).absoluteFilePath();
-    const QStringList directories = systemWallpaperDirectories();
-    for (const QString &directory : directories) {
-        if (wallpaperPath.startsWith(directory + QDir::separator()))
+    const std::string wallpaperPath = absolutePath(path);
+    for (const std::string &directory : systemWallpaperDirectories()) {
+        if (startsWith(wallpaperPath, directory + '/'))
             return true;
     }
 
     return false;
 }
 
-static QString userWallpaperDirectory()
+static std::string userWallpaperDirectory()
 {
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
-            .absoluteFilePath(QStringLiteral("backgrounds/cutefish/user"));
+    return paths::dataHome() + "/backgrounds/cutefish/user";
 }
 
-static bool isManagedUserWallpaper(const QString &path)
+static bool isManagedUserWallpaper(const std::string &path)
 {
-    return QFileInfo(path).absoluteFilePath().startsWith(
-            userWallpaperDirectory() + QDir::separator());
+    return startsWith(absolutePath(path), userWallpaperDirectory() + '/');
 }
 
 // A folder the user added is mirrored here, one directory per folder: the
 // originals may be moved or deleted, and the wallpapers have to survive that.
-static QString wallpaperFolderRoot()
+static std::string wallpaperFolderRoot()
 {
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
-            .absoluteFilePath(QStringLiteral("backgrounds/cutefish/folders"));
+    return paths::dataHome() + "/backgrounds/cutefish/folders";
 }
 
-static QString wallpaperFolderStore(const QString &folder)
+static std::string wallpaperFolderStore(const std::string &folder)
 {
-    const QByteArray folderHash =
-            QCryptographicHash::hash(QDir(folder).absolutePath().toUtf8(),
-                                     QCryptographicHash::Sha256)
-                    .toHex()
-                    .left(16);
-    return QDir(wallpaperFolderRoot()).absoluteFilePath(QString::fromLatin1(folderHash));
+    const std::string folderHash =
+            CryptographicHash::hashHex(absolutePath(folder), CryptographicHash::Algorithm::Sha256).substr(0, 16);
+    return wallpaperFolderRoot() + '/' + folderHash;
 }
 
-static bool isManagedFolderWallpaper(const QString &path)
+static bool isManagedFolderWallpaper(const std::string &path)
 {
-    return QFileInfo(path).absoluteFilePath().startsWith(wallpaperFolderRoot()
-                                                         + QDir::separator());
+    return startsWith(absolutePath(path), wallpaperFolderRoot() + '/');
 }
 
-static QStringList imagesIn(const QString &directory)
+static std::vector<std::string> imagesIn(const std::string &directory)
 {
-    static const QStringList nameFilters = {
-        QStringLiteral("*.jpg"),  QStringLiteral("*.jpeg"), QStringLiteral("*.png"),
-        QStringLiteral("*.webp"), QStringLiteral("*.bmp"),  QStringLiteral("*.tif"),
-        QStringLiteral("*.tiff"), QStringLiteral("*.avif"),
-    };
+    static const char *const suffixes[] = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".avif"};
 
-    QStringList result;
-    QDirIterator iterator(directory, nameFilters, QDir::Files, QDirIterator::Subdirectories);
-    while (iterator.hasNext())
-        result.append(iterator.next());
+    std::vector<std::string> result;
+    std::error_code error;
+    for (fs::recursive_directory_iterator it(directory, error), end; !error && it != end; it.increment(error)) {
+        std::error_code typeError;
+        if (!it->is_regular_file(typeError))
+            continue;
+        const std::string name = it->path().filename().string();
+        const bool image = std::any_of(std::begin(suffixes), std::end(suffixes), [&name](const char *suffix) {
+            return name.size() > std::string_view(suffix).size()
+                    && endsWith(name, suffix, CaseSensitivity::Insensitive);
+        });
+        if (image)
+            result.push_back(it->path().string());
+    }
 
     return result;
 }
 
 // The copy's name carries a hash of the source path, so the same source always
 // maps to the same copy and a renamed one to a new copy.
-static QString mirroredFileName(const QFileInfo &sourceInfo)
+static std::string mirroredFileName(const std::string &source)
 {
-    const QByteArray pathHash =
-            QCryptographicHash::hash(sourceInfo.absoluteFilePath().toUtf8(),
-                                     QCryptographicHash::Sha256)
-                    .toHex()
-                    .left(12);
-    QString fileName = sourceInfo.completeBaseName() + QLatin1Char('-')
-            + QString::fromLatin1(pathHash);
-    if (!sourceInfo.suffix().isEmpty())
-        fileName += QLatin1Char('.') + sourceInfo.suffix().toLower();
+    const std::string sourcePath = absolutePath(source);
+    const std::string pathHash =
+            CryptographicHash::hashHex(sourcePath, CryptographicHash::Algorithm::Sha256).substr(0, 12);
+    const std::string name = fs::path(sourcePath).filename().string();
+    const size_t dot = name.rfind('.');
+    const std::string baseName = dot == std::string::npos ? name : name.substr(0, dot);
+    const std::string suffix = dot == std::string::npos ? std::string() : name.substr(dot + 1);
+    std::string fileName = baseName + '-' + pathHash;
+    if (!suffix.empty())
+        fileName += '.' + toAsciiLower(suffix);
     return fileName;
 }
 
-static QString copyWallpaperInto(const QString &path, const QString &destinationDirectory)
+static std::string copyWallpaperInto(const std::string &path, const std::string &destinationDirectory)
 {
-    const QFileInfo sourceInfo(path);
-    if (!sourceInfo.isFile())
+    if (!isFile(path))
         return path;
 
-    const QString sourcePath = sourceInfo.absoluteFilePath();
-    if (sourcePath.startsWith(destinationDirectory + QDir::separator()))
+    const std::string sourcePath = absolutePath(path);
+    if (startsWith(sourcePath, destinationDirectory + '/'))
         return sourcePath;
 
-    if (!QDir().mkpath(destinationDirectory))
+    std::error_code error;
+    fs::create_directories(destinationDirectory, error);
+    if (!isDirectory(destinationDirectory))
         return path;
 
-    const QString fileName = mirroredFileName(sourceInfo);
-
-    const QString destinationPath = QDir(destinationDirectory).absoluteFilePath(fileName);
-    if (QFileInfo::exists(destinationPath))
+    const std::string destinationPath = destinationDirectory + '/' + mirroredFileName(sourcePath);
+    if (exists(destinationPath))
         return destinationPath;
 
-    QFile source(sourcePath);
-    QSaveFile destination(destinationPath);
-    if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::WriteOnly))
+    const std::optional<std::string> contents = file::read(sourcePath);
+    if (!contents)
         return path;
 
-    while (!source.atEnd()) {
-        const QByteArray data = source.read(1024 * 1024);
-        if (data.isEmpty() && source.error() != QFileDevice::NoError)
-            return path;
-        if (destination.write(data) != data.size())
-            return path;
-    }
-
-    return destination.commit() ? destinationPath : path;
+    return file::writeAtomically(destinationPath, *contents) ? destinationPath : path;
 }
 
 // A wallpaper that ships with the system is already where it belongs.
-static QString importUserWallpaper(const QString &path)
+static std::string importUserWallpaper(const std::string &path)
 {
     if (isSystemWallpaper(path))
         return path;
@@ -155,47 +178,56 @@ static QString importUserWallpaper(const QString &path)
     return copyWallpaperInto(path, userWallpaperDirectory());
 }
 
-WallpaperManager::WallpaperManager(QSettings *settings, QObject *parent)
-    : QObject(parent)
-    , m_settings(settings)
+WallpaperManager::WallpaperManager(Settings &settings)
+    : m_settings(settings)
 {
     m_backgroundVisible = true;
-    m_wallpaperPath =
-            m_settings->value("Wallpaper", "/usr/share/backgrounds/cutefishos/default.jpg")
-                    .toString();
+    m_wallpaperPath = m_settings.stringValue("Appearance/Wallpaper", "/usr/share/backgrounds/cutefishos/default.jpg");
     // A folder stays in the list even when its source is gone: what the list
     // shows is the copy taken when the folder was added.
-    const QStringList savedWallpaperFolders =
-            m_settings->value("WallpaperFolders").toStringList();
-    for (const QString &folder : savedWallpaperFolders) {
-        const QString folderPath = QDir(folder).absolutePath();
-        if (!folderPath.isEmpty() && !m_wallpaperFolders.contains(folderPath))
-            m_wallpaperFolders.append(folderPath);
+    for (const std::string &folder : m_settings.stringListValue("Appearance/WallpaperFolders")) {
+        if (folder.empty())
+            continue;
+        const std::string folderPath = absolutePath(folder);
+        if (!folderPath.empty() && !contains(m_wallpaperFolders, folderPath))
+            m_wallpaperFolders.push_back(folderPath);
     }
-    m_settings->setValue("WallpaperFolders", m_wallpaperFolders);
+    m_settings.setValue("Appearance/WallpaperFolders", m_wallpaperFolders);
 
-    const QStringList savedUserWallpapers = m_settings->value("UserWallpapers").toStringList();
-    for (const QString &path : savedUserWallpapers) {
-        if (!QFileInfo::exists(path))
+    for (const std::string &path : m_settings.stringListValue("Appearance/UserWallpapers")) {
+        if (!exists(path))
             continue;
 
-        const QString importedPath = importUserWallpaper(path);
+        const std::string importedPath = importUserWallpaper(path);
         if (isManagedUserWallpaper(importedPath))
-            m_userWallpapers.append(importedPath);
+            m_userWallpapers.push_back(importedPath);
     }
-    if (QFileInfo::exists(m_wallpaperPath) && !isSystemWallpaper(m_wallpaperPath)
+    if (exists(m_wallpaperPath) && !isSystemWallpaper(m_wallpaperPath)
         && !isManagedFolderWallpaper(m_wallpaperPath)) {
         m_wallpaperPath = importUserWallpaper(m_wallpaperPath);
-        m_settings->setValue("Wallpaper", m_wallpaperPath);
-        if (isManagedUserWallpaper(m_wallpaperPath)
-            && !m_userWallpapers.contains(m_wallpaperPath)) {
-            m_userWallpapers.prepend(m_wallpaperPath);
-        }
+        m_settings.setValue("Appearance/Wallpaper", m_wallpaperPath);
+        if (isManagedUserWallpaper(m_wallpaperPath) && !contains(m_userWallpapers, m_wallpaperPath))
+            m_userWallpapers.insert(m_userWallpapers.begin(), m_wallpaperPath);
     }
-    m_userWallpapers.removeDuplicates();
-    m_settings->setValue("UserWallpapers", m_userWallpapers);
-    m_backgroundType = m_settings->value("BackgroundType", 0).toInt();
-    m_backgroundColor = m_settings->value("BackgroundColor", "#2B8ADA").toString();
+    std::vector<std::string> unique;
+    for (const std::string &path : m_userWallpapers) {
+        if (!contains(unique, path))
+            unique.push_back(path);
+    }
+    m_userWallpapers = std::move(unique);
+    m_settings.setValue("Appearance/UserWallpapers", m_userWallpapers);
+    m_settings.sync();
+    m_backgroundType = int(m_settings.intValue("Appearance/BackgroundType", 0));
+    m_backgroundColor = m_settings.stringValue("Appearance/BackgroundColor", "#2B8ADA");
+}
+
+WallpaperManager::~WallpaperManager() = default;
+
+template<typename T>
+void WallpaperManager::write(const std::string &key, const T &value)
+{
+    m_settings.setValue("Appearance/" + key, value);
+    m_settings.sync();
 }
 
 bool WallpaperManager::backgroundVisible() const
@@ -209,187 +241,184 @@ void WallpaperManager::setBackgroundVisible(bool value)
         return;
 
     m_backgroundVisible = value;
-    emit backgroundVisibleChanged();
+    backgroundVisibleChanged.emit();
 }
 
-QString WallpaperManager::wallpaper() const
+std::string WallpaperManager::wallpaper() const
 {
     return m_wallpaperPath;
 }
 
-void WallpaperManager::setWallpaper(const QString &path)
+void WallpaperManager::setWallpaper(const std::string &path)
 {
-    const QString wallpaperPath = isManagedFolderWallpaper(path)
-            ? QFileInfo(path).absoluteFilePath()
-            : importUserWallpaper(path);
-    if (QFileInfo::exists(wallpaperPath) && isManagedUserWallpaper(wallpaperPath)
-        && !m_userWallpapers.contains(wallpaperPath)) {
-        m_userWallpapers.prepend(wallpaperPath);
-        m_settings->setValue("UserWallpapers", m_userWallpapers);
-        emit userWallpapersChanged();
+    const std::string wallpaperPath =
+            isManagedFolderWallpaper(path) ? absolutePath(path) : importUserWallpaper(path);
+    if (exists(wallpaperPath) && isManagedUserWallpaper(wallpaperPath)
+        && !contains(m_userWallpapers, wallpaperPath)) {
+        m_userWallpapers.insert(m_userWallpapers.begin(), wallpaperPath);
+        write("UserWallpapers", m_userWallpapers);
+        userWallpapersChanged.emit();
     }
 
     if (m_wallpaperPath != wallpaperPath) {
         m_wallpaperPath = wallpaperPath;
-        m_settings->setValue("Wallpaper", wallpaperPath);
-        emit wallpaperChanged(wallpaperPath);
+        write("Wallpaper", wallpaperPath);
+        wallpaperChanged.emit(wallpaperPath);
     }
 }
 
-QStringList WallpaperManager::userWallpapers() const
+std::vector<std::string> WallpaperManager::userWallpapers() const
 {
     return m_userWallpapers;
 }
 
-void WallpaperManager::removeUserWallpaper(const QString &path)
+void WallpaperManager::removeUserWallpaper(const std::string &path)
 {
-    if (!isManagedUserWallpaper(path) || !m_userWallpapers.contains(path)) {
-        return;
-    }
-
-    if (QFileInfo::exists(path) && !QFile::remove(path))
+    if (!isManagedUserWallpaper(path) || !contains(m_userWallpapers, path))
         return;
 
-    m_userWallpapers.removeAll(path);
-    m_settings->setValue("UserWallpapers", m_userWallpapers);
+    std::error_code error;
+    if (exists(path) && !fs::remove(path, error))
+        return;
+
+    removeAll(m_userWallpapers, path);
+    write("UserWallpapers", m_userWallpapers);
 
     if (path != m_wallpaperPath) {
-        emit userWallpapersChanged();
+        userWallpapersChanged.emit();
         return;
     }
 
-    QString replacement;
-    for (const QString &candidate : m_userWallpapers) {
-        if (QFileInfo::exists(candidate)) {
+    std::string replacement;
+    for (const std::string &candidate : m_userWallpapers) {
+        if (exists(candidate)) {
             replacement = candidate;
             break;
         }
     }
 
-    if (replacement.isEmpty()) {
-        const QStringList directories = systemWallpaperDirectories();
-        for (const QString &directory : directories) {
-            const QStringList wallpapers = imagesIn(directory);
-            if (!wallpapers.isEmpty()) {
-                replacement = wallpapers.first();
+    if (replacement.empty()) {
+        for (const std::string &directory : systemWallpaperDirectories()) {
+            const std::vector<std::string> wallpapers = imagesIn(directory);
+            if (!wallpapers.empty()) {
+                replacement = wallpapers.front();
                 break;
             }
         }
     }
 
     m_wallpaperPath = replacement;
-    m_settings->setValue("Wallpaper", replacement);
-    emit wallpaperChanged(replacement);
+    write("Wallpaper", replacement);
+    wallpaperChanged.emit(replacement);
 
-    if (replacement.isEmpty())
+    if (replacement.empty())
         setBackgroundType(1);
 
-    emit userWallpapersChanged();
+    userWallpapersChanged.emit();
 }
 
-QStringList WallpaperManager::wallpaperFolders() const
+std::vector<std::string> WallpaperManager::wallpaperFolders() const
 {
     return m_wallpaperFolders;
 }
 
-void WallpaperManager::addWallpaperFolder(const QString &path)
+void WallpaperManager::addWallpaperFolder(const std::string &path)
 {
-    const QString folderPath = QDir(path).absolutePath();
-    if (!QFileInfo(folderPath).isDir() || m_wallpaperFolders.contains(folderPath))
+    const std::string folderPath = absolutePath(path);
+    if (!isDirectory(folderPath) || contains(m_wallpaperFolders, folderPath))
         return;
 
-    m_wallpaperFolders.append(folderPath);
-    m_settings->setValue("WallpaperFolders", m_wallpaperFolders);
+    m_wallpaperFolders.push_back(folderPath);
+    write("WallpaperFolders", m_wallpaperFolders);
     syncWallpaperFolder(folderPath);
-    emit wallpaperFoldersChanged();
+    wallpaperFoldersChanged.emit();
 }
 
-void WallpaperManager::removeWallpaperFolder(const QString &path)
+void WallpaperManager::removeWallpaperFolder(const std::string &path)
 {
-    const QString folderPath = QDir(path).absolutePath();
-    if (!m_wallpaperFolders.contains(folderPath))
+    const std::string folderPath = absolutePath(path);
+    if (!contains(m_wallpaperFolders, folderPath))
         return;
 
     // The folder's copies go with it, so a wallpaper still in use is kept by
     // moving it over to the user's own wallpapers first.
-    const QString store = wallpaperFolderStore(folderPath);
-    if (m_wallpaperPath.startsWith(store + QDir::separator())) {
-        const QString importedPath = importUserWallpaper(m_wallpaperPath);
+    const std::string store = wallpaperFolderStore(folderPath);
+    if (startsWith(m_wallpaperPath, store + '/')) {
+        const std::string importedPath = importUserWallpaper(m_wallpaperPath);
         if (isManagedUserWallpaper(importedPath)) {
             m_wallpaperPath = importedPath;
-            m_settings->setValue("Wallpaper", importedPath);
-            if (!m_userWallpapers.contains(importedPath)) {
-                m_userWallpapers.prepend(importedPath);
-                m_settings->setValue("UserWallpapers", m_userWallpapers);
-                emit userWallpapersChanged();
+            write("Wallpaper", importedPath);
+            if (!contains(m_userWallpapers, importedPath)) {
+                m_userWallpapers.insert(m_userWallpapers.begin(), importedPath);
+                write("UserWallpapers", m_userWallpapers);
+                userWallpapersChanged.emit();
             }
-            emit wallpaperChanged(importedPath);
+            wallpaperChanged.emit(importedPath);
         }
     }
 
-    QDir(store).removeRecursively();
-    m_wallpaperFolders.removeAll(folderPath);
-    m_settings->setValue("WallpaperFolders", m_wallpaperFolders);
-    emit wallpaperFoldersChanged();
+    removeRecursively(store);
+    removeAll(m_wallpaperFolders, folderPath);
+    write("WallpaperFolders", m_wallpaperFolders);
+    wallpaperFoldersChanged.emit();
 }
 
 // The copies are what the folder shows; the source is read again on every
 // query so that images added to it later turn up here too. Copying a folder
 // takes long enough to be worth a thread: the caller is told to ask again
 // once the copies are on disk.
-void WallpaperManager::syncWallpaperFolder(const QString &folder)
+void WallpaperManager::syncWallpaperFolder(const std::string &folder)
 {
     if (m_syncingFolders.contains(folder))
         return;
 
-    m_syncingFolders.insert(folder);
-    const QString wallpaperInUse = m_wallpaperPath;
-    QThreadPool::globalInstance()->start(QRunnable::create([this, folder, wallpaperInUse] {
-        const QString store = wallpaperFolderStore(folder);
-        QStringList before = imagesIn(store);
-        before.sort();
-        const QStringList sources = imagesIn(folder);
-        QSet<QString> expected;
-        for (const QString &source : sources) {
-            copyWallpaperInto(source, store);
-            expected.insert(mirroredFileName(QFileInfo(source)));
-        }
-        // A copy whose source was renamed, replaced or removed has no use, unless it is the
-        // wallpaper in use; a source folder that is gone as a whole keeps its copies.
-        if (QFileInfo(folder).isDir()) {
-            for (const QString &copy : imagesIn(store)) {
-                if (copy != wallpaperInUse && !expected.contains(QFileInfo(copy).fileName()))
-                    QFile::remove(copy);
-            }
-        }
-        QStringList after = imagesIn(store);
-        after.sort();
-        const bool copied = after != before;
-
-        QMetaObject::invokeMethod(
-                this, [this, folder, copied] { onWallpaperFolderSynced(folder, copied); },
-                Qt::QueuedConnection);
-    }));
+    const std::string wallpaperInUse = m_wallpaperPath;
+    m_syncingFolders[folder] = runInThread(
+            [folder, wallpaperInUse] {
+                const std::string store = wallpaperFolderStore(folder);
+                std::vector<std::string> before = imagesIn(store);
+                std::sort(before.begin(), before.end());
+                std::set<std::string> expected;
+                for (const std::string &source : imagesIn(folder)) {
+                    copyWallpaperInto(source, store);
+                    expected.insert(mirroredFileName(source));
+                }
+                // A copy whose source was renamed, replaced or removed has no use, unless it is the
+                // wallpaper in use; a source folder that is gone as a whole keeps its copies.
+                if (isDirectory(folder)) {
+                    for (const std::string &copy : imagesIn(store)) {
+                        std::error_code error;
+                        if (copy != wallpaperInUse && !expected.contains(fs::path(copy).filename().string()))
+                            fs::remove(copy, error);
+                    }
+                }
+                std::vector<std::string> after = imagesIn(store);
+                std::sort(after.begin(), after.end());
+                return after != before;
+            },
+            [this, folder](bool copied) {
+                onWallpaperFolderSynced(folder, copied);
+            });
 }
 
-void WallpaperManager::onWallpaperFolderSynced(const QString &folder, bool copied)
+void WallpaperManager::onWallpaperFolderSynced(const std::string &folder, bool copied)
 {
-    m_syncingFolders.remove(folder);
+    m_syncingFolders.erase(folder);
 
     // The folder was removed while its copies were still being made.
-    if (!m_wallpaperFolders.contains(folder)) {
-        QDir(wallpaperFolderStore(folder)).removeRecursively();
+    if (!contains(m_wallpaperFolders, folder)) {
+        removeRecursively(wallpaperFolderStore(folder));
         return;
     }
 
     if (copied)
-        emit wallpaperFolderImagesChanged(folder);
+        wallpaperFolderImagesChanged.emit(folder);
 }
 
-QStringList WallpaperManager::wallpaperFolderImages(const QString &path)
+std::vector<std::string> WallpaperManager::wallpaperFolderImages(const std::string &path)
 {
-    const QString folderPath = QDir(path).absolutePath();
-    if (!m_wallpaperFolders.contains(folderPath))
+    const std::string folderPath = absolutePath(path);
+    if (!contains(m_wallpaperFolders, folderPath))
         return {};
 
     syncWallpaperFolder(folderPath);
@@ -405,21 +434,21 @@ void WallpaperManager::setBackgroundType(int type)
 {
     if (m_backgroundType != type) {
         m_backgroundType = type;
-        m_settings->setValue("BackgroundType", m_backgroundType);
-        emit backgroundTypeChanged();
+        write("BackgroundType", m_backgroundType);
+        backgroundTypeChanged.emit();
     }
 }
 
-QString WallpaperManager::backgroundColor() const
+std::string WallpaperManager::backgroundColor() const
 {
     return m_backgroundColor;
 }
 
-void WallpaperManager::setBackgroundColor(const QString &color)
+void WallpaperManager::setBackgroundColor(const std::string &color)
 {
     if (m_backgroundColor != color) {
         m_backgroundColor = color;
-        m_settings->setValue("BackgroundColor", m_backgroundColor);
-        emit backgroundColorChanged();
+        write("BackgroundColor", m_backgroundColor);
+        backgroundColorChanged.emit();
     }
 }

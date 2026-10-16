@@ -1,90 +1,81 @@
 #include "waylandclipboard.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
+#include <cstring>
 #include <fcntl.h>
 #include <functional>
+#include <map>
 #include <memory>
-#include <pthread.h>
-#include <signal.h>
+#include <sys/epoll.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <wayland-client.h>
 
-#include <QByteArray>
-#include <QHash>
-#include <QMimeData>
-#include <QSocketNotifier>
-#include <QTimer>
+#include "base/event_loop.h"
+#include "base/file.h"
+#include "base/timer.h"
 
 #include "ext-data-control-v1-client-protocol.h"
-#include "wlr-data-control-unstable-v1-client-protocol.h"
 
-static constexpr qsizetype kMaxClipboardBytes = 64 * 1024 * 1024;
-static constexpr int kMaxFormats = 128;
-static constexpr int kTransferTimeoutMs = 5000;
+using namespace std::chrono_literals;
+using namespace cutefish::base;
+
+static constexpr size_t kMaxClipboardBytes = 64 * 1024 * 1024;
+static constexpr size_t kMaxFormats = 128;
+static constexpr auto kTransferTimeout = 5000ms;
 
 namespace {
 
-class PipeTransfer : public QObject
+// Reads a pipe to its end, or writes bytes into one, without blocking.
+class PipeTransfer
 {
 public:
-    using Completion = std::function<void(bool, QByteArray)>;
+    using Completion = std::function<void(bool, std::string)>;
 
-    PipeTransfer(int fd, bool writing, QByteArray bytes, qsizetype limit, Completion completion,
-                 QObject* parent)
-        : QObject(parent)
+    PipeTransfer(int fd, bool writing, std::string bytes, size_t limit, Completion completion)
+        : m_loop(*EventLoop::current())
         , m_fd(fd)
         , m_writing(writing)
         , m_bytes(std::move(bytes))
         , m_limit(limit)
         , m_completion(std::move(completion))
-        , m_notifier(fd, writing ? QSocketNotifier::Write : QSocketNotifier::Read, this)
     {
         const int flags = fcntl(fd, F_GETFL);
         struct stat status {};
-        m_valid = flags >= 0 && fstat(fd, &status) == 0 &&
-            (S_ISFIFO(status.st_mode) || S_ISSOCK(status.st_mode)) &&
-            fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
-        connect(&m_notifier, &QSocketNotifier::activated, this, [this] {
-            pump();
-        });
-        QTimer::singleShot(kTransferTimeoutMs, this, [this] {
+        m_valid = flags >= 0 && fstat(fd, &status) == 0
+                && (S_ISFIFO(status.st_mode) || S_ISSOCK(status.st_mode))
+                && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+        if (m_valid)
+            m_watch = m_loop.watch(fd, writing ? EPOLLOUT : EPOLLIN, [this](uint32_t) {
+                pump();
+            });
+        m_timeout.setSingleShot(true);
+        m_timeout.onTimeout = [this] {
             finish(false);
-        });
-        QTimer::singleShot(0, this, [this] {
-            pump();
+        };
+        m_timeout.start(kTransferTimeout);
+        m_loop.post([this, alive = std::weak_ptr<bool>(m_alive)] {
+            if (alive.lock())
+                pump();
         });
     }
 
-    ~PipeTransfer() override
+    ~PipeTransfer()
     {
+        if (m_watch)
+            m_loop.unwatch(m_watch);
         if (m_fd >= 0)
             close(m_fd);
     }
 
-private:
-    ssize_t writeBytes(const char* data, size_t size)
-    {
-        sigset_t mask, previous, pending;
-        sigemptyset(&mask);
-        sigaddset(&mask, SIGPIPE);
-        if (pthread_sigmask(SIG_BLOCK, &mask, &previous) != 0) {
-            errno = EIO;
-            return -1;
-        }
-        sigpending(&pending);
-        const bool alreadyPending = sigismember(&pending, SIGPIPE);
-        const auto result = write(m_fd, data, size);
-        const int error = errno;
-        if (result < 0 && error == EPIPE && !alreadyPending) {
-            timespec timeout {};
-            sigtimedwait(&mask, nullptr, &timeout);
-        }
-        pthread_sigmask(SIG_SETMASK, &previous, nullptr);
-        errno = error;
-        return result;
-    }
+    PipeTransfer(const PipeTransfer &) = delete;
+    PipeTransfer &operator=(const PipeTransfer &) = delete;
 
+    bool isFinished() const { return m_fd < 0; }
+
+private:
     void pump()
     {
         if (m_fd < 0)
@@ -99,19 +90,19 @@ private:
                 finish(true);
                 return;
             }
-            const auto n = m_writing
-                ? writeBytes(m_bytes.constData() + m_offset,
-                             size_t(qMin<qsizetype>(4096, m_bytes.size() - m_offset)))
-                : read(m_fd, buffer, sizeof(buffer));
+            const ssize_t n = m_writing
+                    ? file::writeWithoutSigpipe(m_fd, m_bytes.data() + m_offset,
+                                                std::min<size_t>(4096, m_bytes.size() - m_offset))
+                    : read(m_fd, buffer, sizeof(buffer));
             if (n > 0) {
                 if (m_writing) {
-                    m_offset += n;
+                    m_offset += size_t(n);
                 } else {
-                    if (n > m_limit - m_bytes.size()) {
+                    if (size_t(n) > m_limit - m_bytes.size()) {
                         finish(false);
                         return;
                     }
-                    m_bytes.append(buffer, n);
+                    m_bytes.append(buffer, size_t(n));
                 }
             } else if (!m_writing && n == 0) {
                 finish(true);
@@ -131,85 +122,80 @@ private:
     {
         if (m_fd < 0)
             return;
-        m_notifier.setEnabled(false);
+        m_timeout.stop();
+        if (m_watch)
+            m_loop.unwatch(m_watch);
+        m_watch = 0;
         close(m_fd);
         m_fd = -1;
         auto completion = std::move(m_completion);
         auto bytes = std::move(m_bytes);
-        deleteLater();
         if (completion)
             completion(success, std::move(bytes));
     }
 
+    EventLoop &m_loop;
     int m_fd;
+    int m_watch = 0;
     bool m_writing;
     bool m_valid = false;
-    QByteArray m_bytes;
-    qsizetype m_limit;
-    qsizetype m_offset = 0;
+    std::string m_bytes;
+    size_t m_limit;
+    size_t m_offset = 0;
     Completion m_completion;
-    QSocketNotifier m_notifier;
-};
-
-// ext and wlr data-control have identical request/event layouts.
-struct Protocol {
-    const wl_interface* manager;
-    const wl_interface* device;
-    const wl_interface* source;
-    uint32_t version;
+    Timer m_timeout;
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
 };
 
 } // namespace
 
-static const Protocol ext {&ext_data_control_manager_v1_interface, &ext_data_control_device_v1_interface,
-                           &ext_data_control_source_v1_interface, 1};
-static const Protocol wlr {&zwlr_data_control_manager_v1_interface, &zwlr_data_control_device_v1_interface,
-                           &zwlr_data_control_source_v1_interface, 2};
-
-static void destroyProxy(wl_proxy*& proxy, uint32_t opcode)
+static void destroyProxy(wl_proxy *&proxy, uint32_t opcode)
 {
     if (!proxy)
         return;
-    wl_proxy_marshal_flags(proxy, opcode, nullptr, wl_proxy_get_version(proxy),
-                           WL_MARSHAL_FLAG_DESTROY);
+    wl_proxy_marshal_flags(proxy, opcode, nullptr, wl_proxy_get_version(proxy), WL_MARSHAL_FLAG_DESTROY);
     proxy = nullptr;
 }
 
-class WaylandClipboard::Private : public QObject
+class WaylandClipboard::Private
 {
 public:
-    explicit Private(WaylandClipboard* owner)
-        : QObject(owner)
-        , q(owner)
+    explicit Private(WaylandClipboard *owner)
+        : q(owner)
+        , loop(*EventLoop::current())
     {
-        QTimer::singleShot(0, this, [this] {
-            start();
+        loop.post([this, alive = std::weak_ptr<bool>(alive)] {
+            if (alive.lock())
+                start();
         });
     }
 
-    ~Private() override { reset(); }
+    ~Private()
+    {
+        *alive = false;
+        reset();
+    }
 
     struct Offer {
-        wl_proxy* proxy = nullptr;
-        QStringList formats;
+        wl_proxy *proxy = nullptr;
+        std::vector<std::string> formats;
         bool tooManyFormats = false;
 
         ~Offer() { destroyProxy(proxy, 1); }
     };
 
-    struct Source : QObject {
-        wl_proxy* proxy = nullptr;
-        QHash<QString, QByteArray> bytes;
-        int writes = 0;
+    struct Source {
+        wl_proxy *proxy = nullptr;
+        std::map<std::string, std::string> bytes;
+        std::vector<std::unique_ptr<PipeTransfer>> writes;
 
-        ~Source() override { destroyProxy(proxy, 1); }
+        ~Source() { destroyProxy(proxy, 1); }
     };
 
     void reset()
     {
         ++generation;
-        delete reader;
-        reader = nullptr;
+        reader.reset();
         selection.reset();
         pending.clear();
         source.reset();
@@ -229,10 +215,9 @@ public:
             wl_registry_destroy(registry);
             registry = nullptr;
         }
-        delete readNotifier;
-        readNotifier = nullptr;
-        delete writeNotifier;
-        writeNotifier = nullptr;
+        if (watch)
+            loop.unwatch(watch);
+        watch = 0;
         if (display) {
             wl_display_flush(display);
             wl_display_disconnect(display);
@@ -245,7 +230,16 @@ public:
         if (!display)
             return;
         reset();
-        emit q->availabilityChanged();
+        q->availabilityChanged.emit();
+    }
+
+    // Protocol callbacks must finish before their listener data is freed.
+    void failLater()
+    {
+        loop.post([this, alive = std::weak_ptr<bool>(alive)] {
+            if (alive.lock())
+                failed();
+        });
     }
 
     void flush()
@@ -254,30 +248,26 @@ public:
             return;
         if (wl_display_flush(display) < 0) {
             if (errno == EAGAIN)
-                writeNotifier->setEnabled(true);
+                loop.setWatchEvents(watch, EPOLLIN | EPOLLOUT);
             else
-                QTimer::singleShot(0, this, [this] {
-                    failed();
-                });
+                failLater();
         } else {
-            writeNotifier->setEnabled(false);
+            loop.setWatchEvents(watch, EPOLLIN);
         }
     }
 
     void start()
     {
-        const auto name = qgetenv("WAYLAND_DISPLAY");
-        display = wl_display_connect(name.isEmpty() ? "wayland-0" : name.constData());
+        // WAYLAND_DISPLAY, else wayland-0.
+        display = wl_display_connect(nullptr);
         if (!display)
             return;
-        readNotifier = new QSocketNotifier(wl_display_get_fd(display), QSocketNotifier::Read, this);
-        writeNotifier =
-            new QSocketNotifier(wl_display_get_fd(display), QSocketNotifier::Write, this);
-        writeNotifier->setEnabled(false);
-        connect(writeNotifier, &QSocketNotifier::activated, this, [this] {
-            flush();
-        });
-        connect(readNotifier, &QSocketNotifier::activated, this, [this] {
+        watch = loop.watch(wl_display_get_fd(display), EPOLLIN, [this](uint32_t events) {
+            if (events & EPOLLOUT) {
+                flush();
+                if (!(events & (EPOLLIN | EPOLLHUP | EPOLLERR)))
+                    return;
+            }
             if (wl_display_dispatch(display) < 0)
                 failed();
             else
@@ -285,31 +275,24 @@ public:
         });
         registry = wl_display_get_registry(display);
         static const wl_registry_listener registryListener = {
-            [](void* data, wl_registry* registry, uint32_t name, const char* interface,
-               uint32_t version) {
-                auto* self = static_cast<Private*>(data);
-                if (QByteArray(interface) == "wl_seat" && !self->seat)
-                    self->seat = static_cast<wl_seat*>(
-                        wl_registry_bind(registry, name, &wl_seat_interface, 1));
-                if (QByteArray(interface) == ext.manager->name) {
-                    self->extName = name;
-                    self->extVersion = qMin(version, ext.version);
-                } else if (QByteArray(interface) == wlr.manager->name) {
-                    self->wlrName = name;
-                    self->wlrVersion = qMin(version, wlr.version);
-                }
-            },
-            [](void* data, wl_registry*, uint32_t name) {
-                auto* self = static_cast<Private*>(data);
-                if (name == self->boundName)
-                    QTimer::singleShot(0, self, [self] {
-                        self->failed();
-                    });
-            }};
+                [](void *data, wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
+                    auto *self = static_cast<Private *>(data);
+                    if (std::strcmp(interface, "wl_seat") == 0 && !self->seat)
+                        self->seat = static_cast<wl_seat *>(wl_registry_bind(registry, name, &wl_seat_interface, 1));
+                    if (std::strcmp(interface, ext_data_control_manager_v1_interface.name) == 0) {
+                        self->managerName = name;
+                        self->managerVersion = std::min(version, 1u);
+                    }
+                },
+                [](void *data, wl_registry *, uint32_t name) {
+                    auto *self = static_cast<Private *>(data);
+                    if (name == self->managerName && self->manager)
+                        self->failLater();
+                }};
         wl_registry_add_listener(registry, &registryListener, this);
         sync = wl_display_sync(display);
-        static const wl_callback_listener ready = {[](void* data, wl_callback* callback, uint32_t) {
-            auto* self = static_cast<Private*>(data);
+        static const wl_callback_listener ready = {[](void *data, wl_callback *callback, uint32_t) {
+            auto *self = static_cast<Private *>(data);
             wl_callback_destroy(callback);
             self->sync = nullptr;
             self->bind();
@@ -320,82 +303,81 @@ public:
 
     void bind()
     {
-        if (!seat || (!extName && !wlrName))
+        if (!seat || !managerName)
             return;
-        protocol = extName ? &ext : &wlr;
-        boundName = extName ? extName : wlrName;
-        const auto version = extName ? extVersion : wlrVersion;
-        manager = static_cast<wl_proxy*>(
-            wl_registry_bind(registry, boundName, protocol->manager, version));
-        device = wl_proxy_marshal_flags(manager, 1, protocol->device, version, 0, nullptr, seat);
+        manager = static_cast<wl_proxy *>(
+                wl_registry_bind(registry, managerName, &ext_data_control_manager_v1_interface, managerVersion));
+        device = wl_proxy_marshal_flags(manager, 1, &ext_data_control_device_v1_interface, managerVersion, 0,
+                                        nullptr, seat);
         static const ext_data_control_device_v1_listener listener = {
-            [](void* data, ext_data_control_device_v1*, ext_data_control_offer_v1* proxy) {
-                auto* self = static_cast<Private*>(data);
-                auto offer = std::make_shared<Offer>();
-                offer->proxy = reinterpret_cast<wl_proxy*>(proxy);
-                static const ext_data_control_offer_v1_listener offerListener = {
-                    [](void* data, ext_data_control_offer_v1*, const char* mime) {
-                        auto* offer = static_cast<Offer*>(data);
-                        const auto format = QString::fromUtf8(mime);
-                        // SAVE_TARGETS is a clipboard-manager handshake, not a payload.
-                        if (format == QStringLiteral("SAVE_TARGETS"))
-                            return;
-                        if (offer->formats.contains(format))
-                            return;
-                        if (offer->formats.size() >= kMaxFormats || format.size() > 1024) {
-                            offer->tooManyFormats = true;
-                            return;
-                        }
-                        offer->formats.append(format);
-                    }};
-                wl_proxy_add_listener(
-                    offer->proxy,
-                    reinterpret_cast<void (**)(void)>(
-                        const_cast<ext_data_control_offer_v1_listener*>(&offerListener)),
-                    offer.get());
-                self->pending[offer->proxy] = std::move(offer);
-            },
-            [](void* data, ext_data_control_device_v1*, ext_data_control_offer_v1* proxy) {
-                static_cast<Private*>(data)->select(reinterpret_cast<wl_proxy*>(proxy));
-            },
-            [](void* data, ext_data_control_device_v1*) {
-                auto* self = static_cast<Private*>(data);
-                QTimer::singleShot(0, self, [self] {
-                    self->failed();
-                });
-            },
-            [](void* data, ext_data_control_device_v1*, ext_data_control_offer_v1* proxy) {
-                static_cast<Private*>(data)->pending.remove(reinterpret_cast<wl_proxy*>(proxy));
-            }};
+                [](void *data, ext_data_control_device_v1 *, ext_data_control_offer_v1 *proxy) {
+                    auto *self = static_cast<Private *>(data);
+                    auto offer = std::make_shared<Offer>();
+                    offer->proxy = reinterpret_cast<wl_proxy *>(proxy);
+                    static const ext_data_control_offer_v1_listener offerListener = {
+                            [](void *data, ext_data_control_offer_v1 *, const char *mime) {
+                                auto *offer = static_cast<Offer *>(data);
+                                const std::string format = mime;
+                                // SAVE_TARGETS is a clipboard-manager handshake, not a payload.
+                                if (format == "SAVE_TARGETS")
+                                    return;
+                                if (std::find(offer->formats.begin(), offer->formats.end(), format)
+                                    != offer->formats.end())
+                                    return;
+                                if (offer->formats.size() >= kMaxFormats || format.size() > 1024) {
+                                    offer->tooManyFormats = true;
+                                    return;
+                                }
+                                offer->formats.push_back(format);
+                            }};
+                    wl_proxy_add_listener(offer->proxy,
+                                          reinterpret_cast<void (**)(void)>(
+                                                  const_cast<ext_data_control_offer_v1_listener *>(&offerListener)),
+                                          offer.get());
+                    self->pending[offer->proxy] = std::move(offer);
+                },
+                [](void *data, ext_data_control_device_v1 *, ext_data_control_offer_v1 *proxy) {
+                    static_cast<Private *>(data)->select(reinterpret_cast<wl_proxy *>(proxy));
+                },
+                [](void *data, ext_data_control_device_v1 *) {
+                    static_cast<Private *>(data)->failLater();
+                },
+                [](void *data, ext_data_control_device_v1 *, ext_data_control_offer_v1 *proxy) {
+                    static_cast<Private *>(data)->pending.erase(reinterpret_cast<wl_proxy *>(proxy));
+                }};
         wl_proxy_add_listener(device,
                               reinterpret_cast<void (**)(void)>(
-                                  const_cast<ext_data_control_device_v1_listener*>(&listener)),
+                                      const_cast<ext_data_control_device_v1_listener *>(&listener)),
                               this);
         flush();
-        emit q->availabilityChanged();
+        q->availabilityChanged.emit();
     }
 
-    void select(wl_proxy* proxy)
+    void select(wl_proxy *proxy)
     {
         ++generation;
-        delete reader;
-        reader = nullptr;
+        reader.reset();
         collecting.reset();
         snapshot.reset();
-        selection = pending.take(proxy);
+        selection.reset();
+        if (const auto it = pending.find(proxy); it != pending.end()) {
+            selection = std::move(it->second);
+            pending.erase(it);
+        }
         if (!selection || selection->tooManyFormats) {
-            emit q->dataChanged();
+            q->dataChanged.emit();
             return;
         }
-        const auto expected = generation;
-        QTimer::singleShot(kTransferTimeoutMs, this, [this, expected] {
+        const uint64_t expected = generation;
+        collectTimeout.setSingleShot(true);
+        collectTimeout.onTimeout = [this, expected] {
             if (expected != generation || !collecting)
                 return;
-            delete reader;
-            reader = nullptr;
+            reader.reset();
             collecting.reset();
-        });
-        collecting = std::make_unique<QMimeData>();
+        };
+        collectTimeout.start(kTransferTimeout);
+        collecting = std::make_unique<ClipboardData>();
         formatIndex = 0;
         totalBytes = 0;
         readNext();
@@ -407,130 +389,120 @@ public:
             return;
         if (formatIndex >= selection->formats.size()) {
             snapshot = std::move(collecting);
-            emit q->dataChanged();
+            q->dataChanged.emit();
             return;
         }
-        const QString format = selection->formats[formatIndex++];
+        const std::string format = selection->formats[formatIndex++];
         int fds[2];
         if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) < 0) {
             collecting.reset();
             return;
         }
-        const QByteArray mime = format.toUtf8();
-        wl_proxy_marshal_flags(selection->proxy, 0, nullptr, 1, 0, mime.constData(), fds[1]);
+        wl_proxy_marshal_flags(selection->proxy, 0, nullptr, 1, 0, format.c_str(), fds[1]);
         close(fds[1]);
-        const auto expected = generation;
-        reader = new PipeTransfer(
-            fds[0], false, {}, kMaxClipboardBytes - totalBytes,
-            [this, expected, format](bool complete, QByteArray bytes) {
-                reader = nullptr;
-                if (expected != generation)
-                    return;
-                if (!complete) {
-                    collecting.reset();
-                    return;
-                }
-                totalBytes += bytes.size();
-                collecting->setData(format, bytes);
-                readNext();
-            },
-            this);
+        const uint64_t expected = generation;
+        reader = std::make_unique<PipeTransfer>(
+                fds[0], false, std::string(), kMaxClipboardBytes - totalBytes,
+                [this, expected, format](bool complete, std::string bytes) {
+                    // The finished reader goes on the next turn, outside its own call.
+                    loop.post([finished = std::shared_ptr<PipeTransfer>(std::move(reader))] {});
+                    if (expected != generation)
+                        return;
+                    if (!complete) {
+                        collecting.reset();
+                        return;
+                    }
+                    totalBytes += bytes.size();
+                    collecting->emplace_back(format, std::move(bytes));
+                    readNext();
+                });
         flush();
     }
 
-    void publish(std::unique_ptr<QMimeData> data)
+    void publish(ClipboardData data)
     {
-        if (!device || !data || data->formats().size() > kMaxFormats)
+        if (!device || data.size() > kMaxFormats)
             return;
         auto next = std::make_unique<Source>();
-        qsizetype size = 0;
-        for (const auto& format : data->formats()) {
-            auto bytes = data->data(format);
+        size_t size = 0;
+        for (const auto &[format, bytes] : data) {
             size += bytes.size();
             if (size > kMaxClipboardBytes)
                 return;
-            next->bytes.insert(format, std::move(bytes));
+            next->bytes[format] = bytes;
         }
-        next->proxy = wl_proxy_marshal_flags(manager, 0, protocol->source, 1, 0, nullptr);
+        next->proxy = wl_proxy_marshal_flags(manager, 0, &ext_data_control_source_v1_interface, 1, 0, nullptr);
         static const ext_data_control_source_v1_listener sourceListener = {
-            [](void* data, ext_data_control_source_v1*, const char* mime, int fd) {
-                auto* source = static_cast<Source*>(data);
-                const auto it = source->bytes.constFind(QString::fromUtf8(mime));
-                if (it == source->bytes.cend() || source->writes >= 16) {
-                    close(fd);
-                    return;
-                }
-                ++source->writes;
-                new PipeTransfer(
-                    fd, true, *it, kMaxClipboardBytes,
-                    [source](bool, QByteArray) {
-                        --source->writes;
-                    },
-                    source);
-            },
-            [](void* data, ext_data_control_source_v1*) {
-                auto* source = static_cast<Source*>(data);
-                source->bytes.clear();
-            }};
-        wl_proxy_add_listener(
-            next->proxy,
-            reinterpret_cast<void (**)(void)>(
-                const_cast<ext_data_control_source_v1_listener*>(&sourceListener)),
-            next.get());
-        for (auto it = next->bytes.cbegin(); it != next->bytes.cend(); ++it) {
-            const auto mime = it.key().toUtf8();
-            wl_proxy_marshal_flags(next->proxy, 0, nullptr, 1, 0, mime.constData());
-        }
+                [](void *data, ext_data_control_source_v1 *, const char *mime, int fd) {
+                    auto *source = static_cast<Source *>(data);
+                    std::erase_if(source->writes, [](const auto &write) { return write->isFinished(); });
+                    const auto it = source->bytes.find(mime);
+                    if (it == source->bytes.end() || source->writes.size() >= 16) {
+                        close(fd);
+                        return;
+                    }
+                    source->writes.push_back(
+                            std::make_unique<PipeTransfer>(fd, true, it->second, kMaxClipboardBytes, nullptr));
+                },
+                [](void *data, ext_data_control_source_v1 *) {
+                    auto *source = static_cast<Source *>(data);
+                    source->bytes.clear();
+                }};
+        wl_proxy_add_listener(next->proxy,
+                              reinterpret_cast<void (**)(void)>(
+                                      const_cast<ext_data_control_source_v1_listener *>(&sourceListener)),
+                              next.get());
+        // Offered in the order the selection had them.
+        for (const auto &[format, bytes] : data)
+            wl_proxy_marshal_flags(next->proxy, 0, nullptr, 1, 0, format.c_str());
         wl_proxy_marshal_flags(device, 0, nullptr, wl_proxy_get_version(device), 0, next->proxy);
         source = std::move(next);
-        snapshot = std::move(data);
+        snapshot = std::make_unique<ClipboardData>(std::move(data));
         flush();
     }
 
-    WaylandClipboard* q;
-    wl_display* display = nullptr;
-    wl_registry* registry = nullptr;
-    wl_callback* sync = nullptr;
-    wl_seat* seat = nullptr;
-    wl_proxy* manager = nullptr;
-    wl_proxy* device = nullptr;
-    const Protocol* protocol = nullptr;
-    uint32_t extName = 0, extVersion = 0, wlrName = 0, wlrVersion = 0, boundName = 0;
-    QSocketNotifier* readNotifier = nullptr;
-    QSocketNotifier* writeNotifier = nullptr;
-    QHash<wl_proxy*, std::shared_ptr<Offer>> pending;
+    WaylandClipboard *q;
+    EventLoop &loop;
+    wl_display *display = nullptr;
+    wl_registry *registry = nullptr;
+    wl_callback *sync = nullptr;
+    wl_seat *seat = nullptr;
+    wl_proxy *manager = nullptr;
+    wl_proxy *device = nullptr;
+    uint32_t managerName = 0;
+    uint32_t managerVersion = 0;
+    int watch = 0;
+    std::map<wl_proxy *, std::shared_ptr<Offer>> pending;
     std::shared_ptr<Offer> selection;
     std::unique_ptr<Source> source;
-    std::unique_ptr<QMimeData> snapshot;
-    std::unique_ptr<QMimeData> collecting;
-    PipeTransfer* reader = nullptr;
+    std::unique_ptr<ClipboardData> snapshot;
+    std::unique_ptr<ClipboardData> collecting;
+    std::unique_ptr<PipeTransfer> reader;
+    Timer collectTimeout;
     uint64_t generation = 0;
-    qsizetype totalBytes = 0;
-    qsizetype formatIndex = 0;
+    size_t totalBytes = 0;
+    size_t formatIndex = 0;
+    std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 };
 
-WaylandClipboard::WaylandClipboard(QObject* parent)
-    : QObject(parent)
-    , d(new Private(this))
+WaylandClipboard::WaylandClipboard()
+    : d(std::make_unique<Private>(this))
 {
 }
 
-WaylandClipboard::~WaylandClipboard()
-{
-    delete d;
-}
+WaylandClipboard::~WaylandClipboard() = default;
 
 bool WaylandClipboard::isAvailable() const
 {
     return d->device != nullptr;
 }
 
-const QMimeData* WaylandClipboard::mimeData() const
+const ClipboardData *WaylandClipboard::data() const
 {
     return d->snapshot.get();
 }
 
-void WaylandClipboard::setMimeData(QMimeData* data)
+void WaylandClipboard::setData(ClipboardData data)
 {
-    d->publish(std::unique_ptr<QMimeData>(data));
+    d->publish(std::move(data));
 }

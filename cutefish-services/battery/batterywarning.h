@@ -4,42 +4,49 @@
 #ifndef BATTERYWARNING_H
 #define BATTERYWARNING_H
 
-#include <QObject>
-#include <QVariantMap>
+#include <cstdint>
+#include <string>
+#include <vector>
 
-namespace Cutefish {
-class Notification;
-}
+#include "base/dbus.h"
+#include "notification.h"
 
 // Warns at the levels UPower.conf sets, before UPower's critical power action.
-class BatteryWarning : public QObject
+class BatteryWarning
 {
-    Q_OBJECT
-
 public:
     // UpDeviceLevel; UPower keeps it at None unless the battery is discharging.
     enum Level { Unknown, None, Discharging, Low, Critical, Action };
 
-    explicit BatteryWarning(QObject *parent = nullptr);
+    // UPower on `system`, the notification on `session`.
+    BatteryWarning(cutefish::base::dbus::Connection *system, cutefish::base::dbus::Connection *session);
+    ~BatteryWarning();
 
-private slots:
-    void onPropertiesChanged(const QString &interface, const QVariantMap &changed,
-                             const QStringList &invalidated);
+    BatteryWarning(const BatteryWarning &) = delete;
+    BatteryWarning &operator=(const BatteryWarning &) = delete;
 
 private:
+    void onPropertiesChanged(const cutefish::base::dbus::VariantMap &changed,
+                             const std::vector<std::string> &invalidated);
     void fetchProperties();
     void fetchCriticalAction();
     void update();
-    void notify(uint level);
-    QString body(uint level) const;
+    void notify(uint32_t level);
+    std::string body(uint32_t level) const;
 
-    Cutefish::Notification *m_notification;
-    QVariantMap m_properties;
-    QString m_criticalAction;
-    bool m_criticalActionKnown;
+    cutefish::base::dbus::Proxy m_upower;
+    cutefish::base::dbus::Proxy m_device;
+    cutefish::base::dbus::Match m_changed;
+    cutefish::base::dbus::PendingCall m_propertiesCall;
+    cutefish::base::dbus::PendingCall m_actionCall;
+    Notification m_notification;
+    cutefish::base::Subscription m_failed;
+    cutefish::base::dbus::VariantMap m_properties;
+    std::string m_criticalAction;
+    bool m_criticalActionKnown = false;
     // GetCriticalAction is in flight; its reply runs update() again.
-    bool m_fetchingAction;
-    uint m_shownLevel;
+    bool m_fetchingAction = false;
+    uint32_t m_shownLevel = None;
 };
 
 #endif // BATTERYWARNING_H

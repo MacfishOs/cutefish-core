@@ -1,8 +1,8 @@
 #include "encoder.h"
 
-#include <QFile>
-#include <QLoggingCategory>
+#include "base/logging.h"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 
@@ -23,13 +23,17 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-Q_LOGGING_CATEGORY(cfRecorder, "cutefish.recorder", QtInfoMsg)
+using cutefish::base::Point;
+using cutefish::base::Rect;
+using cutefish::base::Size;
+
+static const cutefish::base::LogCategory cfRecorder("cutefish.recorder");
 
 static constexpr AVRational kVideoTimeBase {1, 90000};
 // H.264 levels and the GPU encoders stop around here.
 static constexpr int kMaximumDimension = 4096;
 // No more than this is held back waiting for the first frame.
-static constexpr qint64 kEarlyAudioLimitNs = 5'000'000'000;
+static constexpr int64_t kEarlyAudioLimitNs = 5'000'000'000;
 // Constant quality: screen text stays sharp, and a still screen costs nothing.
 static constexpr int kVaapiQp = 18;
 static constexpr char kX264Crf[] = "18";
@@ -37,35 +41,56 @@ static constexpr char kX264Crf[] = "18";
 // duration and the one being converted.
 static constexpr int kSurfacePool = 16;
 
-static QString avError(int code)
+static std::string avError(int code)
 {
     char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
     av_strerror(code, buffer, sizeof(buffer));
-    return QString::fromUtf8(buffer);
+    return buffer;
 }
 
 static int evenFloor(int value)
 {
-    return qMax(2, value & ~1);
+    return std::max(2, value & ~1);
 }
 
-static qint64 toVideoPts(qint64 ns)
+static int64_t toVideoPts(int64_t ns)
 {
     return av_rescale_q(ns, AVRational {1, 1000000000}, kVideoTimeBase);
 }
 
 // The size a video of this crop gets: even, and within what encoders take.
-static QSize videoSize(const QRect &crop)
+// The largest size of @p size's aspect ratio within @p bounds.
+static Size scaledToFit(const Size &size, const Size &bounds)
 {
-    QSize size(evenFloor(crop.width()), evenFloor(crop.height()));
+    if (size.isEmpty())
+        return bounds;
+    const int64_t width = int64_t(bounds.height()) * size.width() / size.height();
+    if (width <= bounds.width())
+        return Size(int(width), bounds.height());
+    return Size(bounds.width(), int(int64_t(bounds.width()) * size.height() / size.width()));
+}
+
+static Size videoSize(const Rect &crop)
+{
+    Size size(evenFloor(crop.width()), evenFloor(crop.height()));
     if (size.width() > kMaximumDimension || size.height() > kMaximumDimension) {
-        size = size.scaled(kMaximumDimension, kMaximumDimension, Qt::KeepAspectRatio);
-        size = QSize(evenFloor(size.width()), evenFloor(size.height()));
+        size = scaledToFit(size, Size(kMaximumDimension, kMaximumDimension));
+        size = Size(evenFloor(size.width()), evenFloor(size.height()));
     }
     return size;
 }
 
-static AVCodecContext *videoContext(const AVCodec *codec, const QSize &size, const AVFormatContext *format)
+static int64_t takeDuration(std::unordered_map<int64_t, int64_t> &durations, int64_t pts)
+{
+    const auto it = durations.find(pts);
+    if (it == durations.end())
+        return 0;
+    const int64_t duration = it->second;
+    durations.erase(it);
+    return duration;
+}
+
+static AVCodecContext *videoContext(const AVCodec *codec, const Size &size, const AVFormatContext *format)
 {
     AVCodecContext *context = avcodec_alloc_context3(codec);
     context->width = size.width();
@@ -82,45 +107,41 @@ static AVCodecContext *videoContext(const AVCodec *codec, const QSize &size, con
     return context;
 }
 
-Encoder::Encoder(QObject *parent)
-    : QObject(parent)
-{
-}
+Encoder::Encoder() = default;
 
 Encoder::~Encoder()
 {
     close();
 }
 
-void Encoder::open(const QString &path, bool audio)
+void Encoder::open(const std::string &path, bool audio)
 {
     m_path = path;
 
-    const QByteArray file = QFile::encodeName(path);
-    if (avformat_alloc_output_context2(&m_format, nullptr, "mp4", file.constData()) < 0
+    if (avformat_alloc_output_context2(&m_format, nullptr, "mp4", path.c_str()) < 0
         || !m_format) {
-        fail(QStringLiteral("cannot create an MP4 file"));
+        fail("cannot create an MP4 file");
         return;
     }
 
-    QString error;
+    std::string error;
     if (audio && !openAudio(&error)) {
         // A recording without sound beats no recording.
-        qCWarning(cfRecorder) << "recording without audio:" << error;
+        CF_WARNING(cfRecorder) << "recording without audio:" << error;
     }
 }
 
-void Encoder::encodeVideo(const QImage &image, const QRect &crop, qint64 presentedNs, int buffer)
+void Encoder::encodeVideo(const Image &image, const Rect &crop, int64_t presentedNs, int buffer)
 {
     if (m_failed || !m_format) {
-        emit frameDone(buffer);
+        frameDone(buffer);
         return;
     }
 
     if (m_originNs < 0) {
-        QString error;
-        if (!openVideo(videoSize(crop), QString(), &error) || !startVideo(&error)) {
-            emit frameDone(buffer);
+        std::string error;
+        if (!openVideo(videoSize(crop), std::string(), &error) || !startVideo(&error)) {
+            frameDone(buffer);
             fail(error);
             return;
         }
@@ -128,38 +149,39 @@ void Encoder::encodeVideo(const QImage &image, const QRect &crop, qint64 present
     }
 
     if (!sendPending(presentedNs)) {
-        emit frameDone(buffer);
+        frameDone(buffer);
         return;
     }
     const bool converted = convert(image, crop);
-    emit frameDone(buffer);
+    frameDone(buffer);
     if (!converted) {
-        fail(QStringLiteral("cannot convert a frame"));
+        fail("cannot convert a frame");
         return;
     }
     accepted(presentedNs);
 }
 
-void Encoder::encodeDmaBuf(const CaptureSession::DmaBuf &dmabuf, const QString &node,
-                           const QRect &crop, qint64 presentedNs, int buffer)
+void Encoder::encodeDmaBuf(const DmaBuf &dmabuf, const std::string &node, const Rect &crop,
+                           int64_t presentedNs, int buffer)
 {
     if (m_failed || !m_format) {
-        emit frameDone(buffer);
+        frameDone(buffer);
         return;
     }
 
     if (m_originNs < 0) {
         // The GPU path is only tried once, on the first frame; without it the
         // frames have to come in shared memory.
-        QString error;
+        std::string error;
         if (!openVideo(videoSize(crop), node, &error) || !openVpp()
             || !convertDmaBuf(dmabuf, buffer, crop)) {
             closeVideo();
-            emit frameDone(buffer);
-            emit needsSharedMemory();
+            frameDone(buffer);
+            if (onNeedsSharedMemory)
+                onNeedsSharedMemory();
             return;
         }
-        emit frameDone(buffer);
+        frameDone(buffer);
         if (!startVideo(&error)) {
             fail(error);
             return;
@@ -170,15 +192,15 @@ void Encoder::encodeDmaBuf(const CaptureSession::DmaBuf &dmabuf, const QString &
     }
 
     if (!m_vppContext || !sendPending(presentedNs)) {
-        emit frameDone(buffer);
-        if (!m_vppContext)
-            emit needsSharedMemory();
+        frameDone(buffer);
+        if (!m_vppContext && onNeedsSharedMemory)
+            onNeedsSharedMemory();
         return;
     }
     const bool converted = convertDmaBuf(dmabuf, buffer, crop);
-    emit frameDone(buffer);
+    frameDone(buffer);
     if (!converted) {
-        fail(QStringLiteral("cannot convert a frame on the GPU"));
+        fail("cannot convert a frame on the GPU");
         return;
     }
     accepted(presentedNs);
@@ -193,22 +215,23 @@ void Encoder::forgetBuffers()
     m_imported.clear();
 }
 
-bool Encoder::sendPending(qint64 presentedNs)
+bool Encoder::sendPending(int64_t presentedNs)
 {
     // A frame lasts until the next one, so the previous frame goes out now.
     if (m_pendingPts < 0)
         return true;
-    const qint64 pts = qMax(toVideoPts(presentedNs - m_originNs), m_pendingPts + 1);
+    const int64_t pts = std::max(toVideoPts(presentedNs - m_originNs), m_pendingPts + 1);
     return sendVideo(m_pendingPts, pts - m_pendingPts);
 }
 
-void Encoder::accepted(qint64 presentedNs)
+void Encoder::accepted(int64_t presentedNs)
 {
     const bool first = m_pendingPts < 0;
-    m_pendingPts = first ? 0 : qMax(toVideoPts(presentedNs - m_originNs), m_pendingPts + 1);
+    m_pendingPts = first ? 0 : std::max(toVideoPts(presentedNs - m_originNs), m_pendingPts + 1);
 
     if (first) {
-        emit started();
+        if (onStarted)
+            onStarted();
         // Whatever the microphone caught before this frame lines up with it now.
         while (!m_failed && !m_earlyAudio.empty()) {
             auto [samples, capturedNs] = std::move(m_earlyAudio.front());
@@ -218,7 +241,7 @@ void Encoder::accepted(qint64 presentedNs)
     }
 }
 
-void Encoder::encodeAudio(const QByteArray &samples, qint64 capturedNs)
+void Encoder::encodeAudio(const std::vector<float> &samples, int64_t capturedNs)
 {
     if (m_failed || !m_audio)
         return;
@@ -231,24 +254,24 @@ void Encoder::encodeAudio(const QByteArray &samples, qint64 capturedNs)
     queueAudio(samples, capturedNs);
 }
 
-void Encoder::finish(qint64 stopNs)
+void Encoder::finish(int64_t stopNs)
 {
     if (m_failed)
         return;
     if (m_pendingPts < 0) {
-        fail(QStringLiteral("nothing was recorded"));
+        fail("nothing was recorded");
         return;
     }
 
     // A still screen at the end is one long frame, until the stop.
-    const qint64 endPts = qMax(toVideoPts(stopNs - m_originNs),
+    const int64_t endPts = std::max(toVideoPts(stopNs - m_originNs),
                                m_pendingPts + kVideoTimeBase.den / 60);
     if (!sendVideo(m_pendingPts, endPts - m_pendingPts))
         return;
 
     int result = avcodec_send_frame(m_video, nullptr);
     if (result < 0 || !writePackets(m_video, m_videoStream)) {
-        fail(QStringLiteral("cannot finish the video: %1").arg(avError(result)));
+        fail("cannot finish the video: " + avError(result));
         return;
     }
     if (m_audio && m_audioAligned) {
@@ -256,7 +279,7 @@ void Encoder::finish(qint64 stopNs)
             return;
         result = avcodec_send_frame(m_audio, nullptr);
         if (result < 0 || !writePackets(m_audio, m_audioStream)) {
-            fail(QStringLiteral("cannot finish the audio: %1").arg(avError(result)));
+            fail("cannot finish the audio: " + avError(result));
             return;
         }
     }
@@ -264,28 +287,29 @@ void Encoder::finish(qint64 stopNs)
     result = av_write_trailer(m_format);
     close();
     if (result < 0) {
-        fail(QStringLiteral("cannot complete the file: %1").arg(avError(result)));
+        fail("cannot complete the file: " + avError(result));
         return;
     }
-    emit finished(true, QString());
+    if (onFinished)
+        onFinished(true, std::string());
 }
 
-bool Encoder::openVideo(const QSize &size, const QString &node, QString *error)
+bool Encoder::openVideo(const Size &size, const std::string &node, std::string *error)
 {
     m_size = size;
     // Frames on the GPU need the GPU's encoder, on the device they are on.
-    if (!openVaapi(size, node) && (!node.isEmpty() || !openX264(size))) {
-        *error = QStringLiteral("no H.264 encoder is available");
+    if (!openVaapi(size, node) && (!node.empty() || !openX264(size))) {
+        *error = "no H.264 encoder is available";
         return false;
     }
     return true;
 }
 
-bool Encoder::startVideo(QString *error)
+bool Encoder::startVideo(std::string *error)
 {
     m_videoStream = avformat_new_stream(m_format, nullptr);
     if (!m_videoStream) {
-        *error = QStringLiteral("cannot add the video stream");
+        *error = "cannot add the video stream";
         return false;
     }
     m_videoStream->time_base = m_video->time_base;
@@ -308,16 +332,15 @@ void Encoder::closeVideo()
     av_frame_free(&m_hwFrame);
     avcodec_free_context(&m_video);
     av_buffer_unref(&m_hwDevice);
-    m_scaledFrom = QSize();
+    m_scaledFrom = Size();
 }
 
-bool Encoder::openVaapi(const QSize &size, const QString &node)
+bool Encoder::openVaapi(const Size &size, const std::string &node)
 {
     const AVCodec *codec = avcodec_find_encoder_by_name("h264_vaapi");
-    const QByteArray device = QFile::encodeName(node);
     if (!codec
         || av_hwdevice_ctx_create(&m_hwDevice, AV_HWDEVICE_TYPE_VAAPI,
-                                  device.isEmpty() ? nullptr : device.constData(), nullptr, 0)
+                                  node.empty() ? nullptr : node.c_str(), nullptr, 0)
                 < 0)
         return false;
 
@@ -348,7 +371,7 @@ bool Encoder::openVaapi(const QSize &size, const QString &node)
     m_swFormat = AV_PIX_FMT_NV12;
     const auto *hardware = reinterpret_cast<AVHWDeviceContext *>(m_hwDevice->data);
     m_display = static_cast<AVVAAPIDeviceContext *>(hardware->hwctx)->display;
-    qCInfo(cfRecorder) << "encoding with h264_vaapi at" << size;
+    CF_INFO(cfRecorder).format("encoding with h264_vaapi at {}x{}", size.width(), size.height());
     return true;
 }
 
@@ -367,11 +390,11 @@ bool Encoder::openVpp()
         m_vppContext = 0;
         return false;
     }
-    qCInfo(cfRecorder) << "converting frames on the GPU";
+    CF_INFO(cfRecorder) << "converting frames on the GPU";
     return true;
 }
 
-unsigned int Encoder::importSurface(const CaptureSession::DmaBuf &dmabuf, int buffer)
+unsigned int Encoder::importSurface(const DmaBuf &dmabuf, int buffer)
 {
     if (const auto it = m_imported.find(buffer); it != m_imported.end())
         return it->second;
@@ -410,12 +433,12 @@ unsigned int Encoder::importSurface(const CaptureSession::DmaBuf &dmabuf, int bu
     return surface;
 }
 
-bool Encoder::convertDmaBuf(const CaptureSession::DmaBuf &dmabuf, int buffer, const QRect &crop)
+bool Encoder::convertDmaBuf(const DmaBuf &dmabuf, int buffer, const Rect &crop)
 {
     const VASurfaceID source = importSurface(dmabuf, buffer);
     if (source == VA_INVALID_SURFACE)
         return false;
-    const QRect region = fit(crop & QRect(QPoint(), dmabuf.size));
+    const Rect region = fit(crop & Rect(dmabuf.size));
     if (region.isEmpty())
         return false;
 
@@ -455,28 +478,28 @@ bool Encoder::convertDmaBuf(const CaptureSession::DmaBuf &dmabuf, int buffer, co
             && vaSyncSurface(m_display, target) == VA_STATUS_SUCCESS;
 }
 
-QRect Encoder::fit(QRect source)
+Rect Encoder::fit(Rect source)
 {
     if (source.isEmpty())
-        return QRect();
+        return Rect();
     // Odd sizes were rounded down to what YUV 4:2:0 can hold; trim rather than scale.
     const int extraWidth = source.width() - m_size.width();
     const int extraHeight = source.height() - m_size.height();
     if (extraWidth >= 0 && extraWidth <= 1 && extraHeight >= 0 && extraHeight <= 1)
         source.setSize(m_size);
     if (source.size() != m_scaledFrom) {
-        QSize fitted = source.size().scaled(m_size, Qt::KeepAspectRatio);
-        fitted = QSize(evenFloor(fitted.width()), evenFloor(fitted.height()));
-        m_fit = QRect(QPoint(((m_size.width() - fitted.width()) / 2) & ~1,
-                             ((m_size.height() - fitted.height()) / 2) & ~1),
-                      fitted);
+        Size fitted = scaledToFit(source.size(), m_size);
+        fitted = Size(evenFloor(fitted.width()), evenFloor(fitted.height()));
+        m_fit = Rect(Point(((m_size.width() - fitted.width()) / 2) & ~1,
+                           ((m_size.height() - fitted.height()) / 2) & ~1),
+                     fitted);
         m_scaledFrom = source.size();
         m_fitChanged = true;
     }
     return source;
 }
 
-bool Encoder::openX264(const QSize &size)
+bool Encoder::openX264(const Size &size)
 {
     const AVCodec *codec = avcodec_find_encoder_by_name("libx264");
     if (!codec)
@@ -492,15 +515,15 @@ bool Encoder::openX264(const QSize &size)
         return false;
     }
     m_swFormat = AV_PIX_FMT_YUV420P;
-    qCInfo(cfRecorder) << "encoding with libx264 at" << size;
+    CF_INFO(cfRecorder).format("encoding with libx264 at {}x{}", size.width(), size.height());
     return true;
 }
 
-bool Encoder::openAudio(QString *error)
+bool Encoder::openAudio(std::string *error)
 {
     const AVCodec *codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
     if (!codec) {
-        *error = QStringLiteral("no AAC encoder");
+        *error = "no AAC encoder";
         return false;
     }
     m_audio = avcodec_alloc_context3(codec);
@@ -519,7 +542,7 @@ bool Encoder::openAudio(QString *error)
 
     m_audioStream = avformat_new_stream(m_format, nullptr);
     if (!m_audioStream) {
-        *error = QStringLiteral("cannot add the audio stream");
+        *error = "cannot add the audio stream";
         avcodec_free_context(&m_audio);
         return false;
     }
@@ -530,11 +553,10 @@ bool Encoder::openAudio(QString *error)
     return true;
 }
 
-bool Encoder::writeHeader(QString *error)
+bool Encoder::writeHeader(std::string *error)
 {
-    const QByteArray file = QFile::encodeName(m_path);
-    if (int result = avio_open(&m_format->pb, file.constData(), AVIO_FLAG_WRITE); result < 0) {
-        *error = QStringLiteral("cannot write %1: %2").arg(m_path, avError(result));
+    if (int result = avio_open(&m_format->pb, m_path.c_str(), AVIO_FLAG_WRITE); result < 0) {
+        *error = "cannot write " + m_path + ": " + avError(result);
         return false;
     }
     AVDictionary *options = nullptr;
@@ -543,15 +565,15 @@ bool Encoder::writeHeader(QString *error)
     const int result = avformat_write_header(m_format, &options);
     av_dict_free(&options);
     if (result < 0) {
-        *error = QStringLiteral("cannot start the file: %1").arg(avError(result));
+        *error = "cannot start the file: " + avError(result);
         return false;
     }
     return true;
 }
 
-bool Encoder::convert(const QImage &image, const QRect &crop)
+bool Encoder::convert(const Image &image, const Rect &crop)
 {
-    const QRect source = fit(crop & image.rect());
+    const Rect source = fit(crop & image.rect());
     if (source.isEmpty())
         return false;
 
@@ -568,7 +590,7 @@ bool Encoder::convert(const QImage &image, const QRect &crop)
 
     const bool refill = std::exchange(m_fitChanged, false);
     if (refill) {
-        const QSize fitted = m_fit.size();
+        const Size fitted = m_fit.size();
         m_sws = sws_getCachedContext(m_sws, source.width(), source.height(), AV_PIX_FMT_BGRA,
                                      fitted.width(), fitted.height(),
                                      AVPixelFormat(m_swFormat),
@@ -594,10 +616,9 @@ bool Encoder::convert(const QImage &image, const QRect &crop)
         }
     }
 
-    const uint8_t *sourcePlanes[4] = {image.constBits() + source.y() * image.bytesPerLine()
-                                              + source.x() * 4,
-                                      nullptr, nullptr, nullptr};
-    const int sourceStrides[4] = {int(image.bytesPerLine()), 0, 0, 0};
+    const uint8_t *sourcePlanes[4] = {image.bits + source.y() * image.stride + source.x() * 4, nullptr,
+                                      nullptr, nullptr};
+    const int sourceStrides[4] = {image.stride, 0, 0, 0};
     uint8_t *planes[4] = {};
     int strides[4] = {};
     const int x = m_fit.x();
@@ -616,40 +637,39 @@ bool Encoder::convert(const QImage &image, const QRect &crop)
     return sws_scale(m_sws, sourcePlanes, sourceStrides, 0, source.height(), planes, strides) > 0;
 }
 
-bool Encoder::sendVideo(qint64 pts, qint64 duration)
+bool Encoder::sendVideo(int64_t pts, int64_t duration)
 {
     AVFrame *frame = m_pendingHw ? m_pendingHw : m_frame;
     if (!m_pendingHw && m_video->hw_frames_ctx) {
         av_frame_unref(m_hwFrame);
         if (av_hwframe_get_buffer(m_video->hw_frames_ctx, m_hwFrame, 0) < 0
             || av_hwframe_transfer_data(m_hwFrame, m_frame, 0) < 0) {
-            fail(QStringLiteral("cannot upload a frame to the GPU"));
+            fail("cannot upload a frame to the GPU");
             return false;
         }
         frame = m_hwFrame;
     }
     frame->pts = pts;
     // Encoders do not all carry a frame's duration over to its packet.
-    m_durations.insert(pts, duration);
+    m_durations[pts] = duration;
     const int result = avcodec_send_frame(m_video, frame);
     // The encoder keeps its own reference to a GPU frame.
     av_frame_free(&m_pendingHw);
     if (result < 0) {
-        fail(QStringLiteral("cannot encode a frame: %1").arg(avError(result)));
+        fail("cannot encode a frame: " + avError(result));
         return false;
     }
     return writePackets(m_video, m_videoStream);
 }
 
-void Encoder::queueAudio(const QByteArray &samples, qint64 capturedNs)
+void Encoder::queueAudio(const std::vector<float> &samples, int64_t capturedNs)
 {
-    const int frameBytes = int(sizeof(float)) * kChannels;
-    int frames = samples.size() / frameBytes;
+    int frames = int(samples.size() / kChannels);
     int skip = 0;
     if (!m_audioAligned) {
-        const qint64 offset = av_rescale(capturedNs - m_originNs, kSampleRate, 1000000000);
+        const int64_t offset = av_rescale(capturedNs - m_originNs, kSampleRate, 1000000000);
         if (offset < 0) {
-            skip = int(qMin<qint64>(-offset, frames));
+            skip = int(std::min<int64_t>(-offset, frames));
             if (skip == frames)
                 return;
         } else {
@@ -660,18 +680,16 @@ void Encoder::queueAudio(const QByteArray &samples, qint64 capturedNs)
     frames -= skip;
 
     // The encoder takes one plane per channel.
-    QByteArray left(frames * int(sizeof(float)), Qt::Uninitialized);
-    QByteArray right(frames * int(sizeof(float)), Qt::Uninitialized);
-    const auto *interleaved = reinterpret_cast<const float *>(samples.constData()) + skip * kChannels;
-    auto *l = reinterpret_cast<float *>(left.data());
-    auto *r = reinterpret_cast<float *>(right.data());
+    std::vector<float> left(frames);
+    std::vector<float> right(frames);
+    const float *interleaved = samples.data() + skip * kChannels;
     for (int i = 0; i < frames; ++i) {
-        l[i] = interleaved[i * kChannels];
-        r[i] = interleaved[i * kChannels + 1];
+        left[i] = interleaved[i * kChannels];
+        right[i] = interleaved[i * kChannels + 1];
     }
     void *planes[2] = {left.data(), right.data()};
     if (av_audio_fifo_write(m_fifo, planes, frames) < frames) {
-        fail(QStringLiteral("cannot buffer audio"));
+        fail("cannot buffer audio");
         return;
     }
     drainAudio(false);
@@ -681,7 +699,7 @@ bool Encoder::drainAudio(bool flush)
 {
     const int frameSize = m_audio->frame_size > 0 ? m_audio->frame_size : 1024;
     while (av_audio_fifo_size(m_fifo) >= frameSize || (flush && av_audio_fifo_size(m_fifo) > 0)) {
-        const int count = qMin(frameSize, av_audio_fifo_size(m_fifo));
+        const int count = std::min(frameSize, av_audio_fifo_size(m_fifo));
         av_frame_unref(m_audioFrame);
         m_audioFrame->nb_samples = count;
         m_audioFrame->format = m_audio->sample_fmt;
@@ -690,13 +708,13 @@ bool Encoder::drainAudio(bool flush)
         if (av_frame_get_buffer(m_audioFrame, 0) < 0
             || av_audio_fifo_read(m_fifo, reinterpret_cast<void **>(m_audioFrame->data), count)
                     < count) {
-            fail(QStringLiteral("cannot read buffered audio"));
+            fail("cannot read buffered audio");
             return false;
         }
         m_audioFrame->pts = m_audioSamples;
         m_audioSamples += count;
         if (int result = avcodec_send_frame(m_audio, m_audioFrame); result < 0) {
-            fail(QStringLiteral("cannot encode audio: %1").arg(avError(result)));
+            fail("cannot encode audio: " + avError(result));
             return false;
         }
         if (!writePackets(m_audio, m_audioStream))
@@ -711,31 +729,38 @@ bool Encoder::writePackets(AVCodecContext *codec, AVStream *stream)
     int result = 0;
     while ((result = avcodec_receive_packet(codec, packet)) >= 0) {
         if (codec == m_video)
-            packet->duration = m_durations.take(packet->pts);
+            packet->duration = takeDuration(m_durations, packet->pts);
         av_packet_rescale_ts(packet, codec->time_base, stream->time_base);
         packet->stream_index = stream->index;
         if (int written = av_interleaved_write_frame(m_format, packet); written < 0) {
             av_packet_free(&packet);
-            fail(QStringLiteral("cannot write to %1: %2").arg(m_path, avError(written)));
+            fail("cannot write to " + m_path + ": " + avError(written));
             return false;
         }
     }
     av_packet_free(&packet);
     if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) {
-        fail(QStringLiteral("the encoder failed: %1").arg(avError(result)));
+        fail("the encoder failed: " + avError(result));
         return false;
     }
     return true;
 }
 
-void Encoder::fail(const QString &error)
+void Encoder::frameDone(int buffer)
+{
+    if (onFrameDone)
+        onFrameDone(buffer);
+}
+
+void Encoder::fail(const std::string &error)
 {
     if (m_failed)
         return;
     m_failed = true;
-    qCWarning(cfRecorder) << error;
+    CF_WARNING(cfRecorder) << error;
     close();
-    emit finished(false, error);
+    if (onFinished)
+        onFinished(false, error);
 }
 
 void Encoder::close()

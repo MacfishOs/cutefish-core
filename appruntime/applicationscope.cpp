@@ -1,134 +1,83 @@
 #include "applicationscope.h"
 
-#include <QDBusArgument>
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDBusMetaType>
-#include <QDBusPendingCall>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
-#include <QDBusVariant>
-#include <QDebug>
-#include <QList>
+#include "base/dbus.h"
+#include "base/event_loop.h"
+#include "base/logging.h"
+
+#include <cstdio>
+#include <memory>
+#include <tuple>
+#include <vector>
 
 #include <signal.h>
 
-namespace {
+namespace dbus = cutefish::base::dbus;
+
+static const cutefish::base::LogCategory kLog("cutefish.appruntime");
 
 // (sv) and (sa(sv)): unit properties and auxiliary units.
-struct UnitProperty {
-    QString name;
-    QDBusVariant value;
-};
-
-struct AuxiliaryUnit {
-    QString name;
-    QList<UnitProperty> properties;
-};
-
-QDBusArgument &operator<<(QDBusArgument &arg, const UnitProperty &value)
-{
-    arg.beginStructure();
-    arg << value.name << value.value;
-    arg.endStructure();
-    return arg;
-}
-
-const QDBusArgument &operator>>(const QDBusArgument &arg, UnitProperty &value)
-{
-    arg.beginStructure();
-    arg >> value.name >> value.value;
-    arg.endStructure();
-    return arg;
-}
-
-QDBusArgument &operator<<(QDBusArgument &arg, const AuxiliaryUnit &value)
-{
-    arg.beginStructure();
-    arg << value.name << value.properties;
-    arg.endStructure();
-    return arg;
-}
-
-const QDBusArgument &operator>>(const QDBusArgument &arg, AuxiliaryUnit &value)
-{
-    arg.beginStructure();
-    arg >> value.name >> value.properties;
-    arg.endStructure();
-    return arg;
-}
-
-} // namespace
-
-static void registerTypes()
-{
-    static const bool registered = [] {
-        qDBusRegisterMetaType<UnitProperty>();
-        qDBusRegisterMetaType<QList<UnitProperty>>();
-        qDBusRegisterMetaType<AuxiliaryUnit>();
-        qDBusRegisterMetaType<QList<AuxiliaryUnit>>();
-        return true;
-    }();
-    Q_UNUSED(registered)
-}
+using UnitProperty = std::tuple<std::string, dbus::Variant>;
+using AuxiliaryUnit = std::tuple<std::string, std::vector<UnitProperty>>;
 
 // systemd's unit name escaping: [a-zA-Z0-9:_.] pass, a leading '.' and
 // everything else become \xNN of the UTF-8 byte.
-static QString escape(const QString &text)
+static std::string escape(const std::string &text)
 {
-    const QByteArray bytes = text.toUtf8();
-    QString result;
-    for (int i = 0; i < bytes.size(); ++i) {
-        const char c = bytes.at(i);
+    std::string result;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
         const bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
                 || (c >= '0' && c <= '9') || c == ':' || c == '_' || (c == '.' && i > 0);
-        if (plain)
-            result.append(QLatin1Char(c));
-        else
-            result.append(QStringLiteral("\\x%1").arg(uchar(c), 2, 16, QLatin1Char('0')));
+        if (plain) {
+            result += c;
+        } else {
+            char escaped[5];
+            std::snprintf(escaped, sizeof(escaped), "\\x%02x", static_cast<unsigned char>(c));
+            result += escaped;
+        }
     }
     return result;
 }
 
-Q_DECLARE_METATYPE(UnitProperty)
-Q_DECLARE_METATYPE(AuxiliaryUnit)
-
-QString ApplicationScope::unitName(const QString &appId, uint pid)
+static dbus::Message managerCall(dbus::Connection *bus, const char *method)
 {
-    return QStringLiteral("app-cutefish-%1-%2.scope").arg(escape(appId)).arg(pid);
+    return bus->newMethodCall("org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                              "org.freedesktop.systemd1.Manager", method);
 }
 
-void ApplicationScope::adopt(const QString &appId, uint pid)
+std::string ApplicationScope::unitName(const std::string &appId, uint32_t pid)
 {
-    if (appId.isEmpty() || pid == 0)
+    return "app-cutefish-" + escape(appId) + '-' + std::to_string(pid) + ".scope";
+}
+
+void ApplicationScope::adopt(const std::string &appId, uint32_t pid)
+{
+    if (appId.empty() || pid == 0)
         return;
-    registerTypes();
-    QList<UnitProperty> properties;
-    properties.append({QStringLiteral("PIDs"),
-                       QDBusVariant(QVariant::fromValue(QList<uint> {pid}))});
-    properties.append({QStringLiteral("CollectMode"),
-                       QDBusVariant(QStringLiteral("inactive-or-failed"))});
-    auto call = QDBusMessage::createMethodCall(
-            QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
-            QStringLiteral("org.freedesktop.systemd1.Manager"), QStringLiteral("StartTransientUnit"));
-    call.setArguments({unitName(appId, pid), QStringLiteral("fail"),
-                       QVariant::fromValue(properties), QVariant::fromValue(QList<AuxiliaryUnit>())});
-    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(call));
-    QObject::connect(watcher, &QDBusPendingCallWatcher::finished, watcher,
-                     [appId, pid](QDBusPendingCallWatcher *watcher) {
-                         const QDBusPendingReply<QDBusObjectPath> reply = *watcher;
-                         if (reply.isError())
-                             qWarning() << "AppRuntime: no systemd scope for" << appId << pid
-                                        << reply.error().message();
-                         watcher->deleteLater();
-                     });
+    dbus::Connection *bus = dbus::Connection::session();
+    if (!bus)
+        return;
+    const std::vector<UnitProperty> properties {
+            {"PIDs", dbus::Variant(std::vector<uint32_t> {pid})},
+            {"CollectMode", dbus::Variant(std::string("inactive-or-failed"))},
+    };
+    dbus::Message call = managerCall(bus, "StartTransientUnit");
+    call.append(unitName(appId, pid), std::string("fail"), properties, std::vector<AuxiliaryUnit>());
+    // Kept until the reply has been handled, then released on the loop.
+    auto pending = std::make_shared<dbus::PendingCall>();
+    *pending = bus->callAsync(call, [pending, appId, pid](const dbus::Reply &reply) mutable {
+        if (reply.isError())
+            CF_WARNING(kLog) << "AppRuntime: no systemd scope for" << appId << pid << reply.error().message;
+        cutefish::base::EventLoop::current()->post([released = std::move(pending)] {});
+    });
 }
 
-void ApplicationScope::killAll(const QString &unitName)
+void ApplicationScope::killAll(const std::string &unitName)
 {
-    auto call = QDBusMessage::createMethodCall(
-            QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
-            QStringLiteral("org.freedesktop.systemd1.Manager"), QStringLiteral("KillUnit"));
-    call.setArguments({unitName, QStringLiteral("all"), int(SIGKILL)});
-    QDBusConnection::sessionBus().asyncCall(call);
+    dbus::Connection *bus = dbus::Connection::session();
+    if (!bus)
+        return;
+    dbus::Message call = managerCall(bus, "KillUnit");
+    call.append(unitName, std::string("all"), int32_t(SIGKILL));
+    bus->send(call);
 }

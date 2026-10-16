@@ -1,73 +1,110 @@
+// SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/dbus.h"
+#include "base/event_loop.h"
+#include "base/file.h"
+#include "base/settings.h"
 #include "locale/language.h"
-#include "preferences.h"
+#include "support/wait.h"
 
-#include <QDBusConnection>
-#include <QTemporaryDir>
-#include <QTest>
+using namespace cutefish::base;
+using namespace std::chrono_literals;
 
-class Notifications : public QObject
+namespace {
+
+// org.freedesktop.Notifications on a connection of its own.
+class Notifications
 {
-    Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.Notifications")
-
 public:
+    Notifications()
+        : m_bus(dbus::Connection::open(dbus::Connection::Bus::Session))
+    {
+        m_object = std::make_unique<dbus::Object>(m_bus.get(), "/org/freedesktop/Notifications",
+                                                  "org.freedesktop.Notifications");
+        m_object->addMethod("Notify", [this](const std::string &, uint32_t, const std::string &, const std::string &,
+                                             const std::string &, const std::vector<std::string> &,
+                                             const dbus::VariantMap &, int32_t) {
+            return uint32_t(++count);
+        });
+        EXPECT_TRUE(m_object->publish());
+        EXPECT_TRUE(m_bus->requestName("org.freedesktop.Notifications"));
+    }
+
     int count = 0;
 
-public slots:
-    uint Notify(const QString &, uint, const QString &, const QString &, const QString &,
-                const QStringList &, const QVariantMap &, int)
-    {
-        return ++count;
-    }
+private:
+    std::unique_ptr<dbus::Connection> m_bus;
+    std::unique_ptr<dbus::Object> m_object;
 };
 
-class LanguageServiceTest : public QObject
+} // namespace
+
+TEST(LanguageServiceTest, NotificationsOnlyForPrimaryChanges)
 {
-    Q_OBJECT
+    EventLoop loop;
+    file::TemporaryDirectory directory("/tmp", "language-test");
+    ASSERT_TRUE(directory.isValid());
+    Notifications notifications;
 
-private slots:
-    void notificationsOnlyForPrimaryChanges()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        qputenv("XDG_CONFIG_HOME", directory.path().toUtf8());
-        Notifications notifications;
-        auto bus = QDBusConnection::sessionBus();
-        QVERIFY(bus.registerService("org.freedesktop.Notifications"));
-        QVERIFY(bus.registerObject("/org/freedesktop/Notifications", &notifications,
-                                   QDBusConnection::ExportAllSlots));
+    Settings settings(directory.path() + "/services.conf");
+    settings.setValue("Language/language", "en_US");
+    settings.setValue("Appearance/Font", "Custom Font");
+    settings.sync();
 
-        QSettings theme(Preferences::file("services"), QSettings::IniFormat);
-        theme.setValue("Language/language", "en_US");
-        theme.beginGroup("Appearance");
-        theme.setValue("Font", "Custom Font");
-        theme.sync();
-        Language language;
-        language.setPreferredLanguages({"en_US", "ja_JP", "de_DE"});
-        QTest::qWait(30);
-        QCOMPARE(notifications.count, 0);
-        QCOMPARE(theme.value("Font").toString(), "Custom Font");
+    std::vector<std::string> fonts;
+    int fontConfigs = 0;
+    Language language(settings, dbus::Connection::session(),
+                      {[&fonts](const std::string &family) { fonts.push_back(family); },
+                       [&fontConfigs] { ++fontConfigs; }});
 
-        language.setPreferredLanguages({"en_US", "de_DE", "ja_JP"});
-        QTest::qWait(30);
-        QCOMPARE(notifications.count, 0);
-        QCOMPARE(theme.value("Font").toString(), "Custom Font");
-        QCOMPARE(language.preferredLanguages(), QStringList({"en_US", "de_DE", "ja_JP"}));
+    language.setPreferredLanguages({"en_US", "ja_JP", "de_DE"});
+    testsupport::wait(loop, 30ms);
+    EXPECT_EQ(notifications.count, 0);
+    EXPECT_TRUE(fonts.empty());
+    EXPECT_EQ(fontConfigs, 1);
 
-        language.setPreferredLanguages({"ja_JP", "en_US", "de_DE"});
-        QTRY_COMPARE(notifications.count, 1);
-        language.setPreferredLanguages({"ja_JP", "de_DE"});
-        QTest::qWait(30);
-        QCOMPARE(notifications.count, 1);
-        language.setPreferredLanguages({"de_DE"});
-        QTRY_COMPARE(notifications.count, 2);
-        language.setPreferredLanguages({"de_DE"});
-        QTest::qWait(30);
-        QCOMPARE(notifications.count, 2);
-        bus.unregisterObject("/org/freedesktop/Notifications");
-        bus.unregisterService("org.freedesktop.Notifications");
-    }
-};
+    language.setPreferredLanguages({"en_US", "de_DE", "ja_JP"});
+    testsupport::wait(loop, 30ms);
+    EXPECT_EQ(notifications.count, 0);
+    EXPECT_TRUE(fonts.empty());
+    EXPECT_EQ(language.preferredLanguages(), (std::vector<std::string> {"en_US", "de_DE", "ja_JP"}));
 
-QTEST_GUILESS_MAIN(LanguageServiceTest)
-#include "language_service_test.moc"
+    language.setPreferredLanguages({"ja_JP", "en_US", "de_DE"});
+    EXPECT_TRUE(testsupport::waitFor(loop, [&] { return notifications.count == 1; }));
+    EXPECT_EQ(fonts, std::vector<std::string> {"Noto Sans CJK JP"});
+    EXPECT_EQ(language.languageCode(), "ja_JP");
+
+    language.setPreferredLanguages({"ja_JP", "de_DE"});
+    testsupport::wait(loop, 30ms);
+    EXPECT_EQ(notifications.count, 1);
+
+    language.setPreferredLanguages({"de_DE"});
+    EXPECT_TRUE(testsupport::waitFor(loop, [&] { return notifications.count == 2; }));
+    // German has no font of its own.
+    EXPECT_EQ(fonts.size(), 1u);
+
+    language.setPreferredLanguages({"de_DE"});
+    testsupport::wait(loop, 30ms);
+    EXPECT_EQ(notifications.count, 2);
+
+    // Kept where the session reads it.
+    Settings saved(directory.path() + "/services.conf");
+    EXPECT_EQ(saved.stringValue("Language/language"), "de_DE");
+    EXPECT_EQ(saved.stringListValue("Language/preferredLanguages"), std::vector<std::string> {"de_DE"});
+}
+
+TEST(LanguageServiceTest, NamesLocalesAsTheSessionDoes)
+{
+    EXPECT_EQ(Language::localeName("ja_JP"), "ja_JP");
+    EXPECT_EQ(Language::localeName("zh_CN"), "zh_CN");
+    EXPECT_EQ(Language::localeName("zh_TW"), "zh_TW");
+    EXPECT_EQ(Language::localeName("en"), "en_US");
+    EXPECT_EQ(Language::localeName("de"), "de_DE");
+}

@@ -1,46 +1,60 @@
 #ifndef DDCWORKER_H
 #define DDCWORKER_H
 
-#include <QHash>
-#include <QList>
-#include <QMetaType>
-#include <QMutex>
-#include <QObject>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "base/event_loop.h"
 
 struct DdcDisplay {
-    QString connector;
-    QString device;
+    std::string connector;
+    std::string device;
     int value = 0;
     int maximum = 0;
 };
 
-Q_DECLARE_METATYPE(DdcDisplay)
-Q_DECLARE_METATYPE(QList<DdcDisplay>)
-
-// Blocking DDC/CI I/O; lives on its own thread because each transaction takes tens of ms.
-class DdcWorker : public QObject
+// Blocking DDC/CI I/O; runs on its own thread because each transaction takes tens of ms.
+class DdcWorker
 {
-    Q_OBJECT
-
 public:
-    explicit DdcWorker(QObject *parent = nullptr);
+    using Probed = std::function<void(uint64_t generation, const std::vector<DdcDisplay> &displays)>;
 
-    // Thread-safe. Only the latest value per device is written.
-    void requestValue(const QString &device, int value);
+    // `probed` runs on the loop of the thread that made the worker.
+    explicit DdcWorker(Probed probed);
+    // Waits for the transaction under way; queued work is dropped.
+    ~DdcWorker();
 
-public slots:
-    void probe(quint64 generation, const QList<DdcDisplay> &candidates);
+    DdcWorker(const DdcWorker &) = delete;
+    DdcWorker &operator=(const DdcWorker &) = delete;
 
-signals:
-    void probed(quint64 generation, const QList<DdcDisplay> &displays);
-
-private slots:
-    void flush();
+    // Only the latest value per device is written.
+    void requestValue(const std::string &device, int value);
+    void probe(uint64_t generation, std::vector<DdcDisplay> candidates);
 
 private:
-    QMutex m_mutex;
-    QHash<QString, int> m_pending;
+    void run();
+    void post(std::function<void()> task);
+    void flush();
+
+    Probed m_probed;
+    cutefish::base::LoopHandle m_loop;
+    // Lives on the owner's thread, as long as the worker.
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
+    std::mutex m_mutex;
+    std::condition_variable m_wake;
+    std::deque<std::function<void()>> m_tasks;
+    std::map<std::string, int> m_pending;
     bool m_flushQueued = false;
+    bool m_stopping = false;
+    std::thread m_thread;
 };
 
 #endif

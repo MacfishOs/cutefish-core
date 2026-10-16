@@ -1,29 +1,33 @@
 #ifndef PROXYSERVICE_H
 #define PROXYSERVICE_H
 
-#include <QFileSystemWatcher>
-#include <QMap>
-#include <QObject>
-#include <QTimer>
+#include <map>
+#include <string>
+
+#include "base/dbus.h"
+#include "base/file_watcher.h"
+#include "base/timer.h"
 
 // Follows org.gnome.system.proxy, which Cutefish Settings and third-party proxy clients write,
 // and republishes it to the environment of D-Bus and systemd activated programs.
 // Applications started by AppRuntime read the keyfile themselves at launch.
-class ProxyService : public QObject
+class ProxyService
 {
-    Q_OBJECT
-
 public:
-    explicit ProxyService(QObject *parent = nullptr);
+    explicit ProxyService(cutefish::base::dbus::Connection *session);
+    ~ProxyService();
+
+    ProxyService(const ProxyService &) = delete;
+    ProxyService &operator=(const ProxyService &) = delete;
 
 private:
-    void watch();
     void reload();
     void publishEnvironment();
 
-    QFileSystemWatcher m_watcher;
-    QTimer m_reloadTimer;
-    QMap<QString, QString> m_environment;
+    cutefish::base::dbus::Connection *m_session;
+    cutefish::base::FileWatch m_watch;
+    cutefish::base::Timer m_reloadTimer;
+    std::map<std::string, std::string> m_environment;
     bool m_environmentPublished = false;
 };
 

@@ -1,153 +1,149 @@
 #include "appruntime.h"
 #include "applicationscope.h"
 #include "chromiumswitches.h"
-#include "languageenvironment.h"
-#include "proxysettings.h"
 
-#include "applicationregistry.h"
-#include "desktopentry.h"
+#include "base/application_registry.h"
+#include "base/event_loop.h"
+#include "base/file.h"
+#include "base/logging.h"
+#include "base/paths.h"
+#include "base/strings.h"
+#include "common/detached_process.h"
+#include "common/language_environment.h"
+#include "common/proxy_settings.h"
 
-#include <QDebug>
-#include <QFile>
-#include <QFileInfo>
-#include <QProcess>
-#include <QStandardPaths>
+#include <algorithm>
+#include <filesystem>
 
 #include <errno.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
-static const int kTerminateTimeout = 5000;
-// Taken at start: once the session is gone we belong to whatever adopted us.
-static const uint kSessionPid = static_cast<uint>(::getppid());
+namespace base = cutefish::base;
+namespace strings = cutefish::base::strings;
+using namespace std::chrono_literals;
 
-AppRuntime::AppRuntime(QObject *parent)
-    : QObject(parent)
-    , m_registry(ApplicationRegistry::instance())
+static const base::LogCategory kLog("cutefish.appruntime");
+
+static constexpr auto kTerminateTimeout = 5000ms;
+// Taken at start: once the session is gone we belong to whatever adopted us.
+static const uint32_t kSessionPid = static_cast<uint32_t>(::getppid());
+
+AppRuntime::AppRuntime()
 {
-    // Instances are started detached, so there is no SIGCHLD to wait for.
-    m_reaper.setInterval(2000);
-    connect(&m_reaper, &QTimer::timeout, this, &AppRuntime::reap);
+    // Instances run in sessions of their own; their ends are polled for here.
+    m_reaper.setInterval(2000ms);
+    m_reaper.onTimeout = [this] {
+        reap();
+    };
 }
 
-QProcessEnvironment AppRuntime::applicationEnvironment()
+cutefish::core::Environment AppRuntime::applicationEnvironment()
 {
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    LanguageEnvironment::apply(environment);
-    ProxyEnvironment::apply(environment);
-    environment.remove(QStringLiteral("XDG_ACTIVATION_TOKEN"));
+    cutefish::core::Environment environment = cutefish::core::processEnvironment();
+    cutefish::core::language::apply(environment);
+    cutefish::core::proxy::apply(environment);
+    environment.erase("XDG_ACTIVATION_TOKEN");
     return environment;
 }
 
-uint AppRuntime::launchApplication(const QString &appId, const QStringList &arguments)
+uint32_t AppRuntime::launchApplication(const std::string &appId, const std::vector<std::string> &arguments,
+                                       const std::string &activationToken)
 {
-    return launchApplication(appId, arguments, QString());
-}
-
-uint AppRuntime::launchApplication(const QString &appId, const QStringList &arguments,
-                                   const QString &activationToken)
-{
-    if (appId.isEmpty())
+    if (appId.empty())
         return 0;
 
     // Callers know an application either by its entry id or by the path of
     // the desktop file they read.
-    DesktopEntry *entry = m_registry->byId(appId);
-    if (!entry && appId.contains(QLatin1Char('/'))) {
-        entry = m_registry->byPath(appId);
+    base::ApplicationRegistry &registry = base::ApplicationRegistry::instance();
+    auto entry = registry.byId(appId);
+    if (!entry && appId.find('/') != std::string::npos) {
+        entry = registry.byPath(appId);
 
-        if (!entry)
-            entry = m_registry->byId(QFileInfo(appId).completeBaseName());
+        if (!entry) {
+            // The file name up to its last dot.
+            std::string name = std::filesystem::path(appId).filename().string();
+            const size_t dot = name.rfind('.');
+            if (dot != std::string::npos)
+                name.resize(dot);
+            entry = registry.byId(name);
+        }
     }
 
     if (!entry) {
-        qWarning() << "AppRuntime: no desktop entry for" << appId;
+        CF_WARNING(kLog) << "AppRuntime: no desktop entry for" << appId;
         return 0;
     }
 
-    QStringList command = entry->commandForArguments(arguments);
-    if (command.isEmpty())
+    std::vector<std::string> command = entry->commandForArguments(arguments);
+    if (command.empty())
         return 0;
 
-    if (entry->terminal()) {
-        QString terminal = QStandardPaths::findExecutable(QStringLiteral("x-terminal-emulator"));
-        if (terminal.isEmpty())
-            terminal = QStandardPaths::findExecutable(QStringLiteral("xterm"));
+    if (entry->terminal) {
+        std::string terminal = base::paths::findExecutable("x-terminal-emulator");
+        if (terminal.empty())
+            terminal = base::paths::findExecutable("xterm");
 
-        if (terminal.isEmpty())
-            qWarning() << "AppRuntime: no terminal emulator for" << appId;
-        else
-            command = QStringList{terminal, QStringLiteral("-e")} + command;
+        if (terminal.empty()) {
+            CF_WARNING(kLog) << "AppRuntime: no terminal emulator for" << appId;
+        } else {
+            command.insert(command.begin(), {terminal, "-e"});
+        }
     }
 
-    return startProcess(entry->id(), command, entry->workingDirectory(), activationToken);
+    return startProcess(entry->id, command, entry->workingDirectory, activationToken);
 }
 
-uint AppRuntime::launchCommand(const QString &appId, const QStringList &command,
-                               const QString &workingDirectory)
+uint32_t AppRuntime::launchCommand(const std::string &appId, const std::vector<std::string> &command,
+                                   const std::string &workingDirectory, const std::string &activationToken)
 {
-    return launchCommand(appId, command, workingDirectory, QString());
-}
-
-uint AppRuntime::launchCommand(const QString &appId, const QStringList &command,
-                               const QString &workingDirectory, const QString &activationToken)
-{
-    if (command.isEmpty() || command.first().isEmpty())
+    if (command.empty() || command.front().empty())
         return 0;
 
-    QString id = appId;
-    if (id.isEmpty())
-        id = QFileInfo(command.first()).fileName();
+    std::string id = appId;
+    if (id.empty())
+        id = std::filesystem::path(command.front()).filename().string();
 
     return startProcess(id, command, workingDirectory, activationToken);
 }
 
-uint AppRuntime::startProcess(const QString &appId, const QStringList &command,
-                              const QString &workingDirectory, const QString &activationToken)
+uint32_t AppRuntime::startProcess(const std::string &appId, const std::vector<std::string> &command,
+                                  const std::string &workingDirectory, const std::string &activationToken)
 {
-    QProcessEnvironment environment = applicationEnvironment();
-    qint64 pid = m_booster.launch(command, workingDirectory, environment, activationToken);
+    cutefish::core::Environment environment = applicationEnvironment();
+    const std::vector<std::string> arguments = withChromiumSwitches(command);
+    if (!activationToken.empty())
+        environment["XDG_ACTIVATION_TOKEN"] = activationToken;
 
-    if (pid == 0) {
-        const QStringList arguments = withChromiumSwitches(command);
-        QProcess process;
-        process.setProgram(arguments.first());
-        process.setArguments(arguments.mid(1));
-        if (!activationToken.isEmpty())
-            environment.insert(QStringLiteral("XDG_ACTIVATION_TOKEN"), activationToken);
-        process.setProcessEnvironment(environment);
-
-        if (!workingDirectory.isEmpty())
-            process.setWorkingDirectory(workingDirectory);
-
-        if (!process.startDetached(&pid) || pid <= 0) {
-            qWarning() << "AppRuntime: failed to start" << arguments << process.errorString();
-            return 0;
-        }
+    const pid_t started = cutefish::core::startDetached(arguments, workingDirectory, environment);
+    if (started <= 0) {
+        CF_WARNING(kLog) << "AppRuntime: failed to start" << strings::join(arguments, " ");
+        return 0;
     }
+    const uint32_t pid = static_cast<uint32_t>(started);
 
     // Only an id the registry knows names the scope: portals read the app id
     // back from it, and a bare executable name would pass for one.
-    if (DesktopEntry *entry = m_registry->byId(appId))
-        ApplicationScope::adopt(entry->id(), static_cast<uint>(pid));
-    m_instances.insert(static_cast<uint>(pid),
-                       Instance{appId, startTime(static_cast<uint>(pid))});
+    if (const auto entry = base::ApplicationRegistry::instance().byId(appId))
+        ApplicationScope::adopt(entry->id, pid);
+    m_instances[pid] = Instance{appId, startTime(pid)};
 
     if (!m_reaper.isActive())
         m_reaper.start();
 
-    emit applicationLaunched(appId, static_cast<uint>(pid));
+    applicationLaunched.emit(appId, pid);
 
-    return static_cast<uint>(pid);
+    return pid;
 }
 
-bool AppRuntime::quitApplication(const QString &appId)
+bool AppRuntime::quitApplication(const std::string &appId)
 {
-    if (appId.isEmpty())
+    if (appId.empty())
         return false;
 
     bool result = false;
-    for (const uint pid : pidsForApplication(appId))
+    for (const uint32_t pid : pidsForApplication(appId))
         result |= terminate(pid);
 
     return result;
@@ -156,48 +152,51 @@ bool AppRuntime::quitApplication(const QString &appId)
 // Logout path: one call instead of one per application.
 bool AppRuntime::quitAll()
 {
+    std::vector<uint32_t> pids;
+    for (const auto &[pid, instance] : m_instances)
+        pids.push_back(pid);
+
     bool result = false;
-    for (const uint pid : m_instances.keys())
+    for (const uint32_t pid : pids)
         result |= terminate(pid);
 
     return result;
 }
 
-bool AppRuntime::quitByPid(uint pid)
+bool AppRuntime::quitByPid(uint32_t pid)
 {
     return terminate(pid);
 }
 
 // The compositor has already ended the process itself; what is left is the
 // rest of its application, such as helpers it started.
-bool AppRuntime::forceQuitByPid(uint pid)
+bool AppRuntime::forceQuitByPid(uint32_t pid)
 {
-    const auto it = m_instances.constFind(pid);
-    if (it == m_instances.constEnd())
+    const auto it = m_instances.find(pid);
+    if (it == m_instances.end())
         return false;
     // The scope exists only for an id the registry knows; see startProcess().
-    DesktopEntry *entry = m_registry->byId(it.value().appId);
+    const auto entry = base::ApplicationRegistry::instance().byId(it->second.appId);
     if (!entry)
         return false;
-    ApplicationScope::killAll(ApplicationScope::unitName(entry->id(), pid));
+    ApplicationScope::killAll(ApplicationScope::unitName(entry->id, pid));
     return true;
 }
 
-bool AppRuntime::terminate(uint pid)
+bool AppRuntime::terminate(uint32_t pid)
 {
     if (!isSafeTarget(pid) || !isAlive(pid) || !isOwnedByUser(pid))
         return false;
 
     // Read before SIGTERM: an exited process reads as 0, which would let the
     // delayed SIGKILL hit whatever has recycled the pid.
-    const qulonglong started = startTime(pid);
+    const uint64_t started = startTime(pid);
 
-    // Never signal a process group: Qt's detached children are led by an
-    // intermediate fork, so the group is not ours to interpret and a wrong
-    // one takes down the whole login session.
+    // Never signal a process group: the group is not ours to interpret, and a
+    // wrong one takes down the whole login session.
     ::kill(static_cast<pid_t>(pid), SIGTERM);
 
-    QTimer::singleShot(kTerminateTimeout, this, [pid, started] {
+    base::EventLoop::current()->startTimer(kTerminateTimeout, false, [pid, started] {
         if (isAlive(pid) && isOwnedByUser(pid) && (started == 0 || startTime(pid) == started))
             ::kill(static_cast<pid_t>(pid), SIGKILL);
     });
@@ -208,36 +207,39 @@ bool AppRuntime::terminate(uint pid)
     return true;
 }
 
-bool AppRuntime::isRunning(const QString &appId) const
+bool AppRuntime::isRunning(const std::string &appId) const
 {
-    return !pidsForApplication(appId).isEmpty();
+    return !pidsForApplication(appId).empty();
 }
 
-QStringList AppRuntime::runningApplications() const
+std::vector<std::string> AppRuntime::runningApplications() const
 {
-    QStringList result;
-    for (auto it = m_instances.constBegin(); it != m_instances.constEnd(); ++it) {
-        if (!result.contains(it.value().appId))
-            result.append(it.value().appId);
+    std::vector<std::string> result;
+    for (const auto &[pid, instance] : m_instances) {
+        if (std::find(result.begin(), result.end(), instance.appId) == result.end())
+            result.push_back(instance.appId);
     }
     return result;
 }
 
-QList<uint> AppRuntime::pidsForApplication(const QString &appId) const
+std::vector<uint32_t> AppRuntime::pidsForApplication(const std::string &appId) const
 {
-    QList<uint> result;
-    for (auto it = m_instances.constBegin(); it != m_instances.constEnd(); ++it) {
-        if (it.value().appId == appId)
-            result.append(it.key());
+    std::vector<uint32_t> result;
+    for (const auto &[pid, instance] : m_instances) {
+        if (instance.appId == appId)
+            result.push_back(pid);
     }
     return result;
 }
 
 void AppRuntime::reap()
 {
-    const QList<uint> pids = m_instances.keys();
-    for (const uint pid : pids) {
-        const Instance instance = m_instances.value(pid);
+    std::vector<uint32_t> pids;
+    for (const auto &[pid, instance] : m_instances)
+        pids.push_back(pid);
+
+    for (const uint32_t pid : pids) {
+        const Instance instance = m_instances[pid];
 
         // A live pid that no longer belongs to the process we started has
         // been recycled: the instance is gone all the same. An unknown start
@@ -245,73 +247,73 @@ void AppRuntime::reap()
         if (isAlive(pid) && (instance.startTime == 0 || startTime(pid) == instance.startTime))
             continue;
 
-        m_instances.remove(pid);
-        emit applicationQuit(instance.appId, pid);
+        m_instances.erase(pid);
+        applicationQuit.emit(instance.appId, pid);
     }
 
-    if (m_instances.isEmpty())
+    if (m_instances.empty())
         m_reaper.stop();
 }
 
-bool AppRuntime::isAlive(uint pid)
+bool AppRuntime::isAlive(uint32_t pid)
 {
     if (pid == 0)
         return false;
 
-    // Detached children are not ours to wait for, so a live pid is never a
-    // zombie here.
+    // The runtime collects its children as they end, so a live pid is never
+    // a zombie here.
     return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
 }
 
-bool AppRuntime::isSafeTarget(uint pid)
+bool AppRuntime::isSafeTarget(uint32_t pid)
 {
     if (pid <= 1)
         return false;
 
     // Refuse anything that would take the session down with the application,
     // including the session's own components: they are its children, as we are.
-    return pid != static_cast<uint>(::getpid())
-        && pid != static_cast<uint>(::getpgrp())
-        && pid != static_cast<uint>(::getsid(0))
+    return pid != static_cast<uint32_t>(::getpid())
+        && pid != static_cast<uint32_t>(::getpgrp())
+        && pid != static_cast<uint32_t>(::getsid(0))
         && parentPid(pid) != kSessionPid;
 }
 
 // The fields after comm, which is parenthesised and may itself contain spaces;
 // index 0 is field 3.
-static QList<QByteArray> statFields(uint pid)
+static std::vector<std::string> statFields(uint32_t pid)
 {
-    QFile stat(QStringLiteral("/proc/%1/stat").arg(pid));
-    if (!stat.open(QIODevice::ReadOnly))
+    const auto stat = base::file::read("/proc/" + std::to_string(pid) + "/stat");
+    if (!stat)
         return {};
 
-    const QByteArray line = stat.readLine();
-    const int commEnd = line.lastIndexOf(')');
-    if (commEnd < 0)
+    const std::string line = stat->substr(0, stat->find('\n'));
+    const size_t commEnd = line.rfind(')');
+    if (commEnd == std::string::npos || commEnd + 2 > line.size())
         return {};
 
-    return line.mid(commEnd + 2).simplified().split(' ');
+    return strings::splitWhitespace(line.substr(commEnd + 2));
 }
 
 // Field 4 of /proc/pid/stat.
-uint AppRuntime::parentPid(uint pid)
+uint32_t AppRuntime::parentPid(uint32_t pid)
 {
-    const QList<QByteArray> fields = statFields(pid);
-    return fields.size() < 2 ? 0 : fields.at(1).toUInt();
+    const std::vector<std::string> fields = statFields(pid);
+    return fields.size() < 2 ? 0 : strings::toNumber<uint32_t>(fields.at(1)).value_or(0);
 }
 
 // Field 22 of /proc/pid/stat, in clock ticks since boot.
-qulonglong AppRuntime::startTime(uint pid)
+uint64_t AppRuntime::startTime(uint32_t pid)
 {
-    const QList<QByteArray> fields = statFields(pid);
+    const std::vector<std::string> fields = statFields(pid);
     // stat field 22 is the 20th one after comm.
     if (fields.size() < 20)
         return 0;
 
-    return fields.at(19).toULongLong();
+    return strings::toNumber<uint64_t>(fields.at(19)).value_or(0);
 }
 
-bool AppRuntime::isOwnedByUser(uint pid)
+bool AppRuntime::isOwnedByUser(uint32_t pid)
 {
-    const QFileInfo info(QStringLiteral("/proc/%1").arg(pid));
-    return info.exists() && info.ownerId() == ::getuid();
+    struct stat info {};
+    return ::stat(("/proc/" + std::to_string(pid)).c_str(), &info) == 0 && info.st_uid == ::getuid();
 }

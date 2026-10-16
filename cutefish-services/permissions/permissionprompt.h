@@ -1,56 +1,83 @@
 #pragma once
 
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QJsonObject>
-#include <QObject>
-#include <QString>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
 
-class QQmlEngine;
-class QQuickWindow;
+#include "base/dbus.h"
+#include "ui/view.h"
 
-// One open prompt window. Exposed to QML as `prompt`; the content component
-// for the kind supplies the wording and the choice details.
-class PermissionPrompt : public QObject
+namespace cutefish::ui {
+class DialogButton;
+class Window;
+}
+
+// One open prompt window. The content for the kind supplies the wording and
+// the choice details.
+class PermissionPrompt
 {
-    Q_OBJECT
-    Q_PROPERTY(QString content MEMBER m_content CONSTANT)
-    Q_PROPERTY(QString icon MEMBER m_icon CONSTANT)
-    Q_PROPERTY(QJsonObject application MEMBER m_application CONSTANT)
-    Q_PROPERTY(QJsonObject request MEMBER m_request CONSTANT)
-
 public:
-    // Known kinds map to a content component; an unknown kind is refused.
-    static bool supports(const QString &kind);
+    // What a kind shows between the header and the buttons, and its wording.
+    class Content : public cutefish::ui::View
+    {
+    public:
+        virtual std::string title() const = 0;
+        virtual std::string description() const = 0;
+        virtual std::string accept() const = 0;
+        virtual bool ready() const = 0;
+        virtual cutefish::base::dbus::VariantMap details() const = 0;
 
-    PermissionPrompt(QQmlEngine *engine, const QString &kind, const QString &appId,
-                     const QString &parentWindow, const QVariantMap &options,
-                     const QDBusMessage &message, QObject *parent = nullptr);
-    ~PermissionPrompt() override;
+        // A double click on a choice.
+        std::function<void()> onAccepted;
+    };
 
-    QString caller() const { return m_message.service(); }
-    bool show();
+    // Known kinds have a content; an unknown kind is refused.
+    static bool supports(const std::string &kind);
+
+    PermissionPrompt(const std::string &kind, const std::string &appId, const std::string &parentWindow,
+                     const cutefish::base::dbus::VariantMap &options, cutefish::base::dbus::MethodCall call);
+    // Replies "failed" when nothing answered yet.
+    ~PermissionPrompt();
+
+    PermissionPrompt(const PermissionPrompt &) = delete;
+    PermissionPrompt &operator=(const PermissionPrompt &) = delete;
+
+    std::string caller() const { return m_call.message().sender(); }
+    // Dismisses the prompt once the caller leaves the bus.
+    void watchCaller(cutefish::base::dbus::Connection *bus);
+    void show();
     void dismiss();
 
-    Q_INVOKABLE void allow(const QJsonObject &details);
-    Q_INVOKABLE void deny();
-    // The icon name of an application's desktop entry, for rows that stand
-    // for another application's windows.
-    Q_INVOKABLE QString applicationIcon(const QString &appId) const;
+    void allow();
+    void deny();
 
-Q_SIGNALS:
-    void finished();
+    cutefish::ui::Window *window() const { return m_window.get(); }
+    Content *content() const { return m_content; }
+
+    // Answered or dismissed: the prompt can go.
+    std::function<void()> onFinished;
+
+    // The name and icon of a desktop entry; the id itself and no icon for an
+    // application without one.
+    struct Application {
+        std::string id;
+        std::string name;
+        std::string icon;
+    };
+    static Application describeApplication(const std::string &appId);
 
 private:
-    void reply(uint response, const QVariantMap &results);
+    void reply(uint32_t response, const cutefish::base::dbus::VariantMap &results);
 
-    QQmlEngine *m_engine;
-    QDBusMessage m_message;
-    QString m_content;
-    QString m_icon;
-    QString m_parentWindow;
-    QJsonObject m_application;
-    QJsonObject m_request;
+    cutefish::base::dbus::MethodCall m_call;
+    std::string m_kindIcon;
+    std::string m_parentWindow;
+    Application m_application;
     bool m_finished = false;
-    QQuickWindow *m_window = nullptr;
+    cutefish::base::dbus::NameWatch m_callerWatch;
+    std::unique_ptr<cutefish::ui::Window> m_window;
+    std::unique_ptr<Content> m_ownedContent;
+    Content *m_content = nullptr;
+    cutefish::ui::DialogButton *m_accept = nullptr;
 };

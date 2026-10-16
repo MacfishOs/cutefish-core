@@ -1,20 +1,29 @@
-#include "power/dimdisplayaction.h"
+// SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
+// SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <QDBusConnection>
-#include <QDBusContext>
-#include <QDBusMessage>
-#include <QDBusUnixFileDescriptor>
-#include <QMutex>
-#include <QTest>
-#include <QThread>
-#include <QTimer>
+#include <gtest/gtest.h>
 
+#include <algorithm>
+#include <future>
+#include <memory>
+#include <mutex>
 #include <poll.h>
+#include <string>
+#include <thread>
 #include <unistd.h>
+#include <vector>
 
+#include "base/dbus.h"
+#include "base/event_loop.h"
+#include "display/displaytypes.h"
+#include "power/dimdisplayaction.h"
+#include "support/wait.h"
+
+using namespace cutefish::base;
 using namespace cutefish::display;
+using namespace std::chrono_literals;
 
-static const QString displayService = QStringLiteral("com.cutefish.DisplayConfig.PowerTest");
+static const char displayService[] = "com.cutefish.DisplayConfig.PowerTest";
 
 namespace {
 
@@ -22,9 +31,9 @@ namespace {
 struct Log {
     int locks = 0;
     int suspends = 0;
-    QList<bool> interactive;
-    QList<bool> docked;
-    QList<uint> power;
+    std::vector<bool> interactive;
+    std::vector<bool> docked;
+    std::vector<uint32_t> power;
 };
 
 class Recorder
@@ -32,662 +41,557 @@ class Recorder
 public:
     Log log() const
     {
-        QMutexLocker locker(&m_mutex);
+        std::lock_guard locker(m_mutex);
         return m_log;
     }
 
     template<typename F>
     void update(F &&change)
     {
-        QMutexLocker locker(&m_mutex);
+        std::lock_guard locker(m_mutex);
         change(m_log);
     }
 
 private:
-    mutable QMutex m_mutex;
+    mutable std::mutex m_mutex;
     Log m_log;
 };
 
-class FakeScreenSaver : public QObject, protected QDBusContext
+// The screen saver, logind and the compositor's display service. The action
+// blocks on Lock, so they answer from a thread of their own, on a connection
+// of their own. logind is on the same bus, which stands in for the system bus.
+class Services
 {
-    Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.ScreenSaver")
-
-public:
-    explicit FakeScreenSaver(Recorder *recorder)
-        : m_recorder(recorder)
-    {
-    }
-
-    bool fails = false;
-
-public slots:
-    void Lock()
-    {
-        m_recorder->update([](Log &log) {
-            ++log.locks;
-        });
-        if (fails)
-            sendErrorReply(QDBusError::Failed, QStringLiteral("Session is not available"));
-    }
-
-signals:
-    void ActiveChanged(bool active);
-
-private:
-    Recorder *m_recorder;
-};
-
-class FakeLogind : public QObject, protected QDBusContext
-{
-    Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.login1.Manager")
-
-public:
-    explicit FakeLogind(Recorder *recorder)
-        : m_recorder(recorder)
-    {
-    }
-
-    ~FakeLogind() override
-    {
-        if (m_lidInhibitor >= 0)
-            ::close(m_lidInhibitor);
-    }
-
-    // Refuses Suspend as logind does while a sleep inhibitor is held.
-    bool inhibited = false;
-
-    // The holder closing its end hangs up the read end kept here.
-    bool holdsLidInhibitor() const
-    {
-        if (m_lidInhibitor < 0)
-            return false;
-        pollfd fd {m_lidInhibitor, 0, 0};
-        return ::poll(&fd, 1, 0) == 0;
-    }
-
-public slots:
-    QDBusUnixFileDescriptor Inhibit(const QString &what, const QString &, const QString &,
-                                    const QString &)
-    {
-        int fds[2];
-        if (what != QStringLiteral("handle-lid-switch") || ::pipe(fds) != 0) {
-            sendErrorReply(QDBusError::NotSupported, what);
-            return {};
-        }
-        if (m_lidInhibitor >= 0)
-            ::close(m_lidInhibitor);
-        m_lidInhibitor = fds[0];
-        QDBusUnixFileDescriptor inhibitor(fds[1]);
-        ::close(fds[1]);
-        return inhibitor;
-    }
-
-    void Suspend(bool interactive)
-    {
-        m_recorder->update([interactive](Log &log) {
-            ++log.suspends;
-            log.interactive.append(interactive);
-        });
-        if (inhibited)
-            sendErrorReply(QStringLiteral("org.freedesktop.DBus.Error.InteractiveAuthorizationRequired"),
-                           QStringLiteral("Operation inhibited"));
-    }
-
-signals:
-    void PrepareForSleep(bool start);
-
-private:
-    Recorder *m_recorder;
-    int m_lidInhibitor = -1;
-};
-
-// Answers the way the compositor's DisplayConfigService does.
-class FakeDisplayConfig : public QObject
-{
-    Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "com.cutefish.DisplayConfig1")
-
-public:
-    explicit FakeDisplayConfig(Recorder *recorder)
-        : m_recorder(recorder)
-    {
-        ipc::registerTypes();
-    }
-
-    bool external = false;
-    int busyAnswers = 0;
-
-    void changeTopology()
-    {
-        ++m_generation;
-        ++m_revision;
-        emit StateChanged(m_generation, m_revision);
-    }
-
-public slots:
-    // Qt D-Bus matches output types by their full names.
-    QString GetState(QString &seatId, qulonglong &topologyGeneration, qulonglong &appliedRevision,
-                     QList<cutefish::display::ipc::PhysicalDisplay> &physical,
-                     QList<cutefish::display::ipc::LogicalDisplay> &logical,
-                     QList<cutefish::display::ipc::Placement> &placements, QString &previewToken,
-                     qulonglong &previewDeadlineMs)
-    {
-        seatId = QStringLiteral("seat0");
-        topologyGeneration = m_generation;
-        appliedRevision = m_revision;
-        physical.clear();
-        logical.clear();
-        placements.clear();
-        previewToken.clear();
-        previewDeadlineMs = 0;
-        return QStringLiteral("test-instance");
-    }
-
-    QString SetDockedLidClosed(bool closed)
-    {
-        m_recorder->update([closed](Log &log) {
-            log.docked.append(closed);
-        });
-        if (closed && busyAnswers > 0) {
-            --busyAnswers;
-            return reject(ipc::ErrorCode::Busy);
-        }
-        if (closed && !external)
-            return reject(ipc::ErrorCode::NoEnabledOutput);
-        return succeed();
-    }
-
-    QString SetDisplayPower(const QStringList &, uint state)
-    {
-        m_recorder->update([state](Log &log) {
-            log.power.append(state);
-        });
-        return succeed();
-    }
-
-signals:
-    void StateChanged(qulonglong topologyGeneration, qulonglong appliedRevision);
-    void OperationFinished(const QString &token, bool succeeded, bool degraded, uint errorCode,
-                           const QString &message, const QStringList &affectedDisplayIds,
-                           qulonglong topologyGeneration, qulonglong appliedRevision);
-
-private:
-    QString reject(ipc::ErrorCode error)
-    {
-        const QString token = nextToken();
-        emit OperationFinished(token, false, false, uint(error), {}, {}, m_generation, m_revision);
-        return token;
-    }
-
-    QString succeed()
-    {
-        const QString token = nextToken();
-        QTimer::singleShot(0, this, [this, token] {
-            emit OperationFinished(token, true, false, 0, {}, {}, m_generation, m_revision);
-        });
-        return token;
-    }
-
-    QString nextToken() { return QStringLiteral("token-%1").arg(++m_serial); }
-
-    Recorder *m_recorder;
-    qulonglong m_generation = 1;
-    qulonglong m_revision = 1;
-    int m_serial = 0;
-};
-
-// The action blocks on Lock, so the fakes answer from their own thread. logind is
-// on the same bus, which the tests make the system bus too.
-class Services : public QObject
-{
-    Q_OBJECT
-
 public:
     Services()
     {
-        m_thread.start();
-        moveToThread(&m_thread);
-        run([this] {
-            m_bus = std::make_unique<QDBusConnection>(QDBusConnection::connectToBus(
-                    QDBusConnection::SessionBus, QStringLiteral("fake-services")));
-            screenSaver = new FakeScreenSaver(&recorder);
-            logind = new FakeLogind(&recorder);
-            display = new FakeDisplayConfig(&recorder);
-            const auto options =
-                    QDBusConnection::ExportAllSlots | QDBusConnection::ExportAllSignals;
-            m_bus->registerObject(QStringLiteral("/ScreenSaver"), screenSaver, options);
-            m_bus->registerService(QStringLiteral("org.freedesktop.ScreenSaver"));
-            m_bus->registerObject(QStringLiteral("/org/freedesktop/login1"), logind, options);
-            m_bus->registerService(QStringLiteral("org.freedesktop.login1"));
-            m_bus->registerObject(QStringLiteral("/com/cutefish/DisplayConfig1"), display,
-                                  options);
-            m_bus->registerService(displayService);
+        std::promise<void> ready;
+        m_thread = std::thread([this, &ready] {
+            EventLoop loop;
+            m_loop = &loop;
+            m_bus = dbus::Connection::open(dbus::Connection::Bus::Session, &loop);
+            publish();
+            ready.set_value();
+            loop.run();
+            m_objects.clear();
+            m_bus.reset();
+            if (m_lidInhibitor >= 0)
+                ::close(m_lidInhibitor);
         });
+        ready.get_future().wait();
     }
 
-    ~Services() override
+    ~Services()
     {
         run([this] {
-            m_bus->unregisterService(QStringLiteral("org.freedesktop.ScreenSaver"));
-            m_bus->unregisterService(QStringLiteral("org.freedesktop.login1"));
-            m_bus->unregisterService(displayService);
-            delete screenSaver;
-            delete logind;
-            delete display;
-            const QString name = m_bus->name();
-            m_bus.reset();
-            QDBusConnection::disconnectFromBus(name);
-            moveToThread(QCoreApplication::instance()->thread());
+            m_loop->quit();
         });
-        m_thread.quit();
-        m_thread.wait();
+        m_thread.join();
     }
 
+    // Runs on the fakes' thread and waits for it.
     template<typename F>
     void run(F &&function)
     {
-        QMetaObject::invokeMethod(this, std::forward<F>(function), Qt::BlockingQueuedConnection);
+        std::promise<void> done;
+        m_loop->post([&] {
+            function();
+            done.set_value();
+        });
+        done.get_future().wait();
     }
 
     bool holdsLidInhibitor()
     {
         bool held = false;
         run([&] {
-            held = logind->holdsLidInhibitor();
+            if (m_lidInhibitor < 0)
+                return;
+            // The holder closing its end hangs up the read end kept here.
+            pollfd fd {m_lidInhibitor, 0, 0};
+            held = ::poll(&fd, 1, 0) == 0;
         });
         return held;
+    }
+
+    void setLocked(bool locked)
+    {
+        run([&] {
+            m_screenSaver->emitSignal("ActiveChanged", locked);
+        });
     }
 
     void sleepAndWake()
     {
         run([this] {
-            emit logind->PrepareForSleep(true);
-            emit logind->PrepareForSleep(false);
+            m_logind->emitSignal("PrepareForSleep", true);
+            m_logind->emitSignal("PrepareForSleep", false);
         });
     }
 
     void releaseSleepInhibitors()
     {
         run([this] {
-            logind->inhibited = false;
-            auto signal = QDBusMessage::createSignal(QStringLiteral("/org/freedesktop/login1"),
-                                                     QStringLiteral("org.freedesktop.DBus.Properties"),
-                                                     QStringLiteral("PropertiesChanged"));
-            signal << QStringLiteral("org.freedesktop.login1.Manager")
-                   << QVariantMap {{QStringLiteral("BlockInhibited"), QString()}} << QStringList();
-            m_bus->send(signal);
+            inhibited = false;
+            m_bus->emitSignal("/org/freedesktop/login1", "org.freedesktop.DBus.Properties", "PropertiesChanged",
+                              std::string("org.freedesktop.login1.Manager"),
+                              dbus::VariantMap {{"BlockInhibited", dbus::Variant(std::string())}},
+                              std::vector<std::string>());
+        });
+    }
+
+    void changeTopology()
+    {
+        run([this] {
+            ++m_generation;
+            ++m_revision;
+            m_display->emitSignal("StateChanged", m_generation, m_revision);
         });
     }
 
     Recorder recorder;
-    FakeScreenSaver *screenSaver = nullptr;
-    FakeLogind *logind = nullptr;
-    FakeDisplayConfig *display = nullptr;
+    // Set through run().
+    bool lockFails = false;
+    // Refuses Suspend as logind does while a sleep inhibitor is held.
+    bool inhibited = false;
+    bool external = false;
+    int busyAnswers = 0;
 
 private:
-    QThread m_thread;
-    std::unique_ptr<QDBusConnection> m_bus;
+    void publish()
+    {
+        auto screenSaver = std::make_unique<dbus::Object>(m_bus.get(), "/ScreenSaver", "org.freedesktop.ScreenSaver");
+        screenSaver->addMethod("Lock", "", "", [this](dbus::MethodCall &call) {
+            recorder.update([](Log &log) {
+                ++log.locks;
+            });
+            if (lockFails)
+                call.replyError("org.freedesktop.DBus.Error.Failed", "Session is not available");
+            else
+                call.reply();
+        });
+        screenSaver->addSignal("ActiveChanged", "b");
+        screenSaver->publish();
+        m_screenSaver = screenSaver.get();
+        m_objects.push_back(std::move(screenSaver));
+
+        auto logind = std::make_unique<dbus::Object>(m_bus.get(), "/org/freedesktop/login1",
+                                                     "org.freedesktop.login1.Manager");
+        logind->addMethod("Inhibit", "ssss", "h", [this](dbus::MethodCall &call) {
+            std::string what;
+            int fds[2];
+            if (!call.read(what) || what != "handle-lid-switch" || ::pipe(fds) != 0) {
+                call.replyError("org.freedesktop.DBus.Error.NotSupported", what);
+                return;
+            }
+            if (m_lidInhibitor >= 0)
+                ::close(m_lidInhibitor);
+            m_lidInhibitor = fds[0];
+            call.reply(dbus::UnixFd::adopt(fds[1]));
+        });
+        logind->addMethod("Suspend", "b", "", [this](dbus::MethodCall &call) {
+            bool interactive = true;
+            call.read(interactive);
+            recorder.update([interactive](Log &log) {
+                ++log.suspends;
+                log.interactive.push_back(interactive);
+            });
+            if (inhibited)
+                call.replyError("org.freedesktop.DBus.Error.InteractiveAuthorizationRequired", "Operation inhibited");
+            else
+                call.reply();
+        });
+        logind->addSignal("PrepareForSleep", "b");
+        logind->publish();
+        m_logind = logind.get();
+        m_objects.push_back(std::move(logind));
+
+        auto display = std::make_unique<dbus::Object>(m_bus.get(), "/com/cutefish/DisplayConfig1",
+                                                      "com.cutefish.DisplayConfig1");
+        display->addMethod("GetState", [this] {
+            return std::make_tuple(std::string("test-instance"), std::string("seat0"), m_generation, m_revision,
+                                   std::vector<PhysicalDisplay>(), std::vector<LogicalDisplay>(),
+                                   std::vector<Placement>(), std::string(), uint64_t(0));
+        });
+        display->addMethod("SetDockedLidClosed", [this](bool closed) {
+            recorder.update([closed](Log &log) {
+                log.docked.push_back(closed);
+            });
+            if (closed && busyAnswers > 0) {
+                --busyAnswers;
+                return reject(ErrorCode::Busy);
+            }
+            if (closed && !external)
+                return reject(ErrorCode::NoEnabledOutput);
+            return succeed();
+        });
+        display->addMethod("SetDisplayPower", [this](const std::vector<std::string> &, uint32_t state) {
+            recorder.update([state](Log &log) {
+                log.power.push_back(state);
+            });
+            return succeed();
+        });
+        display->addSignal("StateChanged", "tt");
+        display->addSignal("OperationFinished", "sbbusastt");
+        display->publish();
+        m_display = display.get();
+        m_objects.push_back(std::move(display));
+
+        m_bus->requestName("org.freedesktop.ScreenSaver");
+        m_bus->requestName("org.freedesktop.login1");
+        m_bus->requestName(displayService);
+    }
+
+    std::string reject(ErrorCode error)
+    {
+        const std::string token = nextToken();
+        m_display->emitSignal("OperationFinished", token, false, false, uint32_t(error), std::string(),
+                              std::vector<std::string>(), m_generation, m_revision);
+        return token;
+    }
+
+    std::string succeed()
+    {
+        const std::string token = nextToken();
+        m_loop->post([this, token] {
+            m_display->emitSignal("OperationFinished", token, true, false, uint32_t(0), std::string(),
+                                  std::vector<std::string>(), m_generation, m_revision);
+        });
+        return token;
+    }
+
+    std::string nextToken() { return "token-" + std::to_string(++m_serial); }
+
+    std::thread m_thread;
+    EventLoop *m_loop = nullptr;
+    std::unique_ptr<dbus::Connection> m_bus;
+    std::vector<std::unique_ptr<dbus::Object>> m_objects;
+    dbus::Object *m_screenSaver = nullptr;
+    dbus::Object *m_logind = nullptr;
+    dbus::Object *m_display = nullptr;
+    int m_lidInhibitor = -1;
+    uint64_t m_generation = 1;
+    uint64_t m_revision = 1;
+    int m_serial = 0;
+};
+
+class PowerPolicyTest : public testing::Test
+{
+protected:
+    EventLoop loop;
+    Services services;
+
+    std::unique_ptr<DimDisplayAction> start()
+    {
+        // No idle manager: the tests deliver the idle timeouts.
+        dbus::Connection *bus = dbus::Connection::session();
+        auto action = std::make_unique<DimDisplayAction>(nullptr, nullptr, bus, bus, displayService);
+        // Lets the action's display client load the compositor's state first.
+        testsupport::wait(loop, 100ms);
+        return action;
+    }
+
+    void setLocked(bool locked)
+    {
+        services.setLocked(locked);
+        testsupport::wait(loop, 100ms);
+    }
+
+    template<typename F>
+    bool until(F &&condition, std::chrono::milliseconds timeout = 5s)
+    {
+        return testsupport::waitFor(loop, std::forward<F>(condition), timeout);
+    }
+
+    Log log() const { return services.recorder.log(); }
 };
 
 } // namespace
 
-class PowerPolicyTest : public QObject
+TEST_F(PowerPolicyTest, SingleDisplayLidLocksAndSuspends)
 {
-    Q_OBJECT
+    auto action = start();
+    action->setLidPresent(true);
 
-    // Lets the action's display client load the compositor's state first.
-    static void waitForDisplayState() { QTest::qWait(100); }
+    EXPECT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
 
-    static void setLocked(Services &services, bool locked)
-    {
-        services.run([&] {
-            emit services.screenSaver->ActiveChanged(locked);
-        });
-        QTest::qWait(100);
-    }
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }));
+    EXPECT_EQ(log().interactive, std::vector<bool> {false});
+    EXPECT_EQ(log().docked, std::vector<bool> {true});
+    EXPECT_EQ(log().locks, 1);
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
+    EXPECT_TRUE(until([&] { return !services.holdsLidInhibitor(); }));
 
-private slots:
-    void initTestCase()
-    {
-        // logind is a fake on the private session bus.
-        qputenv("DBUS_SYSTEM_BUS_ADDRESS", qgetenv("DBUS_SESSION_BUS_ADDRESS"));
-        // Nor a compositor: idle notifications never arrive, the tests deliver them.
-        qputenv("WAYLAND_DISPLAY", "power-policy-test-none");
-        qputenv("CUTEFISH_DISPLAY_CONFIG_SERVICE", displayService.toUtf8());
-    }
+    action->handleLidOpened();
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0}; }));
+    EXPECT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
+}
 
-    void singleDisplayLidLocksAndSuspends()
-    {
-        Services services;
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
+TEST_F(PowerPolicyTest, FailedLockStillSuspends)
+{
+    services.run([&] {
+        services.lockFails = true;
+    });
+    auto action = start();
+    action->setLidPresent(true);
 
-        QTRY_VERIFY(services.holdsLidInhibitor());
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }));
+    EXPECT_EQ(log().locks, 1);
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
+}
 
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-        const Log log = services.recorder.log();
-        QCOMPARE(log.interactive, QList<bool> {false});
-        QCOMPARE(log.docked, QList<bool> {true});
-        QCOMPARE(log.locks, 1);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
-        QTRY_VERIFY(!services.holdsLidInhibitor());
+TEST_F(PowerPolicyTest, DockedLidKeepsTheSessionAwake)
+{
+    services.run([&] {
+        services.external = true;
+    });
+    auto action = start();
+    action->setLidPresent(true);
 
-        action.handleLidOpened();
-        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0}));
-        QTRY_VERIFY(services.holdsLidInhibitor());
-    }
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
+    testsupport::wait(loop, 200ms);
+    EXPECT_EQ(log().locks, 0);
+    EXPECT_EQ(log().suspends, 0);
+    EXPECT_TRUE(log().power.empty());
 
-    void failedLockStillSuspends()
-    {
-        Services services;
-        services.run([&] {
-            services.screenSaver->fails = true;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
+    action->handleLidOpened();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true, false}; }));
+    EXPECT_EQ(log().suspends, 0);
+    EXPECT_TRUE(log().power.empty());
+}
 
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-        QCOMPARE(services.recorder.log().locks, 1);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
-    }
+TEST_F(PowerPolicyTest, LosingTheExternalDisplaySuspends)
+{
+    services.run([&] {
+        services.external = true;
+    });
+    auto action = start();
+    action->setLidPresent(true);
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
+    testsupport::wait(loop, 100ms);
 
-    void dockedLidKeepsTheSessionAwake()
-    {
-        Services services;
-        services.run([&] {
-            services.display->external = true;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
+    services.run([&] {
+        services.external = false;
+    });
+    services.changeTopology();
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }));
+    EXPECT_EQ(log().docked, (std::vector<bool> {true, true}));
+    // The panel is already off: the lock comes from powering everything off.
+    EXPECT_EQ(log().locks, 0);
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
 
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().docked, QList<bool> {true});
-        QTest::qWait(200);
-        Log log = services.recorder.log();
-        QCOMPARE(log.locks, 0);
-        QCOMPARE(log.suspends, 0);
-        QVERIFY(log.power.isEmpty());
+    action->handleLidOpened();
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0}; }));
+}
 
-        action.handleLidOpened();
-        QTRY_COMPARE(services.recorder.log().docked, (QList<bool> {true, false}));
-        log = services.recorder.log();
-        QCOMPARE(log.suspends, 0);
-        QVERIFY(log.power.isEmpty());
-    }
+TEST_F(PowerPolicyTest, KeepingAnotherExternalDisplayStaysDocked)
+{
+    services.run([&] {
+        services.external = true;
+    });
+    auto action = start();
+    action->setLidPresent(true);
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
+    testsupport::wait(loop, 100ms);
 
-    void losingTheExternalDisplaySuspends()
-    {
-        Services services;
-        services.run([&] {
-            services.display->external = true;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().docked, QList<bool> {true});
-        QTest::qWait(100);
+    services.changeTopology();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true, true}; }));
+    testsupport::wait(loop, 200ms);
+    EXPECT_EQ(log().suspends, 0);
+}
 
-        services.run([&] {
-            services.display->external = false;
-            services.display->changeTopology();
-        });
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-        const Log log = services.recorder.log();
-        QCOMPARE(log.docked, (QList<bool> {true, true}));
-        // The panel is already off: the lock comes from powering everything off.
-        QCOMPARE(log.locks, 0);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+TEST_F(PowerPolicyTest, ADisplayChangeInProgressIsWaitedOut)
+{
+    services.run([&] {
+        services.external = true;
+        services.busyAnswers = 2;
+    });
+    auto action = start();
+    action->setLidPresent(true);
 
-        action.handleLidOpened();
-        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0}));
-    }
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true, true, true}; }, 3s));
+    testsupport::wait(loop, 200ms);
+    EXPECT_EQ(log().suspends, 0);
+    EXPECT_EQ(log().locks, 0);
+}
 
-    void keepingAnotherExternalDisplayStaysDocked()
-    {
-        Services services;
-        services.run([&] {
-            services.display->external = true;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().docked, QList<bool> {true});
-        QTest::qWait(100);
+TEST_F(PowerPolicyTest, ADisplayChangeThatNeverSettlesStillSuspends)
+{
+    services.run([&] {
+        services.external = true;
+        services.busyAnswers = 1000;
+    });
+    auto action = start();
+    action->setLidPresent(true);
 
-        services.run([&] {
-            services.display->changeTopology();
-        });
-        QTRY_COMPARE(services.recorder.log().docked, (QList<bool> {true, true}));
-        QTest::qWait(200);
-        QCOMPARE(services.recorder.log().suspends, 0);
-    }
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }, 10s));
+    EXPECT_EQ(log().docked.size(), 11u);
+}
 
-    void aDisplayChangeInProgressIsWaitedOut()
-    {
-        Services services;
-        services.run([&] {
-            services.display->external = true;
-            services.display->busyAnswers = 2;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
+TEST_F(PowerPolicyTest, ALockedScreenGoesDarkSoonAndSleepsEvenWithNever)
+{
+    auto action = start();
+    action->setPolicy(-1, 1);
+    setLocked(true);
 
-        action.handleLidClosed();
-        QTRY_COMPARE_WITH_TIMEOUT(services.recorder.log().docked, (QList<bool> {true, true, true}),
-                                  3000);
-        QTest::qWait(200);
-        const Log log = services.recorder.log();
-        QCOMPARE(log.suspends, 0);
-        QCOMPARE(log.locks, 0);
-    }
+    action->onIdleTimeout(30000);
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
+    EXPECT_TRUE(until([&] { return log().suspends == 1; }));
+}
 
-    void aDisplayChangeThatNeverSettlesStillSuspends()
-    {
-        Services services;
-        services.run([&] {
-            services.display->external = true;
-            services.display->busyAnswers = 1000;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
+TEST_F(PowerPolicyTest, AnUnlockedScreenKeepsTheUsersTimeout)
+{
+    auto action = start();
+    action->setPolicy(1200, 1);
 
-        action.handleLidClosed();
-        QTRY_COMPARE_WITH_TIMEOUT(services.recorder.log().suspends, 1, 10000);
-        QCOMPARE(services.recorder.log().docked.size(), 11);
-    }
+    action->onIdleTimeout(30000);
+    testsupport::wait(loop, 200ms);
+    EXPECT_TRUE(log().power.empty());
+}
 
-    void aLockedScreenGoesDarkSoonAndSleepsEvenWithNever()
-    {
-        Services services;
-        DimDisplayAction action;
-        waitForDisplayState();
-        action.setPolicy(-1, 1);
-        setLocked(services, true);
+TEST_F(PowerPolicyTest, LockingAfterTheUserLeftGoesDarkAtOnce)
+{
+    auto action = start();
+    action->setPolicy(1200, 900);
+    action->onIdleTimeout(30000);
+    testsupport::wait(loop, 100ms);
+    EXPECT_TRUE(log().power.empty());
 
-        action.onIdleTimeout(30000);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-    }
+    setLocked(true);
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
+}
 
-    void anUnlockedScreenKeepsTheUsersTimeout()
-    {
-        Services services;
-        DimDisplayAction action;
-        waitForDisplayState();
-        action.setPolicy(1200, 1);
+TEST_F(PowerPolicyTest, WakingTheLockScreenLightsItAgain)
+{
+    auto action = start();
+    action->setPolicy(1200, 900);
+    setLocked(true);
+    action->onIdleTimeout(30000);
+    ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
 
-        action.onIdleTimeout(30000);
-        QTest::qWait(200);
-        QVERIFY(services.recorder.log().power.isEmpty());
-    }
+    action->onWakeupFromIdle();
+    ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0}; }));
+    action->onIdleTimeout(30000);
+    EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0, 1}; }));
+}
 
-    void lockingAfterTheUserLeftGoesDarkAtOnce()
-    {
-        Services services;
-        DimDisplayAction action;
-        waitForDisplayState();
-        action.setPolicy(1200, 900);
-        action.onIdleTimeout(30000);
-        QTest::qWait(100);
-        QVERIFY(services.recorder.log().power.isEmpty());
+TEST_F(PowerPolicyTest, WakingWhileDockedLetsTheDisplayGoDarkAgain)
+{
+    services.run([&] {
+        services.external = true;
+    });
+    auto action = start();
+    action->setLidPresent(true);
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
+    testsupport::wait(loop, 100ms);
 
-        setLocked(services, true);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
-    }
+    action->setPolicy(1200, 900);
+    action->onIdleTimeout(1200000);
+    ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
 
-    void wakingTheLockScreenLightsItAgain()
-    {
-        Services services;
-        DimDisplayAction action;
-        waitForDisplayState();
-        action.setPolicy(1200, 900);
-        setLocked(services, true);
-        action.onIdleTimeout(30000);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+    action->onWakeupFromIdle();
+    testsupport::wait(loop, 100ms);
+    action->onIdleTimeout(1200000);
+    ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 1}; }));
+    // Powering every display on would light the closed panel.
+    const std::vector<uint32_t> power = log().power;
+    EXPECT_EQ(std::count(power.begin(), power.end(), 0u), 0);
+}
 
-        action.onWakeupFromIdle();
-        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0}));
-        action.onIdleTimeout(30000);
-        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 0, 1}));
-    }
+TEST_F(PowerPolicyTest, PreventingSleepKeepsTheSystemAwake)
+{
+    auto action = start();
+    action->setPolicy(-1, 0);
+    setLocked(true);
 
-    void wakingWhileDockedLetsTheDisplayGoDarkAgain()
-    {
-        Services services;
-        services.run([&] {
-            services.display->external = true;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().docked, QList<bool> {true});
-        QTest::qWait(100);
+    action->onIdleTimeout(30000);
+    ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
+    testsupport::wait(loop, 1500ms);
+    EXPECT_EQ(log().suspends, 0);
+}
 
-        action.setPolicy(1200, 900);
-        action.onIdleTimeout(1200000);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
+TEST_F(PowerPolicyTest, AnInhibitedSleepWaitsWithoutAPrompt)
+{
+    services.run([&] {
+        services.inhibited = true;
+    });
+    auto action = start();
+    action->setPolicy(60, 1);
 
-        action.onWakeupFromIdle();
-        QTest::qWait(100);
-        action.onIdleTimeout(1200000);
-        QTRY_COMPARE(services.recorder.log().power, (QList<uint> {1, 1}));
-        // Powering every display on would light the closed panel.
-        QVERIFY(!services.recorder.log().power.contains(0u));
-    }
+    action->onIdleTimeout(60000);
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }));
+    EXPECT_EQ(log().interactive, std::vector<bool> {false});
+    testsupport::wait(loop, 1500ms);
+    EXPECT_EQ(log().suspends, 1);
 
-    void preventingSleepKeepsTheSystemAwake()
-    {
-        Services services;
-        DimDisplayAction action;
-        waitForDisplayState();
-        action.setPolicy(-1, 0);
-        setLocked(services, true);
+    services.releaseSleepInhibitors();
+    ASSERT_TRUE(until([&] { return log().suspends == 2; }));
+    EXPECT_EQ(log().interactive, (std::vector<bool> {false, false}));
+}
 
-        action.onIdleTimeout(30000);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
-        QTest::qWait(1500);
-        QCOMPARE(services.recorder.log().suspends, 0);
-    }
+TEST_F(PowerPolicyTest, AnInhibitedClosedLidIsLeftToLogind)
+{
+    services.run([&] {
+        services.inhibited = true;
+    });
+    auto action = start();
+    action->setLidPresent(true);
+    ASSERT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
 
-    void anInhibitedSleepWaitsWithoutAPrompt()
-    {
-        Services services;
-        services.run([&] {
-            services.logind->inhibited = true;
-        });
-        DimDisplayAction action;
-        waitForDisplayState();
-        action.setPolicy(60, 1);
+    // logind's own lid handling sleeps through the inhibitor that refused this.
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }));
+    EXPECT_TRUE(until([&] { return !services.holdsLidInhibitor(); }));
 
-        action.onIdleTimeout(60000);
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-        QCOMPARE(services.recorder.log().interactive, QList<bool> {false});
-        QTest::qWait(1500);
-        QCOMPARE(services.recorder.log().suspends, 1);
+    // It also sleeps again after a wake with the lid still closed.
+    services.sleepAndWake();
+    testsupport::wait(loop, 200ms);
+    EXPECT_FALSE(services.holdsLidInhibitor());
 
-        services.releaseSleepInhibitors();
-        QTRY_COMPARE(services.recorder.log().suspends, 2);
-        QCOMPARE(services.recorder.log().interactive, (QList<bool> {false, false}));
-    }
+    action->handleLidOpened();
+    EXPECT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
+}
 
-    void anInhibitedClosedLidIsLeftToLogind()
-    {
-        Services services;
-        services.run([&] {
-            services.logind->inhibited = true;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
-        QTRY_VERIFY(services.holdsLidInhibitor());
+TEST_F(PowerPolicyTest, DockedLidStillSleepsWhenIdle)
+{
+    services.run([&] {
+        services.external = true;
+    });
+    auto action = start();
+    action->setLidPresent(true);
+    action->handleLidClosed();
+    ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
+    testsupport::wait(loop, 100ms);
 
-        // logind's own lid handling sleeps through the inhibitor that refused this.
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-        QTRY_VERIFY(!services.holdsLidInhibitor());
+    action->setPolicy(1200, 1);
+    action->onIdleTimeout(1200000);
+    ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }));
+    // An external display is in use, so the lid stays Cutefish's.
+    EXPECT_TRUE(services.holdsLidInhibitor());
+}
 
-        // It also sleeps again after a wake with the lid still closed.
-        services.sleepAndWake();
-        QTest::qWait(200);
-        QVERIFY(!services.holdsLidInhibitor());
+TEST_F(PowerPolicyTest, AWakeWithoutInputSleepsAgain)
+{
+    auto action = start();
+    action->setPolicy(60, 1);
+    action->onIdleTimeout(60000);
+    ASSERT_TRUE(until([&] { return log().suspends == 1; }));
 
-        action.handleLidOpened();
-        QTRY_VERIFY(services.holdsLidInhibitor());
-    }
+    services.sleepAndWake();
+    ASSERT_TRUE(until([&] { return log().suspends == 2; }));
 
-    void dockedLidStillSleepsWhenIdle()
-    {
-        Services services;
-        services.run([&] {
-            services.display->external = true;
-        });
-        DimDisplayAction action;
-        action.setLidPresent(true);
-        waitForDisplayState();
-        action.handleLidClosed();
-        QTRY_COMPARE(services.recorder.log().docked, QList<bool> {true});
-        QTest::qWait(100);
-
-        action.setPolicy(1200, 1);
-        action.onIdleTimeout(1200000);
-        QTRY_COMPARE(services.recorder.log().power, QList<uint> {1});
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-        // An external display is in use, so the lid stays Cutefish's.
-        QVERIFY(services.holdsLidInhibitor());
-    }
-
-    void aWakeWithoutInputSleepsAgain()
-    {
-        Services services;
-        DimDisplayAction action;
-        waitForDisplayState();
-        action.setPolicy(60, 1);
-        action.onIdleTimeout(60000);
-        QTRY_COMPARE(services.recorder.log().suspends, 1);
-
-        services.sleepAndWake();
-        QTRY_COMPARE(services.recorder.log().suspends, 2);
-
-        services.sleepAndWake();
-        QTest::qWait(200);
-        action.onWakeupFromIdle();
-        QTest::qWait(1500);
-        QCOMPARE(services.recorder.log().suspends, 2);
-    }
-};
-
-QTEST_GUILESS_MAIN(PowerPolicyTest)
-
-#include "power_policy_test.moc"
+    services.sleepAndWake();
+    testsupport::wait(loop, 200ms);
+    action->onWakeupFromIdle();
+    testsupport::wait(loop, 1500ms);
+    EXPECT_EQ(log().suspends, 2);
+}

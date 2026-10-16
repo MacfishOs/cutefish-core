@@ -1,29 +1,37 @@
 #ifndef WAYLANDCLIPBOARD_H
 #define WAYLANDCLIPBOARD_H
 
-#include <QObject>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
-class QMimeData;
+#include "base/signal.h"
 
-class WaylandClipboard : public QObject
+// The selection's contents: each MIME type and its bytes, in the order offered.
+using ClipboardData = std::vector<std::pair<std::string, std::string>>;
+
+// The clipboard through ext-data-control, on a Wayland connection of its own.
+class WaylandClipboard
 {
-    Q_OBJECT
-
 public:
-    explicit WaylandClipboard(QObject* parent = nullptr);
-    ~WaylandClipboard() override;
+    WaylandClipboard();
+    ~WaylandClipboard();
+
+    WaylandClipboard(const WaylandClipboard &) = delete;
+    WaylandClipboard &operator=(const WaylandClipboard &) = delete;
 
     bool isAvailable() const;
-    const QMimeData* mimeData() const;
-    void setMimeData(QMimeData* mimeData);
+    // Null until a selection has been read whole.
+    const ClipboardData *data() const;
+    void setData(ClipboardData data);
 
-Q_SIGNALS:
-    void availabilityChanged();
-    void dataChanged();
+    cutefish::base::Signal<> availabilityChanged;
+    cutefish::base::Signal<> dataChanged;
 
 private:
     class Private;
-    Private* d;
+    std::unique_ptr<Private> d;
 };
 
 #endif // WAYLANDCLIPBOARD_H

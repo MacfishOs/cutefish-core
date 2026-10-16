@@ -1,11 +1,13 @@
 #ifndef WALLPAPERMANAGER_H
 #define WALLPAPERMANAGER_H
 
-#include <QObject>
-#include <QSet>
-#include <QStringList>
+#include <map>
+#include <string>
+#include <vector>
 
-class QSettings;
+#include "base/settings.h"
+#include "base/signal.h"
+#include "base/thread_pool.h"
 
 /**
  * The desktop background: the wallpaper in use, the wallpapers the user
@@ -15,56 +17,60 @@ class QSettings;
  * Every wallpaper the user picks is copied into the session's own data
  * directory, so moving or deleting the original leaves the desktop alone.
  */
-class WallpaperManager : public QObject
+class WallpaperManager
 {
-    Q_OBJECT
-
 public:
-    explicit WallpaperManager(QSettings *settings, QObject *parent = nullptr);
+    explicit WallpaperManager(cutefish::base::Settings &settings);
+    ~WallpaperManager();
 
-    QString wallpaper() const;
-    void setWallpaper(const QString &path);
+    WallpaperManager(const WallpaperManager &) = delete;
+    WallpaperManager &operator=(const WallpaperManager &) = delete;
 
-    QStringList userWallpapers() const;
-    void removeUserWallpaper(const QString &path);
+    std::string wallpaper() const;
+    void setWallpaper(const std::string &path);
 
-    QStringList wallpaperFolders() const;
-    void addWallpaperFolder(const QString &path);
-    void removeWallpaperFolder(const QString &path);
-    QStringList wallpaperFolderImages(const QString &path);
+    std::vector<std::string> userWallpapers() const;
+    void removeUserWallpaper(const std::string &path);
+
+    std::vector<std::string> wallpaperFolders() const;
+    void addWallpaperFolder(const std::string &path);
+    void removeWallpaperFolder(const std::string &path);
+    std::vector<std::string> wallpaperFolderImages(const std::string &path);
 
     int backgroundType() const;
     void setBackgroundType(int type);
 
-    QString backgroundColor() const;
-    void setBackgroundColor(const QString &color);
+    std::string backgroundColor() const;
+    void setBackgroundColor(const std::string &color);
 
     bool backgroundVisible() const;
     void setBackgroundVisible(bool visible);
 
-signals:
-    void wallpaperChanged(QString path);
-    void userWallpapersChanged();
-    void wallpaperFoldersChanged();
-    void wallpaperFolderImagesChanged(QString folder);
-    void backgroundTypeChanged();
-    void backgroundColorChanged();
-    void backgroundVisibleChanged();
+    cutefish::base::Signal<std::string> wallpaperChanged;
+    cutefish::base::Signal<> userWallpapersChanged;
+    cutefish::base::Signal<> wallpaperFoldersChanged;
+    cutefish::base::Signal<std::string> wallpaperFolderImagesChanged;
+    cutefish::base::Signal<> backgroundTypeChanged;
+    cutefish::base::Signal<> backgroundColorChanged;
+    cutefish::base::Signal<> backgroundVisibleChanged;
 
 private:
-    void syncWallpaperFolder(const QString &folder);
-    void onWallpaperFolderSynced(const QString &folder, bool copied);
+    template<typename T>
+    void write(const std::string &key, const T &value);
+    void syncWallpaperFolder(const std::string &folder);
+    void onWallpaperFolderSynced(const std::string &folder, bool copied);
 
-    QSettings *m_settings;
+    cutefish::base::Settings &m_settings;
 
-    QString m_wallpaperPath;
-    QStringList m_userWallpapers;
-    QStringList m_wallpaperFolders;
-    QSet<QString> m_syncingFolders;
+    std::string m_wallpaperPath;
+    std::vector<std::string> m_userWallpapers;
+    std::vector<std::string> m_wallpaperFolders;
+    // The copies being made, by folder.
+    std::map<std::string, cutefish::base::Job> m_syncingFolders;
 
-    bool m_backgroundVisible;
-    int m_backgroundType;
-    QString m_backgroundColor;
+    bool m_backgroundVisible = true;
+    int m_backgroundType = 0;
+    std::string m_backgroundColor;
 };
 
 #endif // WALLPAPERMANAGER_H

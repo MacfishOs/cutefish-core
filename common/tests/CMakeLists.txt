@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.22)
+project(common_tests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(CutefishToolkit REQUIRED)
+find_package(GTest REQUIRED)
+find_package(PkgConfig REQUIRED)
+enable_testing()
+
+add_subdirectory(.. ${CMAKE_CURRENT_BINARY_DIR}/common)
+add_executable(common-test common_test.cpp)
+target_link_libraries(common-test PRIVATE cutefish-core-common GTest::gtest_main)
+add_test(NAME common COMMAND common-test)

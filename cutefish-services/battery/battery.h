@@ -1,24 +1,17 @@
 #ifndef BATTERY_H
 #define BATTERY_H
 
-#include <QObject>
-#include <QSettings>
+#include <cstdint>
+#include <memory>
+#include <string>
+
+#include "base/dbus.h"
+#include "base/settings.h"
+#include "base/signal.h"
 #include "upowerdevice.h"
 
-class Battery : public QObject
+class Battery
 {
-    Q_OBJECT
-    Q_PROPERTY(int chargePercent READ chargePercent NOTIFY chargePercentChanged)
-    Q_PROPERTY(int capacity READ capacity NOTIFY capacityChanged)
-    Q_PROPERTY(double voltage READ voltage NOTIFY voltageChanged)
-    Q_PROPERTY(int chargeState READ chargeState NOTIFY chargeStateChanged)
-    Q_PROPERTY(qlonglong remainingTime READ remainingTime NOTIFY remainingTimeChanged)
-    Q_PROPERTY(QString statusString READ statusString NOTIFY remainingTimeChanged)
-    Q_PROPERTY(int lastChargedPercent READ lastChargedPercent NOTIFY lastChargedPercentChanged)
-    Q_PROPERTY(quint64 lastChargedSecs READ lastChargedSecs NOTIFY lastChargedSecsChanged)
-    Q_PROPERTY(QString lastChargedTime READ lastChargedTime NOTIFY lastChargedSecsChanged)
-    Q_PROPERTY(QString udi READ udi)
-
 public:
     /**
      * This enum type defines the type of the device holding the battery
@@ -43,7 +36,6 @@ public:
                        PhoneBattery, MonitorBattery, GamingInputBattery,
                        BluetoothBattery
                      };
-    Q_ENUM(BatteryType)
 
     /**
      * This enum type defines charge state of a battery
@@ -56,12 +48,18 @@ public:
      *                 charges up to 100%
      */
     enum ChargeState { NoCharge, Charging, Discharging, FullyCharged };
-    Q_ENUM(ChargeState)
 
-    explicit Battery(UPowerDevice *device, QObject *parent = nullptr);
+    Battery(std::unique_ptr<UPowerDevice> device, cutefish::base::Settings &settings);
+    ~Battery();
+
+    Battery(const Battery &) = delete;
+    Battery &operator=(const Battery &) = delete;
+
+    // com.cutefish.Services.Battery at /com/cutefish/Services/Battery, for the
+    // primary battery that holds the path.
+    bool publish(cutefish::base::dbus::Connection *bus);
 
     void updateCache();
-    void init();
     void refresh();
 
     Battery::BatteryType type() const;
@@ -73,52 +71,47 @@ public:
 
     // Number of seconds until the power source is considered empty. Is set to 0 if unknown.
     // This property is only valid if the property type has the value "battery".
-    qlonglong timeToEmpty() const;
+    int64_t timeToEmpty() const;
     // Number of seconds until the power source is considered full. Is set to 0 if unknown.
     // This property is only valid if the property type has the value "battery".
-    qlonglong timeToFull() const;
+    int64_t timeToFull() const;
 
     double voltage() const;
 
-    qlonglong remainingTime() const;
+    int64_t remainingTime() const;
 
-    static QString formatDuration(qlonglong seconds);
-    QString statusString() const;
+    static std::string formatDuration(int64_t seconds);
+    std::string statusString() const;
     int lastChargedPercent() const;
-    quint64 lastChargedSecs() const;
+    uint64_t lastChargedSecs() const;
 
-    QString lastChargedTime() const;
+    std::string lastChargedTime() const;
 
-    QString udi() const { return m_device->udi(); }
-
-signals:
-    void chargePercentChanged(int value);
-    void capacityChanged(int value);
-    void chargeStateChanged(int newState);
-    void voltageChanged(double voltage);
-    void remainingTimeChanged(qlonglong time);
-    void lastChargedPercentChanged();
-    void lastChargedSecsChanged();
-
-private slots:
-    void slotChanged();
+    const std::string &udi() const { return m_device->udi(); }
 
 private:
-    UPowerDevice *m_device;
+    void slotChanged();
+    uint32_t state() const;
 
-    int m_chargePercent;
-    int m_capacity;
-    Battery::ChargeState m_chargeState;
+    std::unique_ptr<UPowerDevice> m_device;
+    cutefish::base::Settings &m_settings;
+    cutefish::base::Subscription m_changed;
+    std::unique_ptr<cutefish::base::dbus::Object> m_object;
+
+    int m_chargePercent = 0;
+    int m_capacity = 0;
+    Battery::ChargeState m_chargeState = NoCharge;
     // Plugged in but held from charging, as a charge limit does.
-    bool m_pendingCharge;
-    QString m_statusString;
-    qlonglong m_timeToEmpty;
-    qlonglong m_timeToFull;
-    double m_voltage;
+    bool m_pendingCharge = false;
+    std::string m_statusString;
+    int64_t m_timeToEmpty = 0;
+    int64_t m_timeToFull = 0;
+    double m_voltage = 0;
 
-    QSettings *m_settings;
-    int m_lastChargedPercent;
-    quint64 m_lastChargedSecs;
+    // The last charge is kept only by the battery that holds the D-Bus path.
+    bool m_published = false;
+    int m_lastChargedPercent = 0;
+    uint64_t m_lastChargedSecs = 0;
 };
 
 #endif // BATTERY_H

@@ -3,14 +3,11 @@
 
 #include "scheduledfeature.h"
 
-#include <QDBusConnection>
-#include <QTimeZone>
-
 #include <algorithm>
 
-#include "preferences.h"
-
 using namespace std::chrono_literals;
+using namespace cutefish::base;
+using ScheduleUtils::DateTime;
 
 // kManualAnimationDuration and kAutomaticAnimationDuration.
 static constexpr std::chrono::milliseconds kManualDuration = 1s;
@@ -23,9 +20,9 @@ static constexpr int kDefaultEnd = 6 * 60;
 
 static constexpr int kMinutesPerDay = 24 * 60;
 
-static QTime timeOfDay(int minutes)
+static ScheduleUtils::Milliseconds timeOfDay(int minutes)
 {
-    return QTime(0, 0).addSecs(minutes * 60);
+    return std::chrono::minutes(minutes);
 }
 
 static int minutesOfDay(int minutes)
@@ -33,52 +30,56 @@ static int minutesOfDay(int minutes)
     return (minutes % kMinutesPerDay + kMinutesPerDay) % kMinutesPerDay;
 }
 
-static int minutesOfDay(QTime time)
+static int minutesOfDay(ScheduleUtils::Milliseconds time)
 {
-    return time.hour() * 60 + time.minute();
+    return int(std::chrono::floor<std::chrono::minutes>(time).count());
 }
 
-ScheduledFeature::ScheduledFeature(const Keys &keys, QObject *parent, Clock clock)
-    : QObject(parent)
-    , m_settings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat)
+ScheduledFeature::ScheduledFeature(const Keys &keys, Settings &settings, Clock clock)
+    : m_settings(settings)
     , m_keys(keys)
     , m_clock(std::move(clock))
 {
-    m_settings.beginGroup(m_keys.group);
-    m_enabled = m_settings.value(m_keys.enabled, false).toBool();
-    m_schedule = std::clamp(m_settings.value(m_keys.schedule, int(Never)).toInt(), int(Never),
+    m_enabled = m_settings.boolValue(key(m_keys.enabled), false);
+    m_schedule = std::clamp(int(m_settings.intValue(key(m_keys.schedule), Never)), int(Never),
                             int(hasCustomSchedule() ? Custom : SunsetToSunrise));
     if (hasCustomSchedule()) {
-        m_customStart = minutesOfDay(m_settings.value(m_keys.customStart, kDefaultStart).toInt());
-        m_customEnd = minutesOfDay(m_settings.value(m_keys.customEnd, kDefaultEnd).toInt());
+        m_customStart = minutesOfDay(int(m_settings.intValue(key(m_keys.customStart), kDefaultStart)));
+        m_customEnd = minutesOfDay(int(m_settings.intValue(key(m_keys.customEnd), kDefaultEnd)));
     }
-    m_settings.endGroup();
 
     m_timer.setSingleShot(true);
-    m_timer.setTimerType(Qt::PreciseTimer);
-    connect(&m_timer, &QTimer::timeout, this, [this] {
+    m_timer.onTimeout = [this] {
         advance(Reason::Scheduled);
-    });
+    };
 
     // Timers do not run while the system sleeps, and the time zone moves every turn.
-    QDBusConnection::systemBus().connect(
-            QStringLiteral("org.freedesktop.login1"), QStringLiteral("/org/freedesktop/login1"),
-            QStringLiteral("org.freedesktop.login1.Manager"), QStringLiteral("PrepareForSleep"),
-            this, SLOT(onPrepareForSleep(bool)));
-    QDBusConnection::systemBus().connect(
-            QStringLiteral("org.freedesktop.timedate1"), QStringLiteral("/org/freedesktop/timedate1"),
-            QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("PropertiesChanged"),
-            this, SLOT(onTimeDateChanged(QString, QVariantMap, QStringList)));
+    if (dbus::Connection *bus = dbus::Connection::system()) {
+        const dbus::Proxy logind(bus, "org.freedesktop.login1", "/org/freedesktop/login1",
+                                 "org.freedesktop.login1.Manager");
+        m_prepareForSleep = logind.onSignal("PrepareForSleep", [this](const dbus::Message &message) {
+            if (const auto sleeping = message.argument<bool>())
+                onPrepareForSleep(*sleeping);
+        });
+        const dbus::Proxy timedate(bus, "org.freedesktop.timedate1", "/org/freedesktop/timedate1",
+                                   "org.freedesktop.timedate1");
+        m_timeDateChanged = timedate.onPropertiesChanged(
+                [this](const dbus::VariantMap &changed, const std::vector<std::string> &invalidated) {
+                    onTimeDateChanged(changed, invalidated);
+                });
+    }
 }
+
+ScheduledFeature::~ScheduledFeature() = default;
 
 void ScheduledFeature::start()
 {
     // The schedule decides how a session starts, unless a manual toggle from
     // an earlier session still waits for its turn.
-    const QVariant hold = m_settings.value(holdPath());
-    if (m_schedule != Never && hold.isValid()
-        && m_clock().toMSecsSinceEpoch() < hold.toLongLong())
-        arm(QDateTime::fromMSecsSinceEpoch(hold.toLongLong()));
+    const std::string hold = key(m_keys.holdUntil);
+    if (m_schedule != Never && m_settings.contains(hold)
+        && m_clock().toMSecsSinceEpoch() < m_settings.intValue(hold))
+        arm(ScheduleUtils::fromMSecsSinceEpoch(m_settings.intValue(hold), m_clock().zone));
     else
         refresh(Reason::SettingsChanged);
 }
@@ -99,7 +100,7 @@ void ScheduledFeature::setSchedule(int schedule)
         return;
     m_schedule = schedule;
     write(m_keys.schedule, schedule);
-    emit scheduleChanged(schedule);
+    scheduleChanged.emit(schedule);
     refresh(Reason::SettingsChanged);
 }
 
@@ -110,7 +111,7 @@ void ScheduledFeature::setCustomStart(int minutes)
         return;
     m_customStart = minutes;
     write(m_keys.customStart, minutes);
-    emit customStartChanged(minutes);
+    customStartChanged.emit(minutes);
     if (m_schedule == Custom)
         refresh(Reason::SettingsChanged);
 }
@@ -122,7 +123,7 @@ void ScheduledFeature::setCustomEnd(int minutes)
         return;
     m_customEnd = minutes;
     write(m_keys.customEnd, minutes);
-    emit customEndChanged(minutes);
+    customEndChanged.emit(minutes);
     if (m_schedule == Custom)
         refresh(Reason::SettingsChanged);
 }
@@ -137,11 +138,12 @@ void ScheduledFeature::onPrepareForSleep(bool sleeping)
         advance(Reason::Reset);
 }
 
-void ScheduledFeature::onTimeDateChanged(const QString &, const QVariantMap &changed,
-                                         const QStringList &invalidated)
+void ScheduledFeature::onTimeDateChanged(const dbus::VariantMap &changed,
+                                         const std::vector<std::string> &invalidated)
 {
-    const QString timezone = QStringLiteral("Timezone");
-    if (!changed.contains(timezone) && !invalidated.contains(timezone))
+    const std::string timezone = "Timezone";
+    if (!changed.contains(timezone)
+        && std::find(invalidated.begin(), invalidated.end(), timezone) == invalidated.end())
         return;
     m_zone.clear();
     refresh(Reason::SettingsChanged);
@@ -151,8 +153,9 @@ void ScheduledFeature::onTimeDateChanged(const QString &, const QVariantMap &cha
 // it wins; a change of settings takes a second to show, a scheduled turn a minute.
 void ScheduledFeature::refresh(Reason reason)
 {
-    if (m_settings.contains(holdPath())) {
-        m_settings.remove(holdPath());
+    const std::string hold = key(m_keys.holdUntil);
+    if (m_settings.contains(hold)) {
+        m_settings.remove(hold);
         m_settings.sync();
     }
     updateSunTimes();
@@ -160,7 +163,7 @@ void ScheduledFeature::refresh(Reason reason)
         arm({});
         return;
     }
-    const auto position = ScheduleUtils::position(m_clock(), [this](QDate date) {
+    const auto position = ScheduleUtils::position(m_clock(), [this](ScheduleUtils::Date date) {
         return timesFor(date);
     });
     setEnabledInternal(position.enabled,
@@ -180,14 +183,14 @@ void ScheduledFeature::advance(Reason reason)
     refresh(reason);
 }
 
-void ScheduledFeature::arm(const QDateTime &next)
+void ScheduledFeature::arm(const DateTime &next)
 {
     m_next = next;
     if (!next.isValid()) {
         m_timer.stop();
         return;
     }
-    m_timer.start(std::chrono::milliseconds(std::max<qint64>(m_clock().msecsTo(next), 0)));
+    m_timer.start(std::chrono::milliseconds(std::max<int64_t>(m_clock().msecsTo(next), 0)));
 }
 
 void ScheduledFeature::setEnabledInternal(bool enabled, std::chrono::milliseconds duration)
@@ -197,54 +200,49 @@ void ScheduledFeature::setEnabledInternal(bool enabled, std::chrono::millisecond
     m_enabled = enabled;
     write(m_keys.enabled, enabled);
     showEnabled(duration);
-    emit enabledChanged(enabled);
+    enabledChanged.emit(enabled);
 }
 
 void ScheduledFeature::updateSunTimes()
 {
-    const QDateTime now = m_clock();
-    const ScheduleUtils::Times today = sunTimesFor(now.date());
-    const ScheduleUtils::Times tomorrow = sunTimesFor(now.date().addDays(1));
-    const int sunset = minutesOfDay(today.start > now.time() ? today.start : tomorrow.start);
-    const int sunrise = minutesOfDay(today.end > now.time() ? today.end : tomorrow.end);
+    const DateTime now = m_clock();
+    const ScheduleUtils::Date date = now.date();
+    const ScheduleUtils::Times today = sunTimesFor(date);
+    const ScheduleUtils::Times tomorrow =
+            sunTimesFor(ScheduleUtils::Date(std::chrono::sys_days(date) + std::chrono::days(1)));
+    const ScheduleUtils::Milliseconds time = now.timeOfDay();
+    const int sunset = minutesOfDay(today.start > time ? today.start : tomorrow.start);
+    const int sunrise = minutesOfDay(today.end > time ? today.end : tomorrow.end);
     if (sunset != m_sunset) {
         m_sunset = sunset;
-        emit sunsetChanged(sunset);
+        sunsetChanged.emit(sunset);
     }
     if (sunrise != m_sunrise) {
         m_sunrise = sunrise;
-        emit sunriseChanged(sunrise);
+        sunriseChanged.emit(sunrise);
     }
 }
 
-ScheduleUtils::Times ScheduledFeature::timesFor(QDate date)
+ScheduleUtils::Times ScheduledFeature::timesFor(ScheduleUtils::Date date)
 {
     if (m_schedule == Custom)
         return {timeOfDay(m_customStart), timeOfDay(m_customEnd)};
     return sunTimesFor(date);
 }
 
-ScheduleUtils::Times ScheduledFeature::sunTimesFor(QDate date)
+ScheduleUtils::Times ScheduledFeature::sunTimesFor(ScheduleUtils::Date date)
 {
-    const QByteArray zone = QTimeZone::systemTimeZoneId();
-    if (zone != m_zone) {
-        m_zone = zone;
-        m_coordinates = ScheduleUtils::zoneCoordinates(zone);
+    const ScheduleUtils::Zone zone = ScheduleUtils::systemZone();
+    const std::string zoneId(zone->name());
+    if (zoneId != m_zone) {
+        m_zone = zoneId;
+        m_coordinates = ScheduleUtils::zoneCoordinates(zoneId);
     }
     if (m_coordinates) {
         const auto sun = ScheduleUtils::sunTimes(date, m_coordinates->latitude,
-                                                 m_coordinates->longitude,
-                                                 QTimeZone::systemTimeZone());
+                                                 m_coordinates->longitude, zone);
         if (sun)
-            return {sun->sunset.time(), sun->sunrise.time()};
+            return {sun->sunset.timeOfDay(), sun->sunrise.timeOfDay()};
     }
     return {timeOfDay(kDefaultStart), timeOfDay(kDefaultEnd)};
-}
-
-void ScheduledFeature::write(const QString &key, const QVariant &value)
-{
-    m_settings.beginGroup(m_keys.group);
-    m_settings.setValue(key, value);
-    m_settings.endGroup();
-    m_settings.sync();
 }

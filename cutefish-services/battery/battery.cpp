@@ -1,9 +1,14 @@
 #include "battery.h"
-#include "batteryadaptor.h"
 #include "power.h"
-#include "preferences.h"
 
-#include <QDateTime>
+#include <chrono>
+#include <cmath>
+#include <format>
+
+#include "base/strings.h"
+
+using namespace cutefish::base;
+using namespace cutefish::base::strings;
 
 enum TimeConstants {
     SecsInDay = 86400,
@@ -11,26 +16,47 @@ enum TimeConstants {
     SecsInMinute = 60
 };
 
+static int64_t currentSecsSinceEpoch()
+{
+    return std::chrono::duration_cast<std::chrono::seconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+            .count();
+}
+
+static uint32_t toUInt(const dbus::Variant &value)
+{
+    return value.get<uint32_t>().value_or(0);
+}
+
+static double toDouble(const dbus::Variant &value)
+{
+    return value.get<double>().value_or(0);
+}
+
+static int64_t toLongLong(const dbus::Variant &value)
+{
+    return value.get<int64_t>().value_or(0);
+}
+
 // ref: https://upower.freedesktop.org/docs/Device.html
 
-Battery::Battery(UPowerDevice *device, QObject *parent)
-    : QObject(parent)
-    , m_device(device)
-    , m_pendingCharge(false)
-    , m_settings(nullptr)
-    , m_lastChargedPercent(0)
-    , m_lastChargedSecs(0)
+Battery::Battery(std::unique_ptr<UPowerDevice> device, Settings &settings)
+    : m_device(std::move(device))
+    , m_settings(settings)
 {
-    connect(device, SIGNAL(changed()), this, SLOT(slotChanged()));
+    m_changed = m_device->changed.connect([this] {
+        slotChanged();
+    });
 
     updateCache();
-    init();
 }
+
+Battery::~Battery() = default;
 
 void Battery::updateCache()
 {
     m_chargeState = chargeState();
-    m_pendingCharge = m_device->prop("State").toUInt() == 5;
+    m_pendingCharge = state() == 5;
     m_statusString = statusString();
     m_chargePercent = chargePercent();
     m_capacity = capacity();
@@ -39,37 +65,57 @@ void Battery::updateCache()
     m_voltage = voltage();
 }
 
-void Battery::init()
+bool Battery::publish(dbus::Connection *bus)
 {
-    if (type() == Battery::PrimaryBattery) {
-        const QString path = QStringLiteral("/com/cutefish/Services/Battery");
+    if (type() != Battery::PrimaryBattery || !bus)
+        return false;
 
-        // Another primary battery owns the path; this one must not overwrite its last-charged record.
-        if (QDBusConnection::sessionBus().objectRegisteredAt(path))
-            return;
-
-        new BatteryAdaptor(this);
-        QDBusConnection::sessionBus().registerObject(path, this);
-
-        m_settings = new QSettings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat, this);
-        m_settings->beginGroup(QStringLiteral("Battery"));
-        m_lastChargedPercent = m_settings->value("LastChargedPercent", 0).toInt();
-        m_lastChargedSecs = m_settings->value("LastChargedSecs").toLongLong();
+    m_object = std::make_unique<dbus::Object>(bus, "/com/cutefish/Services/Battery",
+                                              "com.cutefish.Services.Battery");
+    dbus::Object &object = *m_object;
+    object.addMethod("refresh", [this] { refresh(); });
+    object.addProperty("chargeState", [this] { return int32_t(m_chargeState); });
+    object.addProperty("chargePercent", [this] { return int32_t(m_chargePercent); });
+    object.addProperty("capacity", [this] { return int32_t(m_capacity); });
+    object.addProperty("voltage", [this] { return m_voltage; });
+    object.addProperty("remainingTime", [this] { return remainingTime(); });
+    object.addProperty("statusString", [this] { return statusString(); });
+    object.addProperty("lastChargedPercent", [this] { return int32_t(m_lastChargedPercent); });
+    object.addProperty("lastChargedSecs", [this] { return int64_t(m_lastChargedSecs); });
+    object.addProperty("lastChargedTime", [this] { return lastChargedTime(); });
+    object.addProperty("udi", [this] { return udi(); });
+    object.addSignal("chargeStateChanged", "i", {"value"});
+    object.addSignal("chargePercentChanged", "i", {"value"});
+    object.addSignal("capacityChanged", "i", {"value"});
+    object.addSignal("voltageChanged", "d", {"value"});
+    object.addSignal("remainingTimeChanged", "x", {"value"});
+    object.addSignal("lastChargedPercentChanged", "");
+    object.addSignal("lastChargedSecsChanged", "");
+    if (!object.publish()) {
+        m_object.reset();
+        return false;
     }
+
+    m_published = true;
+    m_lastChargedPercent = int(m_settings.intValue("Battery/LastChargedPercent", 0));
+    m_lastChargedSecs = uint64_t(m_settings.intValue("Battery/LastChargedSecs", 0));
+    return true;
 }
 
 void Battery::refresh()
 {
-    QDBusInterface iface(UP_DBUS_SERVICE, m_device->udi(), UP_DBUS_INTERFACE_DEVICE,
-                         QDBusConnection::systemBus());
-    if (iface.isValid())
-        iface.call("Refresh");
+    m_device->refresh();
+}
+
+uint32_t Battery::state() const
+{
+    return toUInt(m_device->prop("State"));
 }
 
 Battery::BatteryType Battery::type() const
 {
     Battery::BatteryType result = Battery::UnknownBattery;
-    const uint t = m_device->prop("Type").toUInt();
+    const uint32_t t = toUInt(m_device->prop("Type"));
 
     switch (t) {
     case UP_DEVICE_KIND_LINE_POWER: // TODO
@@ -100,9 +146,8 @@ Battery::BatteryType Battery::type() const
         break;
     case UP_DEVICE_KIND_UNKNOWN: {
         // There is currently no "Bluetooth battery" type, so check if it comes from Bluez
-        if (m_device->prop("NativePath").toString().startsWith(QLatin1String("/org/bluez/"))) {
+        if (startsWith(m_device->prop("NativePath").value<std::string>(), "/org/bluez/"))
             result = Battery::BluetoothBattery;
-        }
         break;
     }
     }
@@ -112,19 +157,18 @@ Battery::BatteryType Battery::type() const
 
 int Battery::chargePercent() const
 {
-    return qRound(m_device->prop("Percentage").toDouble());
+    return int(std::lround(toDouble(m_device->prop("Percentage"))));
 }
 
 int Battery::capacity() const
 {
-    return m_device->prop("Capacity").toDouble();
+    return int(toDouble(m_device->prop("Capacity")));
 }
 
 Battery::ChargeState Battery::chargeState() const
 {
     Battery::ChargeState result = Battery::NoCharge;
-    const uint state = m_device->prop("State").toUInt();
-    switch (state) {
+    switch (state()) {
     case 0:
         result = Battery::NoCharge; // stable or unknown
         break;
@@ -149,22 +193,22 @@ Battery::ChargeState Battery::chargeState() const
     return result;
 }
 
-qlonglong Battery::timeToEmpty() const
+int64_t Battery::timeToEmpty() const
 {
-    return m_device->prop("TimeToEmpty").toLongLong();
+    return toLongLong(m_device->prop("TimeToEmpty"));
 }
 
-qlonglong Battery::timeToFull() const
+int64_t Battery::timeToFull() const
 {
-    return m_device->prop("TimeToFull").toLongLong();
+    return toLongLong(m_device->prop("TimeToFull"));
 }
 
 double Battery::voltage() const
 {
-    return m_device->prop("Voltage").toDouble();
+    return toDouble(m_device->prop("Voltage"));
 }
 
-qlonglong Battery::remainingTime() const
+int64_t Battery::remainingTime() const
 {
     if (chargeState() == Battery::Charging) {
         return timeToFull();
@@ -175,62 +219,62 @@ qlonglong Battery::remainingTime() const
     return -1;
 }
 
-QString Battery::formatDuration(qlonglong seconds)
+std::string Battery::formatDuration(int64_t seconds)
 {
-    QString result;
-    quint64 secs = seconds;
+    std::string result;
+    uint64_t secs = uint64_t(seconds);
 
-    int days = secs / SecsInDay;
+    const uint64_t days = secs / SecsInDay;
     secs = secs % SecsInDay;
-    int hours = secs / SecsInHour;
+    const uint64_t hours = secs / SecsInHour;
     secs = secs % SecsInHour;
-    int minutes = secs / SecsInMinute;
+    const uint64_t minutes = secs / SecsInMinute;
 
     if (days > 0)
-        result.push_back(tr("%1d").arg(days));
+        result += std::format("{}d", days);
 
     if (hours > 0) {
         if (days > 0)
-            result.push_back(" ");
+            result += ' ';
 
-        result.push_back(tr("%1h").arg(hours));
+        result += std::format("{}h", hours);
     }
 
     if (minutes > 0) {
         if (hours > 0)
-            result.push_back(" ");
+            result += ' ';
 
-        result.push_back(tr("%1m").arg(minutes));
+        result += std::format("{}m", minutes);
     }
 
     return result;
 }
 
-QString Battery::statusString() const
+std::string Battery::statusString() const
 {
-    const Battery::ChargeState state = chargeState();
+    const Battery::ChargeState chargeState = this->chargeState();
 
-    if (state == Battery::Charging || state == Battery::Discharging) {
+    if (chargeState == Battery::Charging || chargeState == Battery::Discharging) {
         // UPower reports 0 for several seconds after the power source changes,
         // until it trusts the battery's rate again.
-        const qlonglong time = remainingTime();
+        const int64_t time = remainingTime();
         if (time < SecsInMinute)
-            return tr("Calculating…");
+            return "Calculating…";
 
-        if (state == Battery::Charging)
-            return tr("%1 until fully charged").arg(formatDuration(time));
+        if (chargeState == Battery::Charging)
+            return std::format("{} until fully charged", formatDuration(time));
 
-        return tr("%1 remaining").arg(formatDuration(time));
-    } else if (state == Battery::FullyCharged) {
-        return tr("Fully charged.");
-    } else if (m_device->prop("State").toUInt() == 5) {
-        if (m_device->prop("ChargeThresholdEnabled").toBool())
-            return tr("Charging paused at %1%").arg(chargePercent());
+        return std::format("{} remaining", formatDuration(time));
+    } else if (chargeState == Battery::FullyCharged) {
+        return "Fully charged.";
+    } else if (state() == 5) {
+        if (m_device->prop("ChargeThresholdEnabled").value<bool>())
+            return std::format("Charging paused at {}%", chargePercent());
 
-        return tr("Not charging");
+        return "Not charging";
     }
 
-    return QString();
+    return {};
 }
 
 int Battery::lastChargedPercent() const
@@ -238,22 +282,20 @@ int Battery::lastChargedPercent() const
     return m_lastChargedPercent;
 }
 
-quint64 Battery::lastChargedSecs() const
+uint64_t Battery::lastChargedSecs() const
 {
     return m_lastChargedSecs;
 }
 
-QString Battery::lastChargedTime() const
+std::string Battery::lastChargedTime() const
 {
-    QDateTime now = QDateTime::currentDateTime();
-    QDateTime time = QDateTime::fromSecsSinceEpoch(m_lastChargedSecs);
-    const qint64 secs = time.secsTo(now);
+    const int64_t secs = currentSecsSinceEpoch() - int64_t(m_lastChargedSecs);
 
     // formatDuration() drops seconds and wraps negative input; a clock set back lands here too.
     if (secs < SecsInMinute)
-        return tr("now");
+        return "now";
 
-    return tr("%1 ago").arg(formatDuration(secs));
+    return std::format("{} ago", formatDuration(secs));
 }
 
 void Battery::slotChanged()
@@ -262,48 +304,48 @@ void Battery::slotChanged()
     const int old_capacity = m_capacity;
     const Battery::ChargeState old_chargeState = m_chargeState;
     const bool old_pendingCharge = m_pendingCharge;
-    const QString old_statusString = m_statusString;
-    const qlonglong old_timeToEmpty = m_timeToEmpty;
-    const qlonglong old_timeToFull = m_timeToFull;
+    const std::string old_statusString = m_statusString;
+    const int64_t old_timeToEmpty = m_timeToEmpty;
+    const int64_t old_timeToFull = m_timeToFull;
     const double old_voltage = m_voltage;
 
     updateCache();
 
-    if (old_chargePercent != m_chargePercent) {
-        emit chargePercentChanged(m_chargePercent);
-    }
+    if (!m_object)
+        return;
 
-    if (old_capacity != m_capacity) {
-        emit capacityChanged(m_capacity);
-    }
+    if (old_chargePercent != m_chargePercent)
+        m_object->emitSignal("chargePercentChanged", int32_t(m_chargePercent));
 
-    if (old_chargeState != m_chargeState) {
-        emit chargeStateChanged(m_chargeState);
-    }
+    if (old_capacity != m_capacity)
+        m_object->emitSignal("capacityChanged", int32_t(m_capacity));
+
+    if (old_chargeState != m_chargeState)
+        m_object->emitSignal("chargeStateChanged", int32_t(m_chargeState));
 
     // Save last charge percentage
     if ((old_chargeState == Battery::Charging || old_chargeState == Battery::FullyCharged
          || old_pendingCharge)
         && m_chargeState == Battery::Discharging) {
         m_lastChargedPercent = m_chargePercent;
-        m_lastChargedSecs = QDateTime::currentSecsSinceEpoch();
+        m_lastChargedSecs = uint64_t(currentSecsSinceEpoch());
 
-        if (m_settings) {
-            m_settings->setValue("LastChargedPercent", m_lastChargedPercent);
-            m_settings->setValue("LastChargedSecs", m_lastChargedSecs);
+        if (m_published) {
+            m_settings.setValue("Battery/LastChargedPercent", m_lastChargedPercent);
+            m_settings.setValue("Battery/LastChargedSecs", m_lastChargedSecs);
+            m_settings.sync();
         }
 
-        emit lastChargedPercentChanged();
-        emit lastChargedSecsChanged();
+        m_object->emitSignal("lastChargedPercentChanged");
+        m_object->emitSignal("lastChargedSecsChanged");
     }
 
-    if (old_voltage != m_voltage) {
-        emit voltageChanged(m_voltage);
-    }
+    if (old_voltage != m_voltage)
+        m_object->emitSignal("voltageChanged", m_voltage);
 
     // Also the notify signal of statusString, which a state change alone can alter.
     if (old_timeToFull != m_timeToFull || old_timeToEmpty != m_timeToEmpty
         || old_statusString != m_statusString) {
-        emit remainingTimeChanged(remainingTime());
+        m_object->emitSignal("remainingTimeChanged", remainingTime());
     }
 }

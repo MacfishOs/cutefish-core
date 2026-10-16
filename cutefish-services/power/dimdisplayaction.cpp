@@ -5,14 +5,14 @@
 #include "dimdisplayaction.h"
 #include "brightness/brightnessmanager.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
-#include <QDBusConnection>
-#include <QDBusInterface>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
-#include <QDebug>
-#include <QTimer>
+#include "log.h"
+
+using namespace std::chrono_literals;
+using namespace cutefish::base;
 
 static constexpr auto s_screenSaverService = "org.freedesktop.ScreenSaver";
 static constexpr auto s_screenSaverPath = "/ScreenSaver";
@@ -36,38 +36,65 @@ static int finalDimTimeout(int timeout)
 static constexpr int s_lockedDisplayOffTimeout = 30;
 
 // Bounds the wait for a display change to settle, so a closed lid still sleeps.
-static constexpr int s_dockedLidRetryInterval = 500;
+static constexpr std::chrono::milliseconds s_dockedLidRetryInterval = 500ms;
 static constexpr int s_dockedLidRetries = 10;
 
-using cutefish::display::ipc::ErrorCode;
+using cutefish::display::DisplayClient;
+using cutefish::display::ErrorCode;
 
-DimDisplayAction::DimDisplayAction(BrightnessManager *brightness, QObject *parent)
-    : Action(parent)
+DimDisplayAction::DimDisplayAction(IdleManager *idle, BrightnessManager *brightness,
+                                   dbus::Connection *session, dbus::Connection *system,
+                                   const std::string &displayService)
+    : Action(idle)
     , m_brightness(brightness)
-    , m_display(this)
+    , m_screenSaver(session, s_screenSaverService, s_screenSaverPath, s_screenSaverInterface)
+    , m_logind(system, s_logindService, s_logindPath, s_logindInterface)
+    , m_display(displayService)
 {
-    QDBusConnection::sessionBus().connect(
-            QString::fromLatin1(s_screenSaverService), QString::fromLatin1(s_screenSaverPath),
-            QString::fromLatin1(s_screenSaverInterface), QStringLiteral("ActiveChanged"), this,
-            SLOT(onScreenSaverActiveChanged(bool)));
-    QDBusConnection::systemBus().connect(
-            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
-            QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("PropertiesChanged"),
-            this, SLOT(onLogindPropertiesChanged(QString, QVariantMap, QStringList)));
-    QDBusConnection::systemBus().connect(
-            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
-            QString::fromLatin1(s_logindInterface), QStringLiteral("PrepareForSleep"),
-            this, SLOT(onPrepareForSleep(bool)));
+    if (session) {
+        m_matches.push_back(m_screenSaver.onSignal("ActiveChanged", [this](const dbus::Message &message) {
+            if (const auto active = message.argument<bool>())
+                onScreenSaverActiveChanged(*active);
+        }));
+    }
+    if (system) {
+        m_matches.push_back(m_logind.onPropertiesChanged(
+                [this](const dbus::VariantMap &changed, const std::vector<std::string> &invalidated) {
+                    onLogindPropertiesChanged(changed, invalidated);
+                }));
+        m_matches.push_back(m_logind.onSignal("PrepareForSleep", [this](const dbus::Message &message) {
+            if (const auto sleeping = message.argument<bool>())
+                onPrepareForSleep(*sleeping);
+        }));
+    }
     m_suspendTimer.setSingleShot(true);
-    connect(&m_suspendTimer, &QTimer::timeout, this, &DimDisplayAction::onSuspendTimerTimeout);
+    m_suspendTimer.onTimeout = [this] {
+        onSuspendTimerTimeout();
+    };
     m_dockedLidRetryTimer.setSingleShot(true);
     m_dockedLidRetryTimer.setInterval(s_dockedLidRetryInterval);
-    connect(&m_dockedLidRetryTimer, &QTimer::timeout, this, [this] {
+    m_dockedLidRetryTimer.onTimeout = [this] {
         requestDockedLid(m_lidClosed);
+    };
+    m_wakeTimer.setSingleShot(true);
+    m_wakeTimer.setInterval(0ms);
+    m_wakeTimer.onTimeout = [this] {
+        if (!m_lidClosed) {
+            restoreDisplay();
+        } else if (m_dockedLidActive && m_displayPoweredOff) {
+            // Input has already woken the external displays; powering every display
+            // on would also light the closed panel.
+            m_displayPoweredOff = false;
+            m_displayOff = false;
+            m_displayOffTimer.invalidate();
+        }
+    };
+    m_displayStateChanged = m_display.stateChanged.connect([this] {
+        onDisplayStateChanged();
     });
-    connect(&m_display, &DisplayClient::stateChanged, this,
-            &DimDisplayAction::onDisplayStateChanged);
 }
+
+DimDisplayAction::~DimDisplayAction() = default;
 
 void DimDisplayAction::setLidPresent(bool present)
 {
@@ -88,6 +115,17 @@ bool DimDisplayAction::setDisplayPower(bool on)
     return m_display.setDisplayPower(on);
 }
 
+int DimDisplayAction::screenBrightness() const
+{
+    return m_brightness ? m_brightness->brightness() : -1;
+}
+
+void DimDisplayAction::setScreenBrightness(int value)
+{
+    if (m_brightness)
+        m_brightness->setValue(value);
+}
+
 void DimDisplayAction::onWakeupFromIdle()
 {
     m_lockedIdle = false;
@@ -101,17 +139,7 @@ void DimDisplayAction::onWakeupFromIdle()
         stopSuspendCountdown();
 
     // Wait one event loop turn for the screen to wake up before restoring it.
-    QTimer::singleShot(0, this, [this]() {
-        if (!m_lidClosed) {
-            restoreDisplay();
-        } else if (m_dockedLidActive && m_displayPoweredOff) {
-            // Input has already woken the external displays; powering every display
-            // on would also light the closed panel.
-            m_displayPoweredOff = false;
-            m_displayOff = false;
-            m_displayOffTimer.invalidate();
-        }
-    });
+    m_wakeTimer.start();
 }
 
 void DimDisplayAction::onPrepareForSleep(bool sleeping)
@@ -156,16 +184,16 @@ void DimDisplayAction::onIdleTimeout(int msec)
 
     if (sec == finalDimTimeout(m_dimOnIdleTime)) {
         if (m_oldScreenBrightness > 0) {
-            const int newBrightness = qRound(m_oldScreenBrightness / 8.0);
-            m_brightness->setValue(newBrightness);
+            const int newBrightness = int(std::lround(m_oldScreenBrightness / 8.0));
+            setScreenBrightness(newBrightness);
         }
         m_dimmed = true;
     } else if (sec == halfDimTimeout(m_dimOnIdleTime)) {
-        m_oldScreenBrightness = m_brightness->brightness();
+        m_oldScreenBrightness = screenBrightness();
 
         if (m_oldScreenBrightness > 0) {
-            const int newBrightness = qRound(m_oldScreenBrightness / 2.0);
-            m_brightness->setValue(newBrightness);
+            const int newBrightness = int(std::lround(m_oldScreenBrightness / 2.0));
+            setScreenBrightness(newBrightness);
         }
         m_dimmed = true;
     }
@@ -188,7 +216,7 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
         unregisterIdleTimeout(identifier);
 
     m_dimOnIdleTime = timeout;
-    m_suspendDelay = qMax(0, suspendDelay);
+    m_suspendDelay = std::max(0, suspendDelay);
     m_suspendTimer.stop();
     if (idleSleepApplies())
         m_suspendDue = false;
@@ -207,19 +235,19 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
         const int finalTimeout = finalDimTimeout(timeout);
 
         if (halfTimeout > 0)
-            m_policyIdleTimeouts.append(registerIdleTimeout(halfTimeout));
+            m_policyIdleTimeouts.push_back(registerIdleTimeout(halfTimeout));
         if (finalTimeout > halfTimeout && finalTimeout < timeout)
-            m_policyIdleTimeouts.append(registerIdleTimeout(finalTimeout));
-        m_policyIdleTimeouts.append(registerIdleTimeout(timeout));
+            m_policyIdleTimeouts.push_back(registerIdleTimeout(finalTimeout));
+        m_policyIdleTimeouts.push_back(registerIdleTimeout(timeout));
     }
 
     if (m_displayOff && idleSleepApplies() && m_displayOffTimer.isValid() && m_suspendDelay > 0) {
-        const qint64 remaining = qint64(m_suspendDelay) * 1000 - m_displayOffTimer.elapsed();
+        const int64_t remaining = int64_t(m_suspendDelay) * 1000 - m_displayOffTimer.elapsedMs();
         if (remaining <= 0) {
             m_suspendDue = true;
             trySuspend();
         } else {
-            m_suspendTimer.start(int(remaining));
+            m_suspendTimer.start(std::chrono::milliseconds(remaining));
         }
     }
 }
@@ -240,21 +268,17 @@ void DimDisplayAction::onScreenSaverActiveChanged(bool active)
         restoreDisplay();
 }
 
-void DimDisplayAction::onLogindPropertiesChanged(const QString &interfaceName,
-                                                 const QVariantMap &changedProperties,
-                                                 const QStringList &invalidatedProperties)
+void DimDisplayAction::onLogindPropertiesChanged(const dbus::VariantMap &changedProperties,
+                                                 const std::vector<std::string> &invalidatedProperties)
 {
-    if (interfaceName != QString::fromLatin1(s_logindInterface))
+    static const char *const names[] = {"BlockInhibited", "BlockWeakInhibited", "DelayInhibited"};
+    const bool inhibitorsChanged = std::any_of(std::begin(names), std::end(names), [&](const char *name) {
+        return changedProperties.contains(name)
+                || std::find(invalidatedProperties.begin(), invalidatedProperties.end(), name)
+                != invalidatedProperties.end();
+    });
+    if (!inhibitorsChanged)
         return;
-
-    if (!changedProperties.contains(QStringLiteral("BlockInhibited"))
-        && !changedProperties.contains(QStringLiteral("BlockWeakInhibited"))
-        && !changedProperties.contains(QStringLiteral("DelayInhibited"))
-        && !invalidatedProperties.contains(QStringLiteral("BlockInhibited"))
-        && !invalidatedProperties.contains(QStringLiteral("BlockWeakInhibited"))
-        && !invalidatedProperties.contains(QStringLiteral("DelayInhibited"))) {
-        return;
-    }
 
     trySuspend();
 }
@@ -270,16 +294,13 @@ void DimDisplayAction::onSuspendTimerTimeout()
 
 bool DimDisplayAction::lockSession()
 {
-    QDBusInterface screenSaver(
-            QString::fromLatin1(s_screenSaverService), QString::fromLatin1(s_screenSaverPath),
-            QString::fromLatin1(s_screenSaverInterface), QDBusConnection::sessionBus());
-    if (!screenSaver.isValid())
+    if (!m_screenSaver.isValid())
         return false;
 
     // Wait for the compositor to establish the lock before continuing.
-    const QDBusMessage reply = screenSaver.call(QStringLiteral("Lock"));
-    if (reply.type() != QDBusMessage::ReplyMessage) {
-        qWarning() << "Unable to lock the session:" << reply.errorMessage();
+    const dbus::Reply reply = m_screenSaver.call("Lock");
+    if (reply.isError()) {
+        CF_WARNING(services::log()) << "Unable to lock the session:" << reply.error().message;
         return false;
     }
 
@@ -293,29 +314,23 @@ void DimDisplayAction::trySuspend()
 
     // Not interactive: with a sleep inhibitor held, logind would otherwise wait on a
     // password prompt nobody can see. A refusal is retried when the inhibitors change.
-    QDBusMessage message = QDBusMessage::createMethodCall(
-            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
-            QString::fromLatin1(s_logindInterface), QStringLiteral("Suspend"));
-    message << false;
-
     m_suspendRequested = true;
-    const quint64 serial = ++m_suspendSerial;
-    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message),
-                                                this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this,
-            [this, serial](QDBusPendingCallWatcher *call) {
-                call->deleteLater();
+    const uint64_t serial = ++m_suspendSerial;
+    m_suspendCall = m_logind.callAsync(
+            "Suspend",
+            [this, serial](const dbus::Reply &reply) {
                 if (serial != m_suspendSerial)
                     return;
 
-                if (call->isError()) {
-                    qInfo() << "Suspend refused:" << call->error().message();
+                if (reply.isError()) {
+                    CF_INFO(services::log()) << "Suspend refused:" << reply.error().message;
                     m_suspendRequested = false;
                     return;
                 }
 
                 m_suspendDue = false;
-            });
+            },
+            false);
 }
 
 void DimDisplayAction::startSuspendCountdown()
@@ -328,7 +343,7 @@ void DimDisplayAction::startSuspendCountdown()
 
     m_displayOffTimer.restart();
     if (m_suspendDelay > 0)
-        m_suspendTimer.start(m_suspendDelay * 1000);
+        m_suspendTimer.start(std::chrono::seconds(m_suspendDelay));
 }
 
 void DimDisplayAction::stopSuspendCountdown()
@@ -347,10 +362,10 @@ void DimDisplayAction::turnDisplayOff()
 
     if (!m_displayPoweredOff) {
         if (m_oldScreenBrightness < 0)
-            m_oldScreenBrightness = m_brightness->brightness();
+            m_oldScreenBrightness = screenBrightness();
 
         if (m_oldScreenBrightness > 0)
-            m_brightness->setValue(0);
+            setScreenBrightness(0);
     }
 
     m_displayOff = true;
@@ -364,7 +379,7 @@ void DimDisplayAction::restoreDisplay()
     }
 
     if (m_oldScreenBrightness > 0)
-        m_brightness->setValue(m_oldScreenBrightness);
+        setScreenBrightness(m_oldScreenBrightness);
 
     m_oldScreenBrightness = -1;
     m_displayOff = false;
@@ -389,7 +404,7 @@ void DimDisplayAction::sleepWithLidClosed(bool waitForLock)
         // Suspend even without the lock: the compositor locks as the displays go
         // off and again before sleep.
         if (waitForLock && !lockSession())
-            qWarning() << "Suspending with the lid closed before the session is locked";
+            CF_WARNING(services::log()) << "Suspending with the lid closed before the session is locked";
 
         turnDisplayOff();
         m_dimmed = true;
@@ -444,7 +459,7 @@ void DimDisplayAction::handleLidOpened()
 void DimDisplayAction::requestDockedLid(bool closed)
 {
     m_dockedLidRetryTimer.stop();
-    const quint64 serial = ++m_dockedLidSerial;
+    const uint64_t serial = ++m_dockedLidSerial;
     const bool sent = m_display.setDockedLidClosed(
             closed, [this, serial, closed](bool succeeded, ErrorCode error) {
                 // A later lid event has superseded this request.
@@ -489,14 +504,13 @@ void DimDisplayAction::finishDockedLid(bool closed, bool succeeded, ErrorCode er
 
 void DimDisplayAction::onDisplayStateChanged()
 {
-    const auto &state = m_display.state();
+    const DisplayClient::State &state = m_display.state();
 
     // Nothing is applied while a display change is still in progress.
     if (state.appliedRevision == 0)
         return;
 
-    auto topology =
-            std::make_tuple(state.instanceId, state.topologyGeneration, state.appliedRevision);
+    auto topology = std::make_tuple(state.instanceId, state.topologyGeneration, state.appliedRevision);
     if (topology == m_displayTopology)
         return;
     m_displayTopology = std::move(topology);
@@ -515,36 +529,29 @@ void DimDisplayAction::onDisplayStateChanged()
 void DimDisplayAction::updateLidSwitchInhibitor()
 {
     if (!m_lidPresent || m_lidSleeping) {
-        m_lidSwitchInhibitor = QDBusUnixFileDescriptor();
+        m_lidSwitchInhibitor = dbus::UnixFd();
         return;
     }
 
-    if (m_lidSwitchInhibitor.isValid() || m_lidSwitchInhibiting)
+    if (m_lidSwitchInhibitor.isValid() || m_lidSwitchInhibiting || !m_logind.isValid())
         return;
 
-    QDBusMessage message = QDBusMessage::createMethodCall(
-            QString::fromLatin1(s_logindService), QString::fromLatin1(s_logindPath),
-            QString::fromLatin1(s_logindInterface), QStringLiteral("Inhibit"));
-    message << QStringLiteral("handle-lid-switch") << QStringLiteral("Cutefish")
-            << QStringLiteral("Cutefish manages lid power policy") << QStringLiteral("block");
-
     m_lidSwitchInhibiting = true;
-    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message),
-                                                this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this,
-            [this](QDBusPendingCallWatcher *call) {
+    m_inhibitCall = m_logind.callAsync(
+            "Inhibit",
+            [this](const dbus::Reply &reply) {
                 m_lidSwitchInhibiting = false;
-                const QDBusPendingReply<QDBusUnixFileDescriptor> reply = *call;
-                // The reply holds a copy of the descriptor too.
-                call->deleteLater();
-                if (reply.isError()) {
-                    qWarning() << "Unable to inhibit systemd lid handling:"
-                               << reply.error().message();
+                const auto inhibitor = reply.value<dbus::UnixFd>();
+                if (!inhibitor) {
+                    CF_WARNING(services::log())
+                            << "Unable to inhibit systemd lid handling:" << reply.error().message;
                     return;
                 }
 
                 // A lid that closed meanwhile stays with logind.
                 if (m_lidPresent && !m_lidSleeping)
-                    m_lidSwitchInhibitor = reply.value();
-            });
+                    m_lidSwitchInhibitor = *inhibitor;
+            },
+            std::string("handle-lid-switch"), std::string("Cutefish"),
+            std::string("Cutefish manages lid power policy"), std::string("block"));
 }

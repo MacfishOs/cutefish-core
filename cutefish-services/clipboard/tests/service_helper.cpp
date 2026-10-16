@@ -1,12 +1,20 @@
-#include <QGuiApplication>
-#include <QTimer>
+#include <chrono>
+
+#include "base/event_loop.h"
+#include "base/timer.h"
 
 #include "../clipboard.h"
 
-int main(int argc, char** argv)
+// Keeps the clipboard for 15 seconds, for checks by hand.
+int main()
 {
-    QGuiApplication app(argc, argv);
+    cutefish::base::EventLoop loop;
     Clipboard clipboard;
-    QTimer::singleShot(15000, &app, &QCoreApplication::quit);
-    return app.exec();
+    cutefish::base::Timer quit;
+    quit.setSingleShot(true);
+    quit.onTimeout = [&loop] {
+        loop.quit();
+    };
+    quit.start(std::chrono::seconds(15));
+    return loop.run();
 }

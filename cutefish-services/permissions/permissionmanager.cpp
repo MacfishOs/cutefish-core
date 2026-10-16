@@ -1,67 +1,100 @@
 #include "permissionmanager.h"
 #include "permissionprompt.h"
 
-#include <QDBusServiceWatcher>
+#include "base/event_loop.h"
 
-static void error(const QDBusMessage &message, const QString &name, const QString &description)
-{
-    message.setDelayedReply(true);
-    QDBusConnection::sessionBus().send(message.createErrorReply(name, description));
-}
+using namespace cutefish::base;
 
-PermissionManager::PermissionManager(std::function<QQmlEngine *()> engine, QObject *parent)
-    : QObject(parent)
-    , m_engine(std::move(engine))
+PermissionManager::PermissionManager(dbus::Connection *session)
+    : m_session(session)
 {
-    // The QML lives in this static library's resources.
-    Q_INIT_RESOURCE(permissions);
-    QDBusConnection::sessionBus().registerObject(QStringLiteral("/com/cutefish/Services/Permissions"),
-                                                 this, QDBusConnection::ExportAllSlots);
 }
 
 PermissionManager::~PermissionManager()
 {
-    // Each prompt's handler takes its entry out of the hash as it goes.
-    const auto prompts = m_prompts;
+    // Each prompt's handler takes its entry out of the map as it goes.
+    auto prompts = std::move(m_prompts);
     m_prompts.clear();
-    qDeleteAll(prompts);
 }
 
-void PermissionManager::Prompt(const QString &token, const QString &kind, const QString &appId,
-                               const QString &parentWindow, const QVariantMap &options,
-                               const QDBusMessage &message)
+bool PermissionManager::publish()
 {
-    if (token.isEmpty() || m_prompts.contains(token)) {
-        error(message, QStringLiteral("org.freedesktop.DBus.Error.InvalidArgs"),
-              QStringLiteral("Prompt token is empty or in use"));
+    if (!m_session)
+        return false;
+    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Permissions",
+                                              "com.cutefish.Services.Permissions");
+    m_object->addMethod("Prompt", "ssssa{sv}", "ua{sv}",
+                        [this](dbus::MethodCall &call) {
+                            prompt(call);
+                        },
+                        {{"token", "kind", "appId", "parentWindow", "options"}, {"response", "results"}});
+    m_object->addMethod("Dismiss", "s", "",
+                        [this](dbus::MethodCall &call) {
+                            dismiss(call);
+                        },
+                        {{"token"}, {}});
+    return m_object->publish();
+}
+
+PermissionPrompt *PermissionManager::prompt(const std::string &token) const
+{
+    const auto it = m_prompts.find(token);
+    return it == m_prompts.end() ? nullptr : it->second.get();
+}
+
+void PermissionManager::prompt(dbus::MethodCall &call)
+{
+    std::string token;
+    std::string kind;
+    std::string appId;
+    std::string parentWindow;
+    dbus::VariantMap options;
+    if (!call.read(token, kind, appId, parentWindow, options)) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Unexpected arguments");
+        return;
+    }
+    if (token.empty() || m_prompts.contains(token)) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Prompt token is empty or in use");
         return;
     }
     if (!PermissionPrompt::supports(kind)) {
-        error(message, QStringLiteral("org.freedesktop.DBus.Error.InvalidArgs"),
-              QStringLiteral("Unknown permission kind"));
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Unknown permission kind");
         return;
     }
-    auto *prompt = new PermissionPrompt(m_engine(), kind, appId, parentWindow, options, message, this);
-    m_prompts.insert(token, prompt);
-    connect(prompt, &PermissionPrompt::finished, this, [this, token, prompt] {
-        m_prompts.remove(token);
-        prompt->deleteLater();
-    });
+    auto prompt = std::make_unique<PermissionPrompt>(kind, appId, parentWindow, options, call);
+    PermissionPrompt *shown = prompt.get();
+    prompt->onFinished = [this, token] {
+        remove(token);
+    };
     // A caller that goes away takes its question with it.
-    auto *watcher = new QDBusServiceWatcher(message.service(), QDBusConnection::sessionBus(),
-                                            QDBusServiceWatcher::WatchForUnregistration, prompt);
-    connect(watcher, &QDBusServiceWatcher::serviceUnregistered, prompt, &PermissionPrompt::dismiss);
-    if (!prompt->show())
-        prompt->deleteLater();
+    prompt->watchCaller(m_session);
+    m_prompts.emplace(token, std::move(prompt));
+    shown->show();
 }
 
-void PermissionManager::Dismiss(const QString &token, const QDBusMessage &message)
+void PermissionManager::dismiss(dbus::MethodCall &call)
 {
-    auto *prompt = m_prompts.value(token);
-    if (!prompt || prompt->caller() != message.service()) {
-        error(message, QStringLiteral("org.freedesktop.DBus.Error.AccessDenied"),
-              QStringLiteral("No such prompt for this caller"));
+    std::string token;
+    if (!call.read(token)) {
+        call.replyError("org.freedesktop.DBus.Error.InvalidArgs", "Unexpected arguments");
         return;
     }
+    PermissionPrompt *prompt = this->prompt(token);
+    if (!prompt || prompt->caller() != call.message().sender()) {
+        call.replyError("org.freedesktop.DBus.Error.AccessDenied", "No such prompt for this caller");
+        return;
+    }
+    call.reply();
     prompt->dismiss();
+}
+
+void PermissionManager::remove(const std::string &token)
+{
+    const auto it = m_prompts.find(token);
+    if (it == m_prompts.end())
+        return;
+    // Goes once the event that finished it is over.
+    std::shared_ptr<PermissionPrompt> finished(std::move(it->second));
+    m_prompts.erase(it);
+    EventLoop::current()->post([finished] {});
 }

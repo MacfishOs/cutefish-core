@@ -7,139 +7,130 @@
 */
 
 #include "upowermanager.h"
-#include "upowerdevice.h"
 #include "battery.h"
 #include "power.h"
+#include "upowerdevice.h"
 
-#include <QDBusReply>
-#include <QDebug>
-#include <QDBusMetaType>
-#include <QDBusConnectionInterface>
+#include <algorithm>
 
-UPowerManager::UPowerManager(QObject *parent)
-    : QObject(parent)
-    , m_interface(UP_DBUS_SERVICE,
-                  UP_DBUS_PATH,
-                  UP_DBUS_INTERFACE,
-                  QDBusConnection::systemBus())
-    , m_onBattery(false)
-    , m_lidIsPresent(false)
-    , m_lidIsClosed(false)
+#include "log.h"
+
+using namespace cutefish::base;
+
+UPowerManager::UPowerManager(dbus::Connection *system, dbus::Connection *session, Settings &settings)
+    : m_session(session)
+    , m_settings(settings)
+    , m_interface(system, UP_DBUS_SERVICE, UP_DBUS_PATH, UP_DBUS_INTERFACE)
 {
-    qDBusRegisterMetaType<QList<QDBusObjectPath>>();
-    qDBusRegisterMetaType<QVariantMap>();
+    if (!system)
+        return;
 
-    bool serviceFound = m_interface.isValid();
-    if (!serviceFound) {
-        // find out whether it will be activated automatically
-        QDBusMessage message = QDBusMessage::createMethodCall("org.freedesktop.DBus",
-                               "/org/freedesktop/DBus",
-                               "org.freedesktop.DBus",
-                               "ListActivatableNames");
+    m_matches.push_back(m_interface.onSignal("DeviceAdded", [this](const dbus::Message &message) {
+        if (const auto path = message.argument<dbus::ObjectPath>())
+            addDevice(path->path);
+    }));
+    m_matches.push_back(m_interface.onSignal("DeviceRemoved", [this](const dbus::Message &message) {
+        if (const auto path = message.argument<dbus::ObjectPath>())
+            removeDevice(path->path);
+    }));
+    m_matches.push_back(m_interface.onPropertiesChanged(
+            [this](const dbus::VariantMap &changed, const std::vector<std::string> &invalidated) {
+                onPropertiesChanged(changed, invalidated);
+            }));
 
-        QDBusReply<QStringList> reply = QDBusConnection::systemBus().call(message);
-        if (reply.isValid() && reply.value().contains(UP_DBUS_SERVICE)) {
-            QDBusConnection::systemBus().interface()->startService(UP_DBUS_SERVICE);
-            serviceFound = true;
-        }
+    // The call starts UPower when the bus can activate it.
+    const dbus::Reply properties = m_interface.getAll();
+    if (properties.isError())
+        return;
+    const dbus::VariantMap values = properties.value<dbus::VariantMap>().value_or(dbus::VariantMap());
+    const auto flag = [&values](const char *name) {
+        const auto it = values.find(name);
+        return it != values.end() && it->second.get<bool>().value_or(false);
+    };
+    m_onBattery = flag("OnBattery");
+    m_lidIsPresent = flag("LidIsPresent");
+    m_lidIsClosed = flag("LidIsClosed");
+
+    // All devices
+    const dbus::Reply reply = m_interface.call("EnumerateDevices");
+    const auto paths = reply.value<std::vector<dbus::ObjectPath>>();
+    if (!paths) {
+        CF_WARNING(services::log()) << "UPower EnumerateDevices failed:" << reply.error().name;
+        return;
     }
 
-    if (serviceFound) {
-        if (m_interface.metaObject()->indexOfSignal("DeviceAdded(QDBusObjectPath)") != -1) {
-            connect(&m_interface, SIGNAL(DeviceAdded(QDBusObjectPath)),
-                    this, SLOT(onDeviceAdded(QDBusObjectPath)));
-            connect(&m_interface, SIGNAL(DeviceRemoved(QDBusObjectPath)),
-                    this, SLOT(onDeviceRemoved(QDBusObjectPath)));
-        }
-
-        // On battery
-        QDBusConnection::systemBus().connect(UP_DBUS_SERVICE, UP_DBUS_PATH,
-                                             "org.freedesktop.DBus.Properties",
-                                             "PropertiesChanged", this,
-                                             SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
-        m_onBattery = m_interface.property("OnBattery").toBool();
-        m_lidIsPresent = m_interface.property("LidIsPresent").toBool();
-        m_lidIsClosed = m_interface.property("LidIsClosed").toBool();
-
-        // All devices
-        QDBusReply<QList<QDBusObjectPath>> reply = m_interface.call("EnumerateDevices");
-        if (!reply.isValid()) {
-            qWarning() << Q_FUNC_INFO << " error: " << reply.error().name();
-            return;
-        }
-
-        const auto pathList = reply.value();
-        for (const QDBusObjectPath &path : pathList)
-            addDevice(path.path());
-    }
+    for (const dbus::ObjectPath &path : *paths)
+        addDevice(path.path);
 }
 
-void UPowerManager::addDevice(const QString &path)
+UPowerManager::~UPowerManager() = default;
+
+void UPowerManager::addDevice(const std::string &path)
 {
     if (m_batteries.contains(path))
         return;
 
-    UPowerDevice *device = new UPowerDevice(path, this);
-    Battery *battery = new Battery(device, this);
+    auto battery = std::make_unique<Battery>(
+            std::make_unique<UPowerDevice>(m_interface.connection(), path), m_settings);
 
-    if (battery->type() != Battery::PrimaryBattery) {
-        device->deleteLater();
-        battery->deleteLater();
+    if (battery->type() != Battery::PrimaryBattery)
         return;
+
+    m_batteries.emplace(path, std::move(battery));
+    publishBattery();
+}
+
+void UPowerManager::removeDevice(const std::string &path)
+{
+    const auto it = m_batteries.find(path);
+    if (it == m_batteries.end())
+        return;
+
+    // Gone now, so its D-Bus path is free for a battery added in the same batch.
+    if (m_published == it->second.get())
+        m_published = nullptr;
+    m_batteries.erase(it);
+    // The path it may have held goes to another primary battery.
+    publishBattery();
+}
+
+void UPowerManager::publishBattery()
+{
+    if (m_published || !m_session)
+        return;
+
+    for (auto &[path, battery] : m_batteries) {
+        if (battery->publish(m_session)) {
+            m_published = battery.get();
+            return;
+        }
     }
-
-    device->setParent(battery);
-    m_batteries.insert(path, battery);
 }
 
-bool UPowerManager::onBattery() const
+void UPowerManager::onPropertiesChanged(const dbus::VariantMap &changed,
+                                        const std::vector<std::string> &invalidated)
 {
-    return m_onBattery;
-}
+    const auto touched = [&](const std::string &name) {
+        return changed.contains(name)
+                || std::find(invalidated.begin(), invalidated.end(), name) != invalidated.end();
+    };
+    const auto read = [this](const std::string &name) {
+        return m_interface.property<bool>(name).value_or(false);
+    };
 
-bool UPowerManager::lidIsPresent() const
-{
-    return m_lidIsPresent;
-}
-
-bool UPowerManager::lidIsClosed() const
-{
-    return m_lidIsClosed;
-}
-
-void UPowerManager::onPropertiesChanged(const QString &ifaceName, const QVariantMap &changedProps, const QStringList &invalidatedProps)
-{
-    Q_UNUSED(ifaceName);
-
-    if (changedProps.contains(QStringLiteral("OnBattery"))
-        || invalidatedProps.contains(QStringLiteral("OnBattery"))) {
-        const bool onBattery = m_interface.property("OnBattery").toBool();
+    if (touched("OnBattery")) {
+        const bool onBattery = read("OnBattery");
         if (m_onBattery != onBattery) {
             m_onBattery = onBattery;
-            emit onBatteryChanged();
+            onBatteryChanged.emit();
         }
     }
 
-    if (changedProps.contains(QStringLiteral("LidIsClosed"))
-        || invalidatedProps.contains(QStringLiteral("LidIsClosed"))) {
-        const bool lidIsClosed = m_interface.property("LidIsClosed").toBool();
+    if (touched("LidIsClosed")) {
+        const bool lidIsClosed = read("LidIsClosed");
         if (m_lidIsClosed != lidIsClosed) {
             m_lidIsClosed = lidIsClosed;
-            emit lidClosedChanged();
+            lidClosedChanged.emit();
         }
     }
-}
-
-void UPowerManager::onDeviceAdded(const QDBusObjectPath &path)
-{
-    addDevice(path.path());
-}
-
-void UPowerManager::onDeviceRemoved(const QDBusObjectPath &path)
-{
-    // Deleted now, so its D-Bus path is free for a battery added in the same batch.
-    delete m_batteries.take(path.path());
-    // The path it may have held goes to another primary battery.
-    for (Battery *battery : std::as_const(m_batteries))
-        battery->init();
 }

@@ -5,36 +5,36 @@
 #ifndef IDLEMANAGER_H
 #define IDLEMANAGER_H
 
-#include <QHash>
-#include <QObject>
-#include <QSet>
+#include <map>
+#include <set>
+#include <vector>
 
 #include "action.h"
+#include "base/signal.h"
 #include "idle/waylandidle.h"
 
-class IdleManager : public QObject
+class IdleManager
 {
-    Q_OBJECT
-
 public:
-    static IdleManager *self();
-    explicit IdleManager(QObject *parent = nullptr);
+    IdleManager();
+    ~IdleManager();
+
+    IdleManager(const IdleManager &) = delete;
+    IdleManager &operator=(const IdleManager &) = delete;
 
     int registerActionTimeout(Action *action, int secs);
     void unregisterActionTimeout(Action *action, int identifier);
+    // An action that goes takes its timeouts with it.
     void unregisterActionTimeouts(Action *action);
 
-private slots:
-    void onIdleTimeoutReached(int, int);
+private:
+    void onIdleTimeoutReached(int identifier, int timeout);
     void onResumingFromIdle();
 
-private:
-    friend class Action;
-
     WaylandIdle m_idle;
-    QHash<Action *, QMetaObject::Connection> m_destroyConnections;
-    QHash<Action *, QList<int>> m_registeredActionTimeouts;
-    QSet<Action *> m_pendingResumeFromIdleActions;
+    std::vector<cutefish::base::Subscription> m_subscriptions;
+    std::map<Action *, std::vector<int>> m_registeredActionTimeouts;
+    std::set<Action *> m_pendingResumeFromIdleActions;
 };
 
 #endif // IDLEMANAGER_H

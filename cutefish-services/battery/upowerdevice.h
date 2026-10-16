@@ -1,37 +1,38 @@
 #ifndef UPOWERDEVICE_H
 #define UPOWERDEVICE_H
 
-#include <QObject>
-#include <QDBusInterface>
+#include <string>
 
-class UPowerDevice : public QObject
+#include "base/dbus.h"
+#include "base/signal.h"
+
+class UPowerDevice
 {
-    Q_OBJECT
-
 public:
-    explicit UPowerDevice(const QString &udi, QObject *parent = nullptr);
+    UPowerDevice(cutefish::base::dbus::Connection *bus, const std::string &udi);
+    ~UPowerDevice();
 
-    QString udi() const;
+    UPowerDevice(const UPowerDevice &) = delete;
+    UPowerDevice &operator=(const UPowerDevice &) = delete;
 
-    QVariant prop(const QString &key) const;
-    QMap<QString, QVariant> allProperties() const;
+    const std::string &udi() const { return m_udi; }
 
-signals:
-    void changed();
+    cutefish::base::dbus::Variant prop(const std::string &key) const;
+    const cutefish::base::dbus::VariantMap &allProperties() const;
 
-private slots:
-    void onPropertiesChanged(const QString &ifaceName, const QVariantMap &changedProps, const QStringList &invalidatedProps);
-    void login1Resuming(bool active);
+    void refresh() const;
+
+    cutefish::base::Signal<> changed;
+
+private:
     void slotChanged();
 
-private:
-    void checkCache(const QString &key) const;
-
-private:
-    mutable QDBusInterface m_device;
-    mutable QVariantMap m_cache;
-
-    QString m_udi;
+    cutefish::base::dbus::Proxy m_device;
+    cutefish::base::dbus::Match m_propertiesChanged;
+    cutefish::base::dbus::Match m_prepareForSleep;
+    mutable cutefish::base::dbus::VariantMap m_cache;
+    mutable bool m_cached = false;
+    std::string m_udi;
 };
 
 #endif // UPOWERDEVICE_H

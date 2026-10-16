@@ -4,24 +4,28 @@
 #ifndef PROCESSMANAGER_H
 #define PROCESSMANAGER_H
 
-#include <QMap>
 #include <functional>
-#include <QObject>
-#include <QProcess>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/dbus.h"
+#include "base/process.h"
+#include "base/signal.h"
+#include "base/timer.h"
 
 class XwaylandEnvironment;
-class QDBusServiceWatcher;
 class CompositorProcess;
 class ShellConnection;
 class ShellProcess;
 class RestartPolicy;
+struct Publisher;
 
-class ProcessManager : public QObject
+class ProcessManager
 {
-    Q_OBJECT
-
 public:
-    explicit ProcessManager(QObject* parent = nullptr);
+    ProcessManager();
     ~ProcessManager();
 
     enum class Ending {
@@ -49,33 +53,38 @@ public:
 
 private:
     void leave();
-    void notifyEndingStopped(Ending ending, const QString &outcome, const QString &applicationId);
+    void notifyEndingStopped(Ending ending, const std::string &outcome, const std::string &applicationId);
     void startAfterCompositorReady();
     void publishXwaylandEnvironment(bool startDesktop);
     void startShell();
-    void onShellFinished(int code, QProcess::ExitStatus status);
+    void onShellFinished(int code, bool crashed);
     // Started once and restarted by the same bounded rule as the shell.
-    void startCoreProcess(const QString& program, const QStringList& arguments = {});
+    void startCoreProcess(const std::string& program, const std::vector<std::string>& arguments = {});
     void stopRestarts();
     void stopShellAndDaemons();
-    void stopProcesses(QMap<QString, QProcess*>& processes);
+    void stopProcesses(std::map<std::string, std::unique_ptr<cutefish::base::Process>>& processes);
 
 private:
-    XwaylandEnvironment* m_xwaylandEnvironment = nullptr;
-    CompositorProcess* m_compositorProcess = nullptr;
-    ShellConnection* m_shellConnection = nullptr;
-    ShellProcess* m_shellProcess = nullptr;
-    RestartPolicy* m_shellRestart = nullptr;
-    QDBusServiceWatcher* m_servicesWatcher = nullptr;
+    std::unique_ptr<XwaylandEnvironment> m_xwaylandEnvironment;
+    std::unique_ptr<CompositorProcess> m_compositorProcess;
+    std::unique_ptr<ShellConnection> m_shellConnection;
+    std::unique_ptr<ShellProcess> m_shellProcess;
+    std::unique_ptr<RestartPolicy> m_shellRestart;
+    cutefish::base::dbus::NameWatch m_servicesWatch;
+    cutefish::base::dbus::PendingCall m_quitAllCall;
+    cutefish::base::Subscription m_registryChanged;
+    cutefish::base::Timer m_autostartTimer;
+    cutefish::base::Timer m_exitTimer;
+    std::vector<std::unique_ptr<Publisher>> m_publishers;
     bool m_started = false;
     bool m_compositorReady = false;
     bool m_desktopStarted = false;
     bool m_loggingOut = false;
     bool m_ending = false;
-    QString m_waylandSocket;
-    QString m_controlSocket;
-    QMap<QString, QProcess*> m_coreProcesses;
-    QMap<QString, RestartPolicy*> m_restartPolicies;
+    std::string m_waylandSocket;
+    std::string m_controlSocket;
+    std::map<std::string, std::unique_ptr<cutefish::base::Process>> m_coreProcesses;
+    std::map<std::string, std::unique_ptr<RestartPolicy>> m_restartPolicies;
 };
 
 #endif // PROCESSMANAGER_H

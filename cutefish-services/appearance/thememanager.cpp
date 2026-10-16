@@ -2,86 +2,79 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "thememanager.h"
-#include "appearanceadaptor.h"
 #include "fontconfigwriter.h"
 #include "gtksettings.h"
-#include "languageenvironment.h"
-#include "preferences.h"
 #include "scheduledfeature.h"
 #include "wallpapermanager.h"
 
-#include <QDBusConnection>
-#include <QLocale>
+#include <algorithm>
 
-static const QByteArray s_systemFontName = QByteArrayLiteral("Font");
-static const QByteArray s_systemFixedFontName = QByteArrayLiteral("FixedFont");
-static const QByteArray s_systemPointFontSize = QByteArrayLiteral("FontSize");
+#include "common/language_environment.h"
 
-ThemeManager *ThemeManager::self()
+using namespace cutefish::base;
+
+static const std::string s_systemFontName = "Appearance/Font";
+static const std::string s_systemFixedFontName = "Appearance/FixedFont";
+static const std::string s_systemPointFontSize = "Appearance/FontSize";
+
+ThemeManager::ThemeManager(Settings &settings, dbus::Connection *session)
+    : m_settings(settings)
+    , m_session(session)
+    , m_wallpaperManager(std::make_unique<WallpaperManager>(settings))
 {
-    static ThemeManager t;
-    return &t;
-}
-
-ThemeManager::ThemeManager(QObject *parent)
-    : QObject(parent)
-    , m_settings(new QSettings(Preferences::file(QStringLiteral("services")), QSettings::IniFormat, this))
-{
-    m_settings->beginGroup(QStringLiteral("Appearance"));
-
-    m_wallpaperManager = new WallpaperManager(m_settings, this);
-    connect(m_wallpaperManager, &WallpaperManager::wallpaperChanged, this,
-            &ThemeManager::wallpaperChanged);
-    connect(m_wallpaperManager, &WallpaperManager::userWallpapersChanged, this,
-            &ThemeManager::userWallpapersChanged);
-    connect(m_wallpaperManager, &WallpaperManager::wallpaperFoldersChanged, this,
-            &ThemeManager::wallpaperFoldersChanged);
-    connect(m_wallpaperManager, &WallpaperManager::wallpaperFolderImagesChanged, this,
-            &ThemeManager::wallpaperFolderImagesChanged);
-    connect(m_wallpaperManager, &WallpaperManager::backgroundTypeChanged, this,
-            &ThemeManager::backgroundTypeChanged);
-    connect(m_wallpaperManager, &WallpaperManager::backgroundColorChanged, this,
-            &ThemeManager::backgroundColorChanged);
-    connect(m_wallpaperManager, &WallpaperManager::backgroundVisibleChanged, this,
-            &ThemeManager::backgroundVisibleChanged);
+    WallpaperManager &wallpapers = *m_wallpaperManager;
+    m_subscriptions.push_back(wallpapers.wallpaperChanged.connect([this](const std::string &path) {
+        emitSignal("wallpaperChanged", path);
+    }));
+    m_subscriptions.push_back(wallpapers.userWallpapersChanged.connect([this] {
+        emitSignal("userWallpapersChanged");
+    }));
+    m_subscriptions.push_back(wallpapers.wallpaperFoldersChanged.connect([this] {
+        emitSignal("wallpaperFoldersChanged");
+    }));
+    m_subscriptions.push_back(wallpapers.wallpaperFolderImagesChanged.connect([this](const std::string &folder) {
+        emitSignal("wallpaperFolderImagesChanged", folder);
+    }));
+    m_subscriptions.push_back(wallpapers.backgroundTypeChanged.connect([this] {
+        emitSignal("backgroundTypeChanged");
+    }));
+    m_subscriptions.push_back(wallpapers.backgroundColorChanged.connect([this] {
+        emitSignal("backgroundColorChanged");
+    }));
+    m_subscriptions.push_back(wallpapers.backgroundVisibleChanged.connect([this] {
+        emitSignal("backgroundVisibleChanged");
+    }));
 
     // Ash's DarkLightModeControllerImpl: the same schedule as the night
     // light, without custom times.
-    m_darkMode = new ScheduledFeature({QStringLiteral("Appearance"), QStringLiteral("DarkMode"),
-                                       QStringLiteral("DarkModeSchedule"),
-                                       QStringLiteral("DarkModeHoldUntil"), {}, {}},
-                                      this, [] {
-                                          return QDateTime::currentDateTime();
-                                      });
-    connect(m_darkMode, &ScheduledFeature::enabledChanged, this, [this](bool darkMode) {
+    m_darkMode = std::make_unique<ScheduledFeature>(
+            ScheduledFeature::Keys {"Appearance", "DarkMode", "DarkModeSchedule", "DarkModeHoldUntil", {}, {}},
+            settings, ScheduleUtils::currentDateTime);
+    m_subscriptions.push_back(m_darkMode->enabledChanged.connect([this](bool darkMode) {
         updateGtk3Config();
-        emit darkModeChanged(darkMode);
-    });
-    connect(m_darkMode, &ScheduledFeature::scheduleChanged, this,
-            &ThemeManager::darkModeScheduleChanged);
+        emitSignal("darkModeChanged", darkMode);
+    }));
+    m_subscriptions.push_back(m_darkMode->scheduleChanged.connect([this](int schedule) {
+        emitSignal("darkModeScheduleChanged", int32_t(schedule));
+    }));
     m_darkMode->start();
 
-    // init dbus
-    new AppearanceAdaptor(this);
-    QDBusConnection::sessionBus().registerObject(
-            QStringLiteral("/com/cutefish/Services/Appearance"), this);
-
     // init value
-    m_continuousCorners = m_settings->value("ContinuousCorners", true).toBool();
-    m_accentColor = m_settings->value("AccentColor", 0).toInt();
-    m_cursorTheme = m_settings->value("CursorTheme", "default").toString();
-    m_cursorSize = m_settings->value("CursorSize", 24).toInt();
-    m_iconTheme = m_settings->value("IconTheme", "Cutefish").toString();
+    m_continuousCorners = m_settings.boolValue("Appearance/ContinuousCorners", true);
+    m_accentColor = int(m_settings.intValue("Appearance/AccentColor", 0));
+    m_cursorTheme = m_settings.stringValue("Appearance/CursorTheme", "default");
+    m_cursorSize = int(m_settings.intValue("Appearance/CursorSize", 24));
+    m_iconTheme = m_settings.stringValue("Appearance/IconTheme", "Cutefish");
 
     // Init fonts.
-    if (!m_settings->contains(s_systemFixedFontName)) {
-        m_settings->setValue(s_systemFixedFontName, "Noto Mono");
-    }
+    if (!m_settings.contains(s_systemFixedFontName))
+        m_settings.setValue(s_systemFixedFontName, "Noto Mono");
 
-    if (!m_settings->contains(s_systemFontName)) {
-        const QString fontName = fontForLocale(LanguageEnvironment::preferredLanguages().first());
-        m_settings->setValue(s_systemFontName, fontName.isEmpty() ? QStringLiteral("Noto Sans") : fontName);
+    if (!m_settings.contains(s_systemFontName)) {
+        const std::string fontName = fontForLocale(cutefish::core::language::preferredLanguages().front());
+        m_settings.setValue(s_systemFontName, fontName.empty() ? std::string("Noto Sans") : fontName);
     }
+    m_settings.sync();
 
     // Update fontconfig after login.
     updateFontConfig();
@@ -89,6 +82,98 @@ ThemeManager::ThemeManager(QObject *parent)
     // GTK on Wayland takes these from gsettings, not settings.ini; sync them at login.
     updateGtk3Config();
     ensureGtkCssImports();
+}
+
+ThemeManager::~ThemeManager() = default;
+
+bool ThemeManager::publish()
+{
+    if (!m_session)
+        return false;
+    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Appearance",
+                                              "com.cutefish.Services.Appearance");
+    dbus::Object &o = *m_object;
+    o.addMethod("setDarkMode", [this](bool value) { setDarkMode(value); }, {{"darkMode"}, {}});
+    o.addMethod("setDarkModeSchedule", [this](int32_t value) { setDarkModeSchedule(value); }, {{"schedule"}, {}});
+    o.addMethod("setContinuousCorners", [this](bool value) { setContinuousCorners(value); },
+                {{"continuousCorners"}, {}});
+    o.addMethod("setBackgroundVisible", [this](bool value) { setBackgroundVisible(value); },
+                {{"BackgroundVisible"}, {}});
+    o.addMethod("setSystemFont", [this](const std::string &value) { setSystemFont(value); }, {{"fontFamily"}, {}});
+    o.addMethod("setSystemFixedFont", [this](const std::string &value) { setSystemFixedFont(value); },
+                {{"fontFamily"}, {}});
+    o.addMethod("setSystemFontPointSize", [this](double value) { setSystemFontPointSize(value); },
+                {{"fontSize"}, {}});
+    o.addMethod("setWallpaper", [this](const std::string &value) { setWallpaper(value); }, {{"path"}, {}});
+    o.addMethod("removeUserWallpaper", [this](const std::string &value) { removeUserWallpaper(value); },
+                {{"path"}, {}});
+    o.addMethod("addWallpaperFolder", [this](const std::string &value) { addWallpaperFolder(value); },
+                {{"path"}, {}});
+    o.addMethod("removeWallpaperFolder", [this](const std::string &value) { removeWallpaperFolder(value); },
+                {{"path"}, {}});
+    o.addMethod("wallpaperFolderImages", [this](const std::string &value) { return wallpaperFolderImages(value); },
+                {{"path"}, {"images"}});
+    o.addMethod("setAccentColor", [this](int32_t value) { setAccentColor(value); }, {{"accentColor"}, {}});
+    o.addMethod("setBackgroundColor", [this](const std::string &value) { setBackgroundColor(value); },
+                {{"color"}, {}});
+    o.addMethod("setBackgroundType", [this](int32_t value) { setBackgroundType(value); }, {{"type"}, {}});
+    o.addMethod("setCursorTheme", [this](const std::string &value) { setCursorTheme(value); }, {{"type"}, {}});
+    o.addMethod("setCursorSize", [this](int32_t value) { setCursorSize(value); }, {{"type"}, {}});
+    o.addMethod("setIconTheme", [this](const std::string &value) { setIconTheme(value); }, {{"type"}, {}});
+    o.addMethod("setFontRendering",
+                [this](bool antialias, const std::string &hintStyle) { setFontRendering(antialias, hintStyle); },
+                {{"antialias", "hintStyle"}, {}});
+    o.addMethod("updateFontConfig", [this] { updateFontConfig(); });
+
+    o.addProperty("isDarkMode", [this] { return isDarkMode(); });
+    o.addProperty("darkModeSchedule", [this] { return int32_t(darkModeSchedule()); });
+    o.addProperty("continuousCorners", [this] { return continuousCorners(); });
+    o.addProperty("backgroundVisible", [this] { return backgroundVisible(); });
+    o.addProperty("systemFont", [this] { return systemFont(); });
+    o.addProperty("systemFixedFont", [this] { return systemFixedFont(); });
+    o.addProperty("systemFontPointSize", [this] { return systemFontPointSize(); });
+    o.addProperty("wallpaper", [this] { return wallpaper(); });
+    o.addProperty("userWallpapers", [this] { return userWallpapers(); });
+    o.addProperty("wallpaperFolders", [this] { return wallpaperFolders(); });
+    o.addProperty("accentColor", [this] { return int32_t(accentColor()); });
+    o.addProperty("backgroundType", [this] { return int32_t(backgroundType()); });
+    o.addProperty("backgroundColor", [this] { return backgroundColor(); });
+    o.addProperty("cursorTheme", [this] { return cursorTheme(); });
+    o.addProperty("cursorSize", [this] { return int32_t(cursorSize()); });
+    o.addProperty("iconTheme", [this] { return iconTheme(); });
+
+    o.addSignal("darkModeChanged", "b");
+    o.addSignal("darkModeScheduleChanged", "i");
+    o.addSignal("wallpaperChanged", "s");
+    o.addSignal("userWallpapersChanged", "");
+    o.addSignal("wallpaperFoldersChanged", "");
+    o.addSignal("wallpaperFolderImagesChanged", "s");
+    o.addSignal("continuousCornersChanged", "b");
+    o.addSignal("backgroundVisibleChanged", "");
+    o.addSignal("accentColorChanged", "i");
+    o.addSignal("backgroundTypeChanged", "");
+    o.addSignal("backgroundColorChanged", "");
+    o.addSignal("cursorThemeChanged", "");
+    o.addSignal("cursorSizeChanged", "");
+    o.addSignal("iconThemeChanged", "");
+    o.addSignal("systemFontPointSizeChanged", "");
+    o.addSignal("systemFontChanged", "");
+    return o.publish();
+}
+
+template<typename... Args>
+void ThemeManager::emitSignal(const std::string &name, const Args &...args)
+{
+    if (m_object)
+        m_object->emitSignal(name, args...);
+    changed.emit();
+}
+
+template<typename T>
+void ThemeManager::write(const std::string &key, const T &value)
+{
+    m_settings.setValue("Appearance/" + key, value);
+    m_settings.sync();
 }
 
 bool ThemeManager::isDarkMode()
@@ -122,9 +207,9 @@ void ThemeManager::setContinuousCorners(bool value)
         return;
 
     m_continuousCorners = value;
-    m_settings->setValue("ContinuousCorners", m_continuousCorners);
+    write("ContinuousCorners", m_continuousCorners);
 
-    emit continuousCornersChanged(m_continuousCorners);
+    emitSignal("continuousCornersChanged", m_continuousCorners);
 }
 
 bool ThemeManager::backgroundVisible() const
@@ -148,26 +233,26 @@ void ThemeManager::setAccentColor(int accentColor)
         return;
 
     m_accentColor = accentColor;
-    m_settings->setValue("AccentColor", m_accentColor);
+    write("AccentColor", m_accentColor);
 
-    emit accentColorChanged(m_accentColor);
+    emitSignal("accentColorChanged", int32_t(m_accentColor));
 }
 
-QString ThemeManager::cursorTheme() const
+std::string ThemeManager::cursorTheme() const
 {
     return m_cursorTheme;
 }
 
-void ThemeManager::setCursorTheme(const QString &theme)
+void ThemeManager::setCursorTheme(const std::string &theme)
 {
-    if (theme.isEmpty() || theme.size() > 255 || theme == "." || theme == ".."
-        || theme.contains('/') || theme.contains('\\') || theme.contains(QChar::Null))
+    if (theme.empty() || theme.size() > 255 || theme == "." || theme == ".."
+        || theme.find_first_of(std::string_view("/\\\0", 3)) != std::string::npos)
         return;
     if (m_cursorTheme != theme) {
         m_cursorTheme = theme;
-        m_settings->setValue("CursorTheme", m_cursorTheme);
+        write("CursorTheme", m_cursorTheme);
         applyCursorSettings();
-        emit cursorThemeChanged();
+        emitSignal("cursorThemeChanged");
     }
 }
 
@@ -178,129 +263,92 @@ int ThemeManager::cursorSize() const
 
 void ThemeManager::setCursorSize(int size)
 {
-    size = qBound(16, size, 64);
+    size = std::clamp(size, 16, 64);
     if (m_cursorSize != size) {
         m_cursorSize = size;
-        m_settings->setValue("CursorSize", m_cursorSize);
+        write("CursorSize", m_cursorSize);
         applyCursorSettings();
-        emit cursorSizeChanged();
+        emitSignal("cursorSizeChanged");
     }
 }
 
-// The first Chinese, Japanese or Korean language decides the forms of Han text that carries
-// no language of its own.
-static QString cjkFontForLanguages(const QStringList &languages)
+std::string ThemeManager::systemFont()
 {
-    for (const QString &code : languages) {
-        const QLocale locale(code);
-        switch (locale.language()) {
-        case QLocale::Japanese:
-            return QStringLiteral("Noto Sans CJK JP");
-        case QLocale::Korean:
-            return QStringLiteral("Noto Sans CJK KR");
-        case QLocale::Chinese:
-            if (locale.territory() == QLocale::HongKong || locale.territory() == QLocale::Macao)
-                return QStringLiteral("Noto Sans CJK HK");
-            if (locale.script() == QLocale::TraditionalHanScript)
-                return QStringLiteral("Noto Sans CJK TC");
-            return QStringLiteral("Noto Sans CJK SC");
-        default:
-            break;
-        }
-    }
-
-    return QStringLiteral("Noto Sans CJK SC");
+    return m_settings.stringValue(s_systemFontName, "Noto Sans");
 }
 
-QString ThemeManager::fontForLocale(const QString &localeName)
+void ThemeManager::setSystemFont(const std::string &fontFamily)
 {
-    if (localeName == "zh_CN")
-        return QStringLiteral("Noto Sans CJK SC");
-    if (localeName.startsWith("en_"))
-        return QStringLiteral("Noto Sans");
-    if (localeName == "zh_TW")
-        return QStringLiteral("Noto Sans CJK TC");
-    if (localeName == "zh_HK")
-        return QStringLiteral("Noto Sans CJK HK");
-    if (localeName == "ja_JP")
-        return QStringLiteral("Noto Sans CJK JP");
-    return {};
-}
-
-QString ThemeManager::systemFont()
-{
-    return m_settings->value(s_systemFontName, "Noto Sans").toString();
-}
-
-void ThemeManager::setSystemFont(const QString &fontFamily)
-{
-    m_settings->setValue(s_systemFontName, fontFamily);
+    m_settings.setValue(s_systemFontName, fontFamily);
+    m_settings.sync();
     updateGtk3Config();
     updateFontConfig();
 
-    emit systemFontChanged();
+    emitSignal("systemFontChanged");
 }
 
-QString ThemeManager::systemFixedFont()
+std::string ThemeManager::systemFixedFont()
 {
-    return m_settings->value(s_systemFixedFontName, "Noto Mono").toString();
+    return m_settings.stringValue(s_systemFixedFontName, "Noto Mono");
 }
 
-void ThemeManager::setSystemFixedFont(const QString &fontFamily)
+void ThemeManager::setSystemFixedFont(const std::string &fontFamily)
 {
-    m_settings->setValue(s_systemFixedFontName, fontFamily);
+    m_settings.setValue(s_systemFixedFontName, fontFamily);
+    m_settings.sync();
 
     updateFontConfig();
 }
 
-qreal ThemeManager::systemFontPointSize()
+double ThemeManager::systemFontPointSize()
 {
-    return m_settings->value(s_systemPointFontSize, 9).toReal();
+    return m_settings.doubleValue(s_systemPointFontSize, 9);
 }
 
-void ThemeManager::setSystemFontPointSize(qreal fontSize)
+void ThemeManager::setSystemFontPointSize(double fontSize)
 {
-    m_settings->setValue(s_systemPointFontSize, fontSize);
+    m_settings.setValue(s_systemPointFontSize, fontSize);
+    m_settings.sync();
     updateGtk3Config();
-    emit systemFontPointSizeChanged();
+    emitSignal("systemFontPointSizeChanged");
 }
 
-QString ThemeManager::wallpaper()
+std::string ThemeManager::wallpaper()
 {
     return m_wallpaperManager->wallpaper();
 }
 
-void ThemeManager::setWallpaper(const QString &path)
+void ThemeManager::setWallpaper(const std::string &path)
 {
     m_wallpaperManager->setWallpaper(path);
 }
 
-QStringList ThemeManager::userWallpapers() const
+std::vector<std::string> ThemeManager::userWallpapers() const
 {
     return m_wallpaperManager->userWallpapers();
 }
 
-void ThemeManager::removeUserWallpaper(const QString &path)
+void ThemeManager::removeUserWallpaper(const std::string &path)
 {
     m_wallpaperManager->removeUserWallpaper(path);
 }
 
-QStringList ThemeManager::wallpaperFolders() const
+std::vector<std::string> ThemeManager::wallpaperFolders() const
 {
     return m_wallpaperManager->wallpaperFolders();
 }
 
-void ThemeManager::addWallpaperFolder(const QString &path)
+void ThemeManager::addWallpaperFolder(const std::string &path)
 {
     m_wallpaperManager->addWallpaperFolder(path);
 }
 
-void ThemeManager::removeWallpaperFolder(const QString &path)
+void ThemeManager::removeWallpaperFolder(const std::string &path)
 {
     m_wallpaperManager->removeWallpaperFolder(path);
 }
 
-QStringList ThemeManager::wallpaperFolderImages(const QString &path)
+std::vector<std::string> ThemeManager::wallpaperFolderImages(const std::string &path)
 {
     return m_wallpaperManager->wallpaperFolderImages(path);
 }
@@ -315,12 +363,12 @@ void ThemeManager::setBackgroundType(int type)
     m_wallpaperManager->setBackgroundType(type);
 }
 
-QString ThemeManager::backgroundColor()
+std::string ThemeManager::backgroundColor()
 {
     return m_wallpaperManager->backgroundColor();
 }
 
-void ThemeManager::setBackgroundColor(QString color)
+void ThemeManager::setBackgroundColor(const std::string &color)
 {
     m_wallpaperManager->setBackgroundColor(color);
 }
@@ -337,24 +385,24 @@ void ThemeManager::updateGtk3Config()
     gtk.fontRgba = font.rgba;
 
     gtk.darkMode = isDarkMode();
-    gtk.iconTheme = m_iconTheme.isEmpty() ? QStringLiteral("Cutefish") : m_iconTheme;
+    gtk.iconTheme = m_iconTheme.empty() ? std::string("Cutefish") : m_iconTheme;
     gtk.cursorTheme = m_cursorTheme;
     gtk.cursorSize = m_cursorSize;
     writeGtkSettings(gtk);
 }
 
-void ThemeManager::setFontRendering(bool antialias, const QString &hintStyle)
+void ThemeManager::setFontRendering(bool antialias, const std::string &hintStyle)
 {
-    m_settings->setValue("FontAntialias", antialias);
-    m_settings->setValue("FontHintStyle", hintStyle);
-    m_settings->sync();
+    m_settings.setValue("Appearance/FontAntialias", antialias);
+    m_settings.setValue("Appearance/FontHintStyle", hintStyle);
+    m_settings.sync();
     updateFontConfig();
     updateGtk3Config();
 }
 
 void ThemeManager::applyCursorSettings()
 {
-    m_settings->sync();
+    m_settings.sync();
 
     updateGtk3Config();
 }
@@ -369,26 +417,25 @@ FontConfig ThemeManager::fontConfig()
     FontConfig config;
     config.family = systemFont();
     config.fixedFamily = systemFixedFont();
-    config.antialias = m_settings->value("FontAntialias", true).toBool();
-    config.hintStyle = m_settings->value("FontHintStyle", "hintfull").toString();
-    config.cjkFamily = cjkFontForLanguages(LanguageEnvironment::preferredLanguages());
+    config.antialias = m_settings.boolValue("Appearance/FontAntialias", true);
+    config.hintStyle = m_settings.stringValue("Appearance/FontHintStyle", "hintfull");
+    config.cjkFamily = cjkFontForLanguages(cutefish::core::language::preferredLanguages());
     return config;
 }
 
-QString ThemeManager::iconTheme() const
+std::string ThemeManager::iconTheme() const
 {
     return m_iconTheme;
 }
 
-void ThemeManager::setIconTheme(const QString &iconTheme)
+void ThemeManager::setIconTheme(const std::string &iconTheme)
 {
     if (m_iconTheme == iconTheme)
         return;
 
     m_iconTheme = iconTheme;
-    m_settings->setValue("IconTheme", m_iconTheme);
     // Listeners re-read the file when the signal arrives.
-    m_settings->sync();
+    write("IconTheme", m_iconTheme);
     updateGtk3Config();
-    emit iconThemeChanged();
+    emitSignal("iconThemeChanged");
 }

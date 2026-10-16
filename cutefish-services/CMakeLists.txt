@@ -1,69 +1,103 @@
 project(cutefish-services)
 set(TARGET cutefish-services)
 
+find_package(CutefishToolkit REQUIRED)
+find_package(CutefishClients REQUIRED COMPONENTS display)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ServicesSystemd REQUIRED IMPORTED_TARGET libsystemd)
+pkg_check_modules(ServicesFontconfig REQUIRED IMPORTED_TARGET fontconfig)
+pkg_check_modules(ServicesIcu REQUIRED IMPORTED_TARGET icu-uc)
 
-file(GLOB_RECURSE SOURCES
-  "*.cpp"
-  "*.h"
-)
-
-list(FILTER SOURCES EXCLUDE REGEX "/clipboard/")
-list(FILTER SOURCES EXCLUDE REGEX "/crash/")
-list(FILTER SOURCES EXCLUDE REGEX "/idle/")
-list(FILTER SOURCES EXCLUDE REGEX "/permissions/")
 add_subdirectory(clipboard)
-add_subdirectory(crash)
 add_subdirectory(idle)
-add_subdirectory(permissions)
 
-set(RESOURCES appearance/appearance.qrc)
+file(READ appearance/fontconfig.conf FONTCONFIG_TEMPLATE)
+configure_file(appearance/fontconfig_template.h.in ${CMAKE_CURRENT_BINARY_DIR}/fontconfig_template.h @ONLY)
 
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     brightness/com.cutefish.Services.Brightness.xml
-                     brightness/brightnessmanager.h BrightnessManager)
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     appearance/com.cutefish.Appearance.xml
-                     appearance/thememanager.h ThemeManager)
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     battery/com.cutefish.Battery.xml
-                     battery/battery.h Battery)
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     locale/com.cutefish.Services.Language.xml
-                     locale/language.h Language)
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     power/com.cutefish.Power.xml
-                     power/powermanager.h PowerManager)
-qt6_add_dbus_adaptor(DBUS_SOURCES
-                     nightlight/com.cutefish.Services.NightLight.xml
-                     nightlight/nightlight.h NightLight)
-set_source_files_properties(${DBUS_SOURCES} PROPERTIES SKIP_AUTOGEN ON)
-
-add_executable(${TARGET} ${SOURCES} ${DBUS_SOURCES} ${RESOURCES})
-target_include_directories(${TARGET} PRIVATE schedule)
+add_executable(${TARGET}
+    main.cpp
+    application.cpp
+    application.h
+    dbuscall.h
+    log.cpp
+    log.h
+    notification.cpp
+    notification.h
+    appearance/fontconfigwriter.cpp
+    appearance/fontconfigwriter.h
+    appearance/gtksettings.cpp
+    appearance/gtksettings.h
+    appearance/thememanager.cpp
+    appearance/thememanager.h
+    appearance/wallpapermanager.cpp
+    appearance/wallpapermanager.h
+    battery/battery.cpp
+    battery/battery.h
+    battery/batterywarning.cpp
+    battery/batterywarning.h
+    battery/power.h
+    battery/upowerdevice.cpp
+    battery/upowerdevice.h
+    battery/upowermanager.cpp
+    battery/upowermanager.h
+    brightness/brightnessmanager.cpp
+    brightness/brightnessmanager.h
+    brightness/ddcworker.cpp
+    brightness/ddcworker.h
+    crash/coredump.cpp
+    crash/coredump.h
+    crash/coredumpjournal.cpp
+    crash/coredumpjournal.h
+    crash/crashdialog.cpp
+    crash/crashdialog.h
+    crash/crashmanager.cpp
+    crash/crashmanager.h
+    locale/language.cpp
+    locale/language.h
+    nightlight/nightlight.cpp
+    nightlight/nightlight.h
+    permissions/permissionmanager.cpp
+    permissions/permissionmanager.h
+    permissions/permissionprompt.cpp
+    permissions/permissionprompt.h
+    power/action.cpp
+    power/action.h
+    power/dimdisplayaction.cpp
+    power/dimdisplayaction.h
+    power/idlemanager.cpp
+    power/idlemanager.h
+    power/powermanager.cpp
+    power/powermanager.h
+    proxy/proxyservice.cpp
+    proxy/proxyservice.h
+    schedule/scheduledfeature.cpp
+    schedule/scheduledfeature.h
+    schedule/scheduleutils.cpp
+    schedule/scheduleutils.h
+)
+target_include_directories(${TARGET} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedule
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
+set_target_properties(${TARGET} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_compile_definitions(${TARGET} PRIVATE
         CUTEFISH_GTK_CSS_DIR="${CMAKE_INSTALL_FULL_DATAROOTDIR}/${TARGET}/gtk"
 )
 
-target_link_libraries(${TARGET}
-        Cutefish::Application
-        Cutefish::Display
+target_link_libraries(${TARGET} PRIVATE
+        Cutefish::Toolkit
+        Cutefish::DisplayClient
+        cutefish-core-common
         cutefish-clipboard-backend
-        cutefish-crash
-        Qt6::Core
-        Qt6::Gui
-        Qt6::DBus
         cutefish-idle-backend
-        cutefish-permissions
+        PkgConfig::ServicesSystemd
+        PkgConfig::ServicesFontconfig
+        PkgConfig::ServicesIcu
 )
 
-file(GLOB TS_FILES translations/*.ts)
-qt6_add_translation(QM_FILES ${TS_FILES})
-add_custom_target(translations DEPENDS ${QM_FILES} SOURCES ${TS_FILES})
-add_dependencies(${TARGET} translations)
-
 install(TARGETS ${TARGET} DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES ${QM_FILES} DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${TARGET}/translations)
 install(FILES appearance/gtk/gtk-3.0.css appearance/gtk/gtk-4.0.css
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${TARGET}/gtk)
 install(FILES brightness/60-cutefish-ddc.rules DESTINATION lib/udev/rules.d)

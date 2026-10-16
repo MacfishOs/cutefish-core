@@ -1,139 +1,170 @@
 #include "recorder.h"
 #include "audiocapture.h"
-#include "captureclient.h"
+#include "capture_client.h"
 #include "encoder.h"
 #include "monotonic.h"
 
-#include <QAbstractEventDispatcher>
-#include <QCoreApplication>
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QSocketNotifier>
+#include "base/event_loop.h"
+
+#include <cstdio>
+#include <filesystem>
+
+#include <sys/epoll.h>
 
 #include <wayland-client.h>
+
+using cutefish::base::Rect;
+using cutefish::base::RectF;
+using cutefish::base::Size;
 
 // Buffer ids travel to the encoder with the session they belong to.
 static constexpr int kSessionStride = 1 << 16;
 
-Recorder::Recorder(const Options &options, QObject *parent)
-    : QObject(parent)
-    , m_options(options)
+Recorder::Recorder(const Options &options, cutefish::base::EventLoop &loop)
+    : m_options(options)
+    , m_loop(loop)
 {
-    qRegisterMetaType<CaptureSession::Frame>();
-    qRegisterMetaType<CaptureSession::DmaBuf>();
 }
 
 Recorder::~Recorder()
 {
     if (m_audio)
         m_audio->stop();
-    m_encoderThread.quit();
-    m_encoderThread.wait();
+    m_encoderThread.stop();
+    m_encoder.reset();
     // Replaced sessions may still be on their way back from the encoder.
-    qDeleteAll(findChildren<CaptureSession *>(Qt::FindDirectChildrenOnly));
-    delete m_client;
+    m_replaced.clear();
+    m_session.reset();
+    if (m_prepareHook)
+        m_loop.removePrepareHook(m_prepareHook);
+    if (m_displayWatch)
+        m_loop.unwatch(m_displayWatch);
+    m_client.reset();
     if (m_display)
         wl_display_disconnect(m_display);
 }
 
-bool Recorder::start(QString *error)
+void Recorder::toMain(std::function<void()> task)
+{
+    m_loop.post([lifetime = m_lifetime, task = std::move(task)] {
+        if (lifetime.lock())
+            task();
+    });
+}
+
+bool Recorder::start(std::string *error)
 {
     m_display = wl_display_connect(nullptr);
     if (!m_display) {
-        *error = QStringLiteral("cannot connect to the compositor");
+        *error = "cannot connect to the compositor";
         return false;
     }
-    m_client = new CaptureClient(m_display, this);
+    m_client = std::make_unique<CaptureClient>(m_display);
     if (!m_client->initialize()) {
-        *error = QStringLiteral("the compositor does not let this program capture the screen");
+        *error = "the compositor does not let this program capture the screen";
         return false;
     }
 
-    if (m_options.window.isEmpty()) {
+    if (m_options.window.empty()) {
         if (const CaptureClient::Output *output = m_client->outputNamed(m_options.output))
             m_outputGeometry = output->logicalGeometry;
     }
 
-    m_notifier = new QSocketNotifier(wl_display_get_fd(m_display), QSocketNotifier::Read, this);
-    connect(m_notifier, &QSocketNotifier::activated, this, &Recorder::dispatch);
+    m_displayWatch = m_loop.watch(wl_display_get_fd(m_display), EPOLLIN, [this](uint32_t) { dispatch(); });
     // Events a round trip already read sit in the queue without the socket
     // becoming readable again.
-    connect(QCoreApplication::eventDispatcher(), &QAbstractEventDispatcher::aboutToBlock, this,
-            [this] {
-                wl_display_dispatch_pending(m_display);
-                wl_display_flush(m_display);
-            });
+    m_prepareHook = m_loop.addPrepareHook([this] {
+        wl_display_dispatch_pending(m_display);
+        wl_display_flush(m_display);
+    });
 
-    m_encoder = new Encoder;
-    m_encoder->moveToThread(&m_encoderThread);
-    connect(&m_encoderThread, &QThread::finished, m_encoder, &QObject::deleteLater);
-    connect(m_encoder, &Encoder::frameDone, this, [this](int token) {
-        // A buffer of a session replaced since is already gone.
-        if (token >= 0 && m_session && token / kSessionStride == m_generation)
-            m_session->releaseBuffer(token % kSessionStride);
-        captureNext();
-    });
-    connect(m_encoder, &Encoder::needsSharedMemory, this, [this] {
-        if (m_memory == CaptureSession::Memory::DmaBuf)
-            startSession(CaptureSession::Memory::Shm);
-    });
-    connect(m_encoder, &Encoder::started, this, &Recorder::started);
-    connect(m_encoder, &Encoder::finished, this, &Recorder::onEncoderFinished);
+    m_encoder = std::make_unique<Encoder>();
+    m_encoder->onFrameDone = [this](int token) {
+        toMain([this, token] {
+            // A buffer of a session replaced since is already gone.
+            if (token >= 0 && m_session && token / kSessionStride == m_generation)
+                m_session->releaseBuffer(token % kSessionStride);
+            captureNext();
+        });
+    };
+    m_encoder->onNeedsSharedMemory = [this] {
+        toMain([this] {
+            if (m_memory == CaptureSession::Memory::DmaBuf)
+                startSession(CaptureSession::Memory::Shm);
+        });
+    };
+    m_encoder->onStarted = [this] {
+        toMain([this] {
+            if (onStarted)
+                onStarted();
+        });
+    };
+    m_encoder->onFinished = [this](bool ok, const std::string &error) {
+        toMain([this, ok, error] { onEncoderFinished(ok, error); });
+    };
     m_encoderThread.start();
-    QMetaObject::invokeMethod(m_encoder, "open", Q_ARG(QString, partialPath()),
-                              Q_ARG(bool, m_options.microphone));
+    m_encoderThread.post([encoder = m_encoder.get(), path = partialPath(), audio = m_options.microphone] {
+        encoder->open(path, audio);
+    });
 
     // Frames on the GPU first; the encoder asks for shared memory without it.
     if (!startSession(CaptureSession::Memory::DmaBuf)) {
-        *error = QStringLiteral("there is nothing to record");
+        *error = "there is nothing to record";
         return false;
     }
 
     if (m_options.microphone) {
-        m_audio = new AudioCapture(this);
-        connect(m_audio, &AudioCapture::samples, m_encoder, &Encoder::encodeAudio);
-        QString audioError;
+        m_audio = std::make_unique<AudioCapture>();
+        m_audio->onSamples = [this](std::vector<float> samples, int64_t capturedNs) {
+            m_encoderThread.post([encoder = m_encoder.get(), samples = std::move(samples), capturedNs] {
+                encoder->encodeAudio(samples, capturedNs);
+            });
+        };
+        std::string audioError;
         if (!m_audio->start(m_options.microphoneTarget, &audioError))
-            qWarning("cutefish-screenrecorder: %s", qPrintable(audioError));
+            fprintf(stderr, "cutefish-screenrecorder: %s\n", audioError.c_str());
     }
     return true;
 }
 
 bool Recorder::startSession(CaptureSession::Memory memory)
 {
-    ext_image_capture_source_v1 *source = m_options.window.isEmpty()
+    ext_image_capture_source_v1 *source = m_options.window.empty()
             ? m_client->createOutputSource(m_options.output)
             : m_client->createWindowSource(m_options.window);
     if (!source)
         return false;
 
     if (m_session) {
-        CaptureSession *replaced = m_session;
-        replaced->disconnect(this);
+        CaptureSession *replaced = m_session.get();
+        replaced->onConstraintsChanged = nullptr;
+        replaced->onFrameReady = nullptr;
+        replaced->onFrameFailed = nullptr;
+        replaced->onStopped = nullptr;
+        m_replaced.push_back(std::move(m_session));
         // Its DMA-BUF fds close with it, and encodeDmaBuf calls for its
         // buffers may still be queued: the deletion goes through the encoder's
         // queue and back, so it lands after every one of them.
-        QMetaObject::invokeMethod(m_encoder, [this, replaced] {
-            QMetaObject::invokeMethod(this, [replaced] { replaced->deleteLater(); },
-                                      Qt::QueuedConnection);
-        }, Qt::QueuedConnection);
+        m_encoderThread.post([this, replaced] {
+            toMain([this, replaced] {
+                std::erase_if(m_replaced, [replaced](const auto &session) { return session.get() == replaced; });
+            });
+        });
     }
     ++m_generation;
     m_memory = memory;
     // Three buffers: one being captured, one being encoded and one to spare.
-    m_session = new CaptureSession(m_client, source, m_options.cursor, 3, memory, this);
-    connect(m_session, &CaptureSession::constraintsChanged, this, [this] {
+    m_session = std::make_unique<CaptureSession>(m_client.get(), source, m_options.cursor, 3, memory);
+    m_session->onConstraintsChanged = [this] {
         // New buffers replace the old ones, which the encoder may still have
         // imported; queued behind the frames it has yet to encode from them.
-        QMetaObject::invokeMethod(m_encoder, "forgetBuffers");
+        m_encoderThread.post([encoder = m_encoder.get()] { encoder->forgetBuffers(); });
         captureNext();
-    });
-    connect(m_session, &CaptureSession::frameReady, this, &Recorder::onFrame);
-    connect(m_session, &CaptureSession::frameFailed, this, &Recorder::captureNext,
-            Qt::QueuedConnection);
+    };
+    m_session->onFrameReady = [this](const CaptureSession::Frame &frame) { onFrame(frame); };
+    m_session->onFrameFailed = [this] { toMain([this] { captureNext(); }); };
     // A window that closes ends its recording with what there is.
-    connect(m_session, &CaptureSession::stopped, this, &Recorder::stop);
+    m_session->onStopped = [this] { stop(); };
     return true;
 }
 
@@ -142,16 +173,17 @@ void Recorder::stop()
     if (m_stopping || m_done)
         return;
     m_stopping = true;
-    const qint64 stopNs = monotonicNs();
+    const int64_t stopNs = monotonicNs();
     if (m_audio)
         m_audio->stop();
-    QMetaObject::invokeMethod(m_encoder, "finish", Q_ARG(qint64, stopNs));
+    m_encoderThread.post([encoder = m_encoder.get(), stopNs] { encoder->finish(stopNs); });
 }
 
 void Recorder::dispatch()
 {
     if (wl_display_dispatch(m_display) < 0) {
-        m_notifier->setEnabled(false);
+        m_loop.unwatch(m_displayWatch);
+        m_displayWatch = 0;
         stop();
         return;
     }
@@ -171,6 +203,7 @@ void Recorder::onFrame(const CaptureSession::Frame &frame)
         return;
     }
 
+    const int token = m_generation * kSessionStride + frame.buffer;
     if (frame.dmabuf.isValid()) {
         // The GPU path takes the pixels as they are; a rotated output goes
         // through shared memory, where the copy can be turned upright.
@@ -179,41 +212,38 @@ void Recorder::onFrame(const CaptureSession::Frame &frame)
             startSession(CaptureSession::Memory::Shm);
             return;
         }
-        QMetaObject::invokeMethod(m_encoder, "encodeDmaBuf",
-                                  Q_ARG(CaptureSession::DmaBuf, frame.dmabuf),
-                                  Q_ARG(QString, m_session->renderNode()),
-                                  Q_ARG(QRect, cropFor(frame.dmabuf.size)),
-                                  Q_ARG(qint64, frame.presentedNs),
-                                  Q_ARG(int, m_generation * kSessionStride + frame.buffer));
+        m_encoderThread.post([encoder = m_encoder.get(), dmabuf = frame.dmabuf, node = m_session->renderNode(),
+                              crop = cropFor(frame.dmabuf.size), presentedNs = frame.presentedNs, token] {
+            encoder->encodeDmaBuf(dmabuf, node, crop, presentedNs, token);
+        });
         captureNext();
         return;
     }
 
     // A rotated output gets an upright copy, but its buffer stays held until the
     // encoder is done, so the pool still bounds the frames in flight.
-    const QImage image = CaptureSession::upright(frame.image, frame.transform);
-    QMetaObject::invokeMethod(m_encoder, "encodeVideo", Q_ARG(QImage, image),
-                              Q_ARG(QRect, cropFor(image.size())),
-                              Q_ARG(qint64, frame.presentedNs),
-                              Q_ARG(int, m_generation * kSessionStride + frame.buffer));
+    const Image image = upright(frame.image, frame.transform);
+    m_encoderThread.post([encoder = m_encoder.get(), image, crop = cropFor(image.size()),
+                          presentedNs = frame.presentedNs, token] {
+        encoder->encodeVideo(image, crop, presentedNs, token);
+    });
     // The other buffers are free while this one is encoded.
     captureNext();
 }
 
-QRect Recorder::cropFor(const QSize &frame) const
+Rect Recorder::cropFor(const Size &frame) const
 {
-    const QRect whole(QPoint(), frame);
-    if (!m_options.window.isEmpty() || m_options.region.isEmpty() || m_outputGeometry.isEmpty())
+    const Rect whole(frame);
+    if (!m_options.window.empty() || m_options.region.isEmpty() || m_outputGeometry.isEmpty())
         return whole;
     const double scale = double(frame.width()) / m_outputGeometry.width();
-    const QRect logical = m_options.region.translated(-m_outputGeometry.topLeft());
-    return QRectF(logical.x() * scale, logical.y() * scale, logical.width() * scale,
-                  logical.height() * scale)
-                   .toAlignedRect()
+    const Rect logical = m_options.region.translated(-m_outputGeometry.x(), -m_outputGeometry.y());
+    return RectF(logical.x() * scale, logical.y() * scale, logical.width() * scale, logical.height() * scale)
+                   .toEnclosingRect()
             & whole;
 }
 
-void Recorder::onEncoderFinished(bool ok, const QString &error)
+void Recorder::onEncoderFinished(bool ok, const std::string &error)
 {
     if (m_done)
         return;
@@ -222,21 +252,26 @@ void Recorder::onEncoderFinished(bool ok, const QString &error)
     if (m_audio)
         m_audio->stop();
 
-    QString message = error;
+    std::string message = error;
+    std::error_code ignored;
     if (ok) {
-        QFile::remove(m_options.path);
-        if (!QFile::rename(partialPath(), m_options.path)) {
+        std::filesystem::remove(m_options.path, ignored);
+        std::error_code renamed;
+        std::filesystem::rename(partialPath(), m_options.path, renamed);
+        if (renamed) {
             ok = false;
-            message = QStringLiteral("cannot name the recording %1").arg(m_options.path);
+            message = "cannot name the recording " + m_options.path;
         }
     }
     if (!ok)
-        QFile::remove(partialPath());
-    emit finished(ok, message);
+        std::filesystem::remove(partialPath(), ignored);
+    if (onFinished)
+        onFinished(ok, message);
 }
 
-QString Recorder::partialPath() const
+std::string Recorder::partialPath() const
 {
-    const QFileInfo info(m_options.path);
-    return info.dir().filePath(QLatin1Char('.') + info.fileName() + QStringLiteral(".part"));
+    const std::filesystem::path path(m_options.path);
+    const std::filesystem::path directory = path.has_parent_path() ? path.parent_path() : ".";
+    return (directory / ("." + path.filename().string() + ".part")).string();
 }

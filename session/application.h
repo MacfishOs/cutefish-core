@@ -4,58 +4,46 @@
 #ifndef APPLICATION_H
 #define APPLICATION_H
 
-#include <QCoreApplication>
+#include <memory>
+#include <string>
+#include <vector>
 
-#include "power.h"
+#include "base/dbus.h"
+#include "base/event_loop.h"
+#include "base/timer.h"
+
 #include "processmanager.h"
 
-class Application : public QCoreApplication
+class Application
 {
-    Q_OBJECT
-
 public:
-    explicit Application(int& argc, char** argv);
-    ~Application() override;
+    Application(int argc, char** argv, cutefish::base::EventLoop& loop);
+    ~Application();
 
-public slots:
+    int exec() { return m_loop.run(); }
 
     void logout() { m_processManager->logout(); }
-
-    void reboot()
-    {
-        m_processManager->endAfterApplications(ProcessManager::Ending::Restart, [] {
-            const bool rebooting = Power::reboot();
-            if (rebooting)
-                QCoreApplication::exit(0);
-            return rebooting;
-        });
-    }
-
-    void powerOff()
-    {
-        m_processManager->endAfterApplications(ProcessManager::Ending::Shutdown, [] {
-            const bool poweringOff = Power::powerOff();
-            if (poweringOff)
-                QCoreApplication::exit(0);
-            return poweringOff;
-        });
-    }
-
-    bool suspend() { return Power::suspend(); }
-
+    void reboot();
+    void powerOff();
+    bool suspend();
     void startDesktopProcess() { m_processManager->startDesktopProcess(); }
 
 private:
     void endSessionOnTerminationSignals();
+    void exportSession();
     void initEnvironments();
     void initLanguage();
     bool syncDBusEnvironment();
     void importSystemdEnvironment();
     void createConfigDirectory();
-    int runSync(const QString& program, const QStringList& args);
+    int runSync(const std::string& program, const std::vector<std::string>& args);
 
 private:
-    ProcessManager* m_processManager;
+    cutefish::base::EventLoop& m_loop;
+    std::unique_ptr<ProcessManager> m_processManager;
+    std::unique_ptr<cutefish::base::dbus::Object> m_sessionObject;
+    cutefish::base::Timer m_startTimer;
+    int m_terminationWatch = 0;
 };
 
 #endif // APPLICATION_H

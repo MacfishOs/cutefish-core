@@ -5,34 +5,34 @@
 
 #include "coredump.h"
 
-#include <QObject>
+#include <functional>
+#include <string>
 
-class QSocketNotifier;
-class QTimer;
+#include "base/timer.h"
+
 struct sd_journal;
 
 // Follows systemd-coredump's journal entries for this user's processes from
 // the moment it starts; earlier crashes are not reported.
-class CoredumpJournal : public QObject
+class CoredumpJournal
 {
-    Q_OBJECT
-
 public:
-    explicit CoredumpJournal(QObject *parent = nullptr);
-    ~CoredumpJournal() override;
+    explicit CoredumpJournal(std::function<void(const Coredump &dump)> coredump);
+    ~CoredumpJournal();
+
+    CoredumpJournal(const CoredumpJournal &) = delete;
+    CoredumpJournal &operator=(const CoredumpJournal &) = delete;
 
     bool isOpen() const { return m_journal != nullptr; }
-
-Q_SIGNALS:
-    void coredump(const Coredump &dump);
 
 private:
     void readNewEntries();
     void scheduleTimeout();
     Coredump currentEntry() const;
-    QString field(const char *name) const;
+    std::string field(const char *name) const;
 
+    std::function<void(const Coredump &dump)> m_coredump;
     sd_journal *m_journal = nullptr;
-    QSocketNotifier *m_notifier = nullptr;
-    QTimer *m_timeout = nullptr;
+    int m_watch = 0;
+    cutefish::base::Timer m_timeout;
 };

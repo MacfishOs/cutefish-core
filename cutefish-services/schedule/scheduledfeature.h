@@ -4,16 +4,16 @@
 #ifndef SCHEDULEDFEATURE_H
 #define SCHEDULEDFEATURE_H
 
-#include <QDateTime>
-#include <QObject>
-#include <QSettings>
-#include <QString>
-#include <QTimer>
-#include <QVariantMap>
-
 #include <chrono>
 #include <functional>
 #include <optional>
+#include <string>
+#include <vector>
+
+#include "base/dbus.h"
+#include "base/settings.h"
+#include "base/signal.h"
+#include "base/timer.h"
 
 #include "scheduleutils.h"
 
@@ -21,16 +21,8 @@
 // between custom times. Modelled on Ash's ScheduledFeature: where the schedule
 // says otherwise it wins, and a manual toggle holds until the schedule's next
 // turn, across sessions too.
-class ScheduledFeature : public QObject
+class ScheduledFeature
 {
-    Q_OBJECT
-    Q_PROPERTY(bool enabled READ enabled NOTIFY enabledChanged)
-    Q_PROPERTY(int schedule READ schedule NOTIFY scheduleChanged)
-    Q_PROPERTY(int customStart READ customStart NOTIFY customStartChanged)
-    Q_PROPERTY(int customEnd READ customEnd NOTIFY customEndChanged)
-    Q_PROPERTY(int sunset READ sunset NOTIFY sunsetChanged)
-    Q_PROPERTY(int sunrise READ sunrise NOTIFY sunriseChanged)
-
 public:
     // Ash's ScheduleType.
     enum Schedule {
@@ -39,20 +31,24 @@ public:
         Custom,
     };
 
-    using Clock = std::function<QDateTime()>;
+    using Clock = std::function<ScheduleUtils::DateTime()>;
 
     // Where the feature keeps its state in services.conf. A feature without
     // custom time keys offers no Custom schedule.
     struct Keys {
-        QString group;
-        QString enabled;
-        QString schedule;
-        QString holdUntil;
-        QString customStart;
-        QString customEnd;
+        std::string group;
+        std::string enabled;
+        std::string schedule;
+        std::string holdUntil;
+        std::string customStart;
+        std::string customEnd;
     };
 
-    ScheduledFeature(const Keys &keys, QObject *parent, Clock clock);
+    ScheduledFeature(const Keys &keys, cutefish::base::Settings &settings, Clock clock);
+    virtual ~ScheduledFeature();
+
+    ScheduledFeature(const ScheduledFeature &) = delete;
+    ScheduledFeature &operator=(const ScheduledFeature &) = delete;
 
     // Reads the saved state and takes the schedule's position. Called once,
     // after showEnabled() can be reached: at the end of a subclass constructor.
@@ -74,40 +70,38 @@ public:
     int sunrise() const { return m_sunrise; }
 
     // The schedule's next turn; invalid without a schedule.
-    QDateTime nextCheckpoint() const { return m_next; }
+    ScheduleUtils::DateTime nextCheckpoint() const { return m_next; }
 
     // What the schedule timer and a resume run, for tests that drive the clock.
     void checkpointForTesting() { advance(Reason::Scheduled); }
 
     void resumeForTesting() { advance(Reason::Reset); }
 
-public slots:
     void setEnabled(bool enabled);
     void setSchedule(int schedule);
     void setCustomStart(int minutes);
     void setCustomEnd(int minutes);
 
-signals:
-    void enabledChanged(bool enabled);
-    void scheduleChanged(int schedule);
-    void customStartChanged(int minutes);
-    void customEndChanged(int minutes);
-    void sunsetChanged(int minutes);
-    void sunriseChanged(int minutes);
+    cutefish::base::Signal<bool> enabledChanged;
+    cutefish::base::Signal<int> scheduleChanged;
+    cutefish::base::Signal<int> customStartChanged;
+    cutefish::base::Signal<int> customEndChanged;
+    cutefish::base::Signal<int> sunsetChanged;
+    cutefish::base::Signal<int> sunriseChanged;
 
 protected:
     // Shows a change of enabled() over `duration`: a second when the user or a
     // change of settings made it, a minute on a scheduled turn.
     virtual void showEnabled(std::chrono::milliseconds duration);
 
-    void write(const QString &key, const QVariant &value);
+    template<typename T>
+    void write(const std::string &key, const T &value)
+    {
+        m_settings.setValue(m_keys.group + '/' + key, value);
+        m_settings.sync();
+    }
 
-    QSettings m_settings;
-
-private slots:
-    void onPrepareForSleep(bool sleeping);
-    void onTimeDateChanged(const QString &interface, const QVariantMap &changed,
-                           const QStringList &invalidated);
+    cutefish::base::Settings &m_settings;
 
 private:
     // ScheduledFeature::RefreshReason.
@@ -120,31 +114,36 @@ private:
         Reset,
     };
 
-    bool hasCustomSchedule() const { return !m_keys.customStart.isEmpty(); }
-    QString holdPath() const { return m_keys.group + QLatin1Char('/') + m_keys.holdUntil; }
+    bool hasCustomSchedule() const { return !m_keys.customStart.empty(); }
+    std::string key(const std::string &name) const { return m_keys.group + '/' + name; }
 
+    void onPrepareForSleep(bool sleeping);
+    void onTimeDateChanged(const cutefish::base::dbus::VariantMap &changed,
+                           const std::vector<std::string> &invalidated);
     void refresh(Reason reason);
     // Applies the schedule once its next turn has come; until then a manual
     // toggle holds and the timer waits for the turn.
     void advance(Reason reason);
-    void arm(const QDateTime &next);
+    void arm(const ScheduleUtils::DateTime &next);
     void setEnabledInternal(bool enabled, std::chrono::milliseconds duration);
     void updateSunTimes();
-    ScheduleUtils::Times timesFor(QDate date);
-    ScheduleUtils::Times sunTimesFor(QDate date);
+    ScheduleUtils::Times timesFor(ScheduleUtils::Date date);
+    ScheduleUtils::Times sunTimesFor(ScheduleUtils::Date date);
 
     const Keys m_keys;
     Clock m_clock;
-    QTimer m_timer;
-    QDateTime m_next;
+    cutefish::base::Timer m_timer;
+    ScheduleUtils::DateTime m_next;
     bool m_enabled = false;
     int m_schedule = Never;
     int m_customStart = 18 * 60;
     int m_customEnd = 6 * 60;
     int m_sunset = 18 * 60;
     int m_sunrise = 6 * 60;
-    QByteArray m_zone;
+    std::string m_zone;
     std::optional<ScheduleUtils::Coordinates> m_coordinates;
+    cutefish::base::dbus::Match m_prepareForSleep;
+    cutefish::base::dbus::Match m_timeDateChanged;
 };
 
 #endif // SCHEDULEDFEATURE_H

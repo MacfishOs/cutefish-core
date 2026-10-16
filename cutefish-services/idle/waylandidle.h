@@ -1,20 +1,24 @@
 #pragma once
 
-#include <QObject>
 #include <memory>
 
-class WaylandIdle : public QObject
+#include "base/signal.h"
+
+// ext_idle_notifier_v1 timeouts, on a Wayland connection of their own.
+class WaylandIdle
 {
-    Q_OBJECT
 public:
-    explicit WaylandIdle(QObject *parent = nullptr);
-    ~WaylandIdle() override;
+    WaylandIdle();
+    ~WaylandIdle();
+
+    WaylandIdle(const WaylandIdle &) = delete;
+    WaylandIdle &operator=(const WaylandIdle &) = delete;
+
     int addTimeout(int milliseconds);
     void removeTimeout(int id);
 
-Q_SIGNALS:
-    void timeoutReached(int id, int milliseconds);
-    void resumed();
+    cutefish::base::Signal<int, int> timeoutReached;
+    cutefish::base::Signal<> resumed;
 
 private:
     class Private;

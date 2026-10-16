@@ -1,13 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     project(cutefish-clipboard LANGUAGES C CXX)
-    set(CMAKE_CXX_STANDARD 17)
-    set(CMAKE_AUTOMOC ON)
+    find_package(CutefishToolkit REQUIRED)
 endif()
-find_package(Qt6 REQUIRED COMPONENTS Core Gui)
-# wlr-data-control is not in wayland-protocols; the framework ships its bindings
-# with the compositor's other private protocols.
-find_package(CutefishFramework REQUIRED COMPONENTS Protocols)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ClipboardWayland REQUIRED IMPORTED_TARGET wayland-client)
 pkg_check_modules(ClipboardProtocols REQUIRED wayland-protocols>=1.39)
@@ -15,7 +10,6 @@ pkg_get_variable(CLIPBOARD_PROTOCOL_DIR wayland-protocols pkgdatadir)
 pkg_get_variable(CLIPBOARD_SCANNER wayland-scanner wayland_scanner)
 set(CLIPBOARD_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/protocols)
 file(MAKE_DIRECTORY ${CLIPBOARD_GENERATED_DIR})
-set(CLIPBOARD_PROTOCOL_SOURCES)
 set(xml ${CLIPBOARD_PROTOCOL_DIR}/staging/ext-data-control/ext-data-control-v1.xml)
 set(header ${CLIPBOARD_GENERATED_DIR}/ext-data-control-v1-client-protocol.h)
 set(code ${CLIPBOARD_GENERATED_DIR}/ext-data-control-v1-protocol.c)
@@ -23,14 +17,14 @@ add_custom_command(OUTPUT ${header} ${code}
     COMMAND ${CLIPBOARD_SCANNER} client-header ${xml} ${header}
     COMMAND ${CLIPBOARD_SCANNER} private-code ${xml} ${code}
     DEPENDS ${xml} VERBATIM)
-list(APPEND CLIPBOARD_PROTOCOL_SOURCES ${header} ${code})
 add_library(cutefish-clipboard-backend STATIC
-    clipboard.cpp clipboard.h waylandclipboard.cpp waylandclipboard.h
-    ${CLIPBOARD_PROTOCOL_SOURCES})
+    clipboard.cpp clipboard.h waylandclipboard.cpp waylandclipboard.h ${header} ${code})
+set_target_properties(cutefish-clipboard-backend PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 target_include_directories(cutefish-clipboard-backend PRIVATE ${CLIPBOARD_GENERATED_DIR})
-target_link_libraries(cutefish-clipboard-backend PUBLIC Qt6::Core Qt6::Gui
-    PRIVATE PkgConfig::ClipboardWayland Cutefish::Protocols)
+target_link_libraries(cutefish-clipboard-backend PUBLIC Cutefish::ToolkitBase
+    PRIVATE PkgConfig::ClipboardWayland)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_executable(clipboard-service-test-helper tests/service_helper.cpp)
+    set_target_properties(clipboard-service-test-helper PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_link_libraries(clipboard-service-test-helper PRIVATE cutefish-clipboard-backend)
 endif()

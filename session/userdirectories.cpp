@@ -3,41 +3,44 @@
 
 #include "userdirectories.h"
 
-#include <QDebug>
-#include <QDir>
-#include <QFile>
-#include <QSaveFile>
+#include <filesystem>
+#include <utility>
 
-void UserDirectories::ensure(const QString& home, const QString& configHome)
+#include "base/file.h"
+#include "logs.h"
+
+namespace fs = std::filesystem;
+
+void UserDirectories::ensure(const std::string& home, const std::string& configHome)
 {
-    const QString file = configHome + QStringLiteral("/user-dirs.dirs");
-    if (home.isEmpty() || configHome.isEmpty() || QFile::exists(file))
+    const std::string file = configHome + "/user-dirs.dirs";
+    std::error_code error;
+    if (home.empty() || configHome.empty() || fs::exists(file, error))
         return;
 
-    static const QList<QPair<QString, QString>> directories = {
-            {QStringLiteral("DESKTOP"), QStringLiteral("Desktop")},
-            {QStringLiteral("DOWNLOAD"), QStringLiteral("Downloads")},
-            {QStringLiteral("TEMPLATES"), QStringLiteral("Templates")},
-            {QStringLiteral("PUBLICSHARE"), QStringLiteral("Public")},
-            {QStringLiteral("DOCUMENTS"), QStringLiteral("Documents")},
-            {QStringLiteral("MUSIC"), QStringLiteral("Music")},
-            {QStringLiteral("PICTURES"), QStringLiteral("Pictures")},
-            {QStringLiteral("VIDEOS"), QStringLiteral("Videos")},
+    static const std::pair<const char*, const char*> directories[] = {
+            {"DESKTOP", "Desktop"},
+            {"DOWNLOAD", "Downloads"},
+            {"TEMPLATES", "Templates"},
+            {"PUBLICSHARE", "Public"},
+            {"DOCUMENTS", "Documents"},
+            {"MUSIC", "Music"},
+            {"PICTURES", "Pictures"},
+            {"VIDEOS", "Videos"},
     };
 
-    QByteArray contents;
-    const QDir homeDir(home);
+    std::string contents;
     for (const auto& [key, name] : directories) {
+        const std::string path = home + '/' + name;
         // A directory that cannot be made stays unset, so lookups fall back to home.
-        if (!homeDir.mkpath(name)) {
-            qWarning() << "Could not create" << homeDir.filePath(name);
+        fs::create_directories(path, error);
+        if (!fs::is_directory(path, error)) {
+            CF_WARNING(sessionLog()) << "Could not create" << path;
             continue;
         }
-        contents += QStringLiteral("XDG_%1_DIR=\"$HOME/%2\"\n").arg(key, name).toUtf8();
+        contents += std::string("XDG_") + key + "_DIR=\"$HOME/" + name + "\"\n";
     }
 
-    QSaveFile output(file);
-    if (!QDir().mkpath(configHome) || !output.open(QIODevice::WriteOnly)
-        || output.write(contents) != contents.size() || !output.commit())
-        qWarning() << "Could not write" << file;
+    if (!cutefish::base::file::writeAtomically(file, contents))
+        CF_WARNING(sessionLog()) << "Could not write" << file;
 }

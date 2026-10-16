@@ -1,113 +1,110 @@
 #include "gtksettings.h"
-#include "keyfile.h"
 
-#include <QDebug>
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QSaveFile>
-#include <QSettings>
-#include <QStandardPaths>
-#include <QUrl>
+#include <filesystem>
 
-static QString gtk3SettingsIniPath()
+#include "base/file.h"
+#include "base/paths.h"
+#include "base/settings.h"
+#include "base/strings.h"
+#include "base/url.h"
+#include "common/gsettings_keyfile.h"
+#include "log.h"
+
+using namespace cutefish::base;
+using namespace cutefish::base::strings;
+namespace gsettings = cutefish::core::gsettings;
+namespace fs = std::filesystem;
+
+static std::string gtk3SettingsIniPath()
 {
-    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-            + QLatin1String("/gtk-3.0/settings.ini");
+    return paths::configHome() + "/gtk-3.0/settings.ini";
 }
 
 void writeGtkSettings(const GtkSettings &gtk)
 {
-    const QString fontName = QString("%1 %2").arg(gtk.fontFamily).arg(gtk.fontPointSize);
+    const std::string fontName = gtk.fontFamily + ' ' + number(gtk.fontPointSize, 'g', -1);
     // No Cutefish GTK theme ships; Adwaita's dark variant is what gtk-theme can switch to.
-    const QString gtkTheme =
-            gtk.darkMode ? QStringLiteral("Adwaita-dark") : QStringLiteral("Adwaita");
-    const bool subpixel = gtk.fontAntialias && gtk.fontRgba != QLatin1String("none");
+    const std::string gtkTheme = gtk.darkMode ? "Adwaita-dark" : "Adwaita";
+    const bool subpixel = gtk.fontAntialias && gtk.fontRgba != "none";
 
     // Only GTK clients on Xwayland still read this, for every key the compositor's XSETTINGS
     // leaves out. On Wayland the keyfile below overrides every key the schema covers.
-    QSettings settings(gtk3SettingsIniPath(), QSettings::IniFormat);
-    settings.clear();
-    settings.beginGroup("Settings");
-    settings.setValue("gtk-font-name", fontName);
-    settings.setValue("gtk-xft-antialias", gtk.fontAntialias ? 1 : 0);
-    settings.setValue("gtk-xft-hinting", gtk.fontHintStyle != QLatin1String("hintnone") ? 1 : 0);
-    settings.setValue("gtk-xft-hintstyle", gtk.fontHintStyle);
-    settings.setValue("gtk-xft-rgba", subpixel ? gtk.fontRgba : QStringLiteral("none"));
-    settings.setValue("gtk-application-prefer-dark-theme", gtk.darkMode);
-    settings.setValue("gtk-icon-theme-name", gtk.iconTheme);
-    settings.setValue("gtk-cursor-theme-name", gtk.cursorTheme);
-    settings.setValue("gtk-cursor-theme-size", gtk.cursorSize);
-    settings.setValue("gtk-enable-animations", true);
-    settings.setValue("gtk-theme-name", gtkTheme);
-    settings.sync();
+    {
+        Settings settings(gtk3SettingsIniPath());
+        for (const std::string &key : settings.childKeys())
+            settings.remove(key);
+        for (const std::string &group : settings.childGroups())
+            settings.remove(group);
+        settings.setValue("Settings/gtk-font-name", fontName);
+        settings.setValue("Settings/gtk-xft-antialias", gtk.fontAntialias ? 1 : 0);
+        settings.setValue("Settings/gtk-xft-hinting", gtk.fontHintStyle != "hintnone" ? 1 : 0);
+        settings.setValue("Settings/gtk-xft-hintstyle", gtk.fontHintStyle);
+        settings.setValue("Settings/gtk-xft-rgba", subpixel ? gtk.fontRgba : std::string("none"));
+        settings.setValue("Settings/gtk-application-prefer-dark-theme", gtk.darkMode);
+        settings.setValue("Settings/gtk-icon-theme-name", gtk.iconTheme);
+        settings.setValue("Settings/gtk-cursor-theme-name", gtk.cursorTheme);
+        settings.setValue("Settings/gtk-cursor-theme-size", gtk.cursorSize);
+        settings.setValue("Settings/gtk-enable-animations", true);
+        settings.setValue("Settings/gtk-theme-name", gtkTheme);
+        settings.sync();
+    }
 
     // GTK on Wayland ignores settings.ini for keys the schema covers and picks up keyfile
     // changes through GLib's file monitor.
-    GSettingsKeyfile::writeGroup(QStringLiteral("org/gnome/desktop/interface"), {
-            {QStringLiteral("font-name"), fontName},
-            {QStringLiteral("font-antialiasing"),
-             !gtk.fontAntialias ? QStringLiteral("none")
-                     : subpixel ? QStringLiteral("rgba")
-                                : QStringLiteral("grayscale")},
+    gsettings::writeGroup("org/gnome/desktop/interface", {
+            {"font-name", fontName},
+            {"font-antialiasing",
+             std::string(!gtk.fontAntialias ? "none" : subpixel ? "rgba" : "grayscale")},
             // The schema's nicks are fontconfig's hintstyle constants without "hint".
-            {QStringLiteral("font-hinting"), gtk.fontHintStyle.mid(4)},
-            {QStringLiteral("font-rgba-order"), subpixel ? gtk.fontRgba : QStringLiteral("rgb")},
+            {"font-hinting", gtk.fontHintStyle.size() > 4 ? gtk.fontHintStyle.substr(4) : std::string()},
+            {"font-rgba-order", subpixel ? gtk.fontRgba : std::string("rgb")},
             // "automatic" makes GTK 4 ignore the three keys above.
-            {QStringLiteral("font-rendering"), QStringLiteral("manual")},
-            {QStringLiteral("gtk-theme"), gtkTheme},
-            {QStringLiteral("color-scheme"),
-             gtk.darkMode ? QStringLiteral("prefer-dark") : QStringLiteral("default")},
-            {QStringLiteral("icon-theme"), gtk.iconTheme},
-            {QStringLiteral("cursor-theme"), gtk.cursorTheme},
-            {QStringLiteral("cursor-size"), gtk.cursorSize},
-            {QStringLiteral("enable-animations"), false},
+            {"font-rendering", std::string("manual")},
+            {"gtk-theme", gtkTheme},
+            {"color-scheme", std::string(gtk.darkMode ? "prefer-dark" : "default")},
+            {"icon-theme", gtk.iconTheme},
+            {"cursor-theme", gtk.cursorTheme},
+            {"cursor-size", gtk.cursorSize},
+            {"enable-animations", false},
     });
-    GSettingsKeyfile::writeGroup(QStringLiteral("org/gnome/desktop/wm/preferences"), {
-            {QStringLiteral("button-layout"), QStringLiteral("menu:minimize,maximize,close")},
+    gsettings::writeGroup("org/gnome/desktop/wm/preferences", {
+            {"button-layout", std::string("menu:minimize,maximize,close")},
     });
 }
 
-static void ensureGtkCssImport(const QString &gtkDir)
+static void ensureGtkCssImport(const std::string &gtkDir)
 {
-    const QString importLine = QStringLiteral("@import url(\"%1\");")
-            .arg(QUrl::fromLocalFile(QStringLiteral(CUTEFISH_GTK_CSS_DIR "/%1.css").arg(gtkDir))
-                         .toString());
+    const std::string importLine =
+            "@import url(\"" + url::fromLocalFile(CUTEFISH_GTK_CSS_DIR "/" + gtkDir + ".css") + "\");";
 
-    QString path = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-            + QLatin1Char('/') + gtkDir + QLatin1String("/gtk.css");
+    std::string path = paths::configHome() + '/' + gtkDir + "/gtk.css";
     // Write through a symlinked gtk.css (dotfile managers) instead of replacing the link.
-    const QFileInfo info(path);
-    if (info.isSymLink() && info.exists())
-        path = info.canonicalFilePath();
+    std::error_code error;
+    if (fs::is_symlink(path, error) && fs::exists(path, error)) {
+        const fs::path target = fs::canonical(path, error);
+        if (!error)
+            path = target.string();
+    }
 
-    QStringList lines;
-    QFile in(path);
-    if (in.open(QIODevice::ReadOnly | QIODevice::Text))
-        lines = QString::fromUtf8(in.readAll()).split(QLatin1Char('\n'));
-    while (!lines.isEmpty() && lines.last().isEmpty())
-        lines.removeLast();
+    std::vector<std::string> lines;
+    if (const auto contents = file::read(path))
+        lines = split(*contents, '\n');
+    while (!lines.empty() && lines.back().empty())
+        lines.pop_back();
 
     // GTK drops an @import that follows any rule, so ours has to lead the file. Rewriting an
     // unchanged file would make every running GTK client reload its styles.
-    if (!lines.isEmpty() && lines.first() == importLine)
+    if (!lines.empty() && lines.front() == importLine)
         return;
-    lines.removeAll(importLine);
-    lines.prepend(importLine);
+    std::erase(lines, importLine);
+    lines.insert(lines.begin(), importLine);
 
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QSaveFile out(path);
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Cannot write" << path << out.errorString();
-        return;
-    }
-    out.write(lines.join(QLatin1Char('\n')).toUtf8());
-    out.write("\n");
-    out.commit();
+    if (!file::writeAtomically(path, join(lines, "\n") + "\n"))
+        CF_WARNING(services::log()) << "Cannot write" << path;
 }
 
 void ensureGtkCssImports()
 {
-    ensureGtkCssImport(QStringLiteral("gtk-3.0"));
-    ensureGtkCssImport(QStringLiteral("gtk-4.0"));
+    ensureGtkCssImport("gtk-3.0");
+    ensureGtkCssImport("gtk-4.0");
 }

@@ -1,79 +1,71 @@
 #include "proxyservice.h"
-#include "keyfile.h"
-#include "proxysettings.h"
 
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDBusMetaType>
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
+#include <filesystem>
 
-ProxyService::ProxyService(QObject *parent)
-    : QObject(parent)
+#include "common/gsettings_keyfile.h"
+#include "common/proxy_settings.h"
+
+using namespace std::chrono_literals;
+using namespace cutefish::base;
+namespace proxy = cutefish::core::proxy;
+
+ProxyService::ProxyService(dbus::Connection *session)
+    : m_session(session)
 {
-    qDBusRegisterMetaType<QMap<QString, QString>>();
-
-    // gsettings and QSaveFile both replace the file by rename, which drops a file watch.
+    // gsettings and atomic writers both replace the file by rename; the
+    // directory is what is watched.
     m_reloadTimer.setSingleShot(true);
-    m_reloadTimer.setInterval(100);
-    connect(&m_reloadTimer, &QTimer::timeout, this, &ProxyService::reload);
-    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &ProxyService::watch);
-    connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, &ProxyService::watch);
+    m_reloadTimer.setInterval(100ms);
+    m_reloadTimer.onTimeout = [this] {
+        reload();
+    };
 
-    const QString path = GSettingsKeyfile::path();
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    m_watcher.addPath(QFileInfo(path).absolutePath());
-    if (QFile::exists(path))
-        m_watcher.addPath(path);
+    const std::string path = cutefish::core::gsettings::path();
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
+    m_watch = FileWatch::file(path, [this] {
+        m_reloadTimer.start();
+    });
     reload();
 }
 
-void ProxyService::watch()
-{
-    const QString path = GSettingsKeyfile::path();
-    if (QFile::exists(path) && !m_watcher.files().contains(path))
-        m_watcher.addPath(path);
-    m_reloadTimer.start();
-}
+ProxyService::~ProxyService() = default;
 
 void ProxyService::reload()
 {
-    const QMap<QString, QString> variables = ProxyEnvironment::variables(ProxySettings::load());
+    std::map<std::string, std::string> variables =
+            proxy::variables(cutefish::core::ProxySettings::load());
     // The first pass always publishes: systemd keeps what an earlier login exported.
     if (m_environmentPublished && variables == m_environment)
         return;
     m_environmentPublished = true;
-    m_environment = variables;
+    m_environment = std::move(variables);
 
     publishEnvironment();
 }
 
 void ProxyService::publishEnvironment()
 {
-    QStringList unset;
-    QStringList assignments;
-    QMap<QString, QString> activation;
-    for (const QString &name : ProxyEnvironment::names()) {
-        const QString value = m_environment.value(name);
-        if (m_environment.contains(name))
-            assignments << name + QLatin1Char('=') + value;
+    if (!m_session)
+        return;
+
+    std::vector<std::string> unset;
+    std::vector<std::string> assignments;
+    std::map<std::string, std::string> activation;
+    for (const std::string &name : proxy::names()) {
+        const auto it = m_environment.find(name);
+        if (it != m_environment.end())
+            assignments.push_back(name + '=' + it->second);
         else
-            unset << name;
+            unset.push_back(name);
         // dbus-daemon cannot unset; an empty proxy variable means none to every reader.
-        activation.insert(name, value);
+        activation[name] = it != m_environment.end() ? it->second : std::string();
     }
 
-    QDBusMessage systemd = QDBusMessage::createMethodCall(
-            QStringLiteral("org.freedesktop.systemd1"), QStringLiteral("/org/freedesktop/systemd1"),
-            QStringLiteral("org.freedesktop.systemd1.Manager"),
-            QStringLiteral("UnsetAndSetEnvironment"));
-    systemd << unset << assignments;
-    QDBusConnection::sessionBus().send(systemd);
+    const dbus::Proxy systemd(m_session, "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                              "org.freedesktop.systemd1.Manager");
+    systemd.send("UnsetAndSetEnvironment", unset, assignments);
 
-    QDBusMessage dbus = QDBusMessage::createMethodCall(
-            QStringLiteral("org.freedesktop.DBus"), QStringLiteral("/org/freedesktop/DBus"),
-            QStringLiteral("org.freedesktop.DBus"), QStringLiteral("UpdateActivationEnvironment"));
-    dbus << QVariant::fromValue(activation);
-    QDBusConnection::sessionBus().send(dbus);
+    const dbus::Proxy bus(m_session, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus");
+    bus.send("UpdateActivationEnvironment", activation);
 }

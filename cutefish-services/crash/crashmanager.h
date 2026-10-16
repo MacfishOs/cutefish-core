@@ -5,32 +5,31 @@
 
 #include "coredump.h"
 
-#include <QHash>
-#include <QObject>
 #include <functional>
+#include <map>
+#include <memory>
+#include <string>
 
 class CoredumpJournal;
 class CrashDialog;
-class QQmlEngine;
 
 // Shows a dialog when an application the runtime started or a process the
 // session restarts dumps core. One dialog per application or process; a
 // repeat crash updates the open one.
-class CrashManager : public QObject
+class CrashManager
 {
-    Q_OBJECT
-
 public:
-    CrashManager(std::function<QQmlEngine *()> engine, std::function<QString()> fixedFont,
-                 QObject *parent = nullptr);
-    ~CrashManager() override;
+    explicit CrashManager(std::function<std::string()> fixedFont);
+    ~CrashManager();
+
+    CrashManager(const CrashManager &) = delete;
+    CrashManager &operator=(const CrashManager &) = delete;
 
 private:
     void onCoredump(const Coredump &dump);
-    CrashDialog *dialogFor(const QString &key, bool application, const QString &id);
+    CrashDialog *dialogFor(const std::string &key, bool application, const std::string &id);
 
-    std::function<QQmlEngine *()> m_engine;
-    std::function<QString()> m_fixedFont;
-    CoredumpJournal *m_journal;
-    QHash<QString, CrashDialog *> m_dialogs;
+    std::function<std::string()> m_fixedFont;
+    std::unique_ptr<CoredumpJournal> m_journal;
+    std::map<std::string, std::unique_ptr<CrashDialog>> m_dialogs;
 };

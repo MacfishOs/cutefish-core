@@ -3,85 +3,80 @@
 
 #include "batterywarning.h"
 #include "battery.h"
-#include "cutefishnotification.h"
 #include "power.h"
 
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
+#include <cmath>
+#include <format>
 
-static const QString displayDevice = QStringLiteral("/org/freedesktop/UPower/devices/DisplayDevice");
+using namespace cutefish::base;
 
-BatteryWarning::BatteryWarning(QObject *parent)
-    : QObject(parent)
-    , m_notification(new Cutefish::Notification(this))
-    , m_criticalActionKnown(false)
-    , m_fetchingAction(false)
-    , m_shownLevel(None)
+static const char displayDevice[] = "/org/freedesktop/UPower/devices/DisplayDevice";
+
+static int64_t integer(const dbus::Variant &value)
 {
-    m_notification->setDesktopEntry(QStringLiteral("cutefish-settings"));
-    m_notification->setIconName(QStringLiteral("battery-caution"));
+    if (const auto number = value.get<int64_t>())
+        return *number;
+    if (const auto number = value.get<double>())
+        return int64_t(*number);
+    return 0;
+}
+
+BatteryWarning::BatteryWarning(dbus::Connection *system, dbus::Connection *session)
+    : m_upower(system, UP_DBUS_SERVICE, UP_DBUS_PATH, UP_DBUS_INTERFACE)
+    , m_device(system, UP_DBUS_SERVICE, displayDevice, UP_DBUS_INTERFACE_DEVICE)
+    , m_notification(session)
+{
+    m_notification.setDesktopEntry("cutefish-settings");
+    m_notification.setIconName("battery-caution");
     // No notification server yet, as early in a session: the next battery change retries.
-    connect(m_notification, &Cutefish::Notification::failed, this, [this] {
+    m_failed = m_notification.failed.connect([this] {
         m_shownLevel = None;
     });
 
-    QDBusConnection::systemBus().connect(UP_DBUS_SERVICE, displayDevice,
-                                         QStringLiteral("org.freedesktop.DBus.Properties"),
-                                         QStringLiteral("PropertiesChanged"), this,
-                                         SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
+    if (!system)
+        return;
+
+    m_changed = m_device.onPropertiesChanged(
+            [this](const dbus::VariantMap &changed, const std::vector<std::string> &invalidated) {
+                onPropertiesChanged(changed, invalidated);
+            });
 
     fetchProperties();
 }
 
-void BatteryWarning::onPropertiesChanged(const QString &interface, const QVariantMap &changed,
-                                         const QStringList &invalidated)
-{
-    if (interface != QLatin1String(UP_DBUS_INTERFACE_DEVICE))
-        return;
+BatteryWarning::~BatteryWarning() = default;
 
-    if (!invalidated.isEmpty()) {
+void BatteryWarning::onPropertiesChanged(const dbus::VariantMap &changed,
+                                         const std::vector<std::string> &invalidated)
+{
+    if (!invalidated.empty()) {
         fetchProperties();
         return;
     }
 
-    m_properties.insert(changed);
+    for (const auto &[name, value] : changed)
+        m_properties[name] = value;
     update();
 }
 
 void BatteryWarning::fetchProperties()
 {
-    QDBusMessage message = QDBusMessage::createMethodCall(UP_DBUS_SERVICE, displayDevice,
-            QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("GetAll"));
-    message << QStringLiteral(UP_DBUS_INTERFACE_DEVICE);
-
-    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message), this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *watcher) {
-        watcher->deleteLater();
-
-        QDBusPendingReply<QVariantMap> reply = *watcher;
-        if (reply.isError())
+    m_propertiesCall = m_device.getAllAsync([this](const dbus::Reply &reply) {
+        const auto properties = reply.value<dbus::VariantMap>();
+        if (!properties)
             return;
 
-        m_properties = reply.value();
+        m_properties = *properties;
         update();
     });
 }
 
 void BatteryWarning::fetchCriticalAction()
 {
-    QDBusMessage message = QDBusMessage::createMethodCall(UP_DBUS_SERVICE, UP_DBUS_PATH,
-            UP_DBUS_INTERFACE, QStringLiteral("GetCriticalAction"));
-
     m_fetchingAction = true;
 
-    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message), this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *watcher) {
-        watcher->deleteLater();
-
-        QDBusPendingReply<QString> reply = *watcher;
-        m_criticalAction = reply.isValid() ? reply.value() : QString();
+    m_actionCall = m_upower.callAsync("GetCriticalAction", [this](const dbus::Reply &reply) {
+        m_criticalAction = reply.value<std::string>().value_or(std::string());
         m_criticalActionKnown = true;
         m_fetchingAction = false;
         update();
@@ -93,11 +88,13 @@ void BatteryWarning::update()
     if (m_fetchingAction)
         return;
 
-    const uint level = m_properties.value(QStringLiteral("WarningLevel")).toUInt();
+    const auto level = m_properties.find("WarningLevel");
+    const uint32_t warningLevel =
+            level == m_properties.end() ? 0 : level->second.get<uint32_t>().value_or(0);
 
-    if (level < Low) {
+    if (warningLevel < Low) {
         if (m_shownLevel != None)
-            m_notification->close();
+            m_notification.close();
 
         m_shownLevel = None;
         // logind may allow hibernation by the next discharge.
@@ -107,69 +104,71 @@ void BatteryWarning::update()
 
     // Each level is announced once per discharge; a dismissed warning stays dismissed,
     // and the next level after it is a banner of its own.
-    if (level <= m_shownLevel)
+    if (warningLevel <= m_shownLevel)
         return;
 
-    if (level >= Critical && !m_criticalActionKnown) {
+    if (warningLevel >= Critical && !m_criticalActionKnown) {
         fetchCriticalAction();
         return;
     }
 
-    notify(level);
+    notify(warningLevel);
 }
 
-void BatteryWarning::notify(uint level)
+void BatteryWarning::notify(uint32_t level)
 {
     if (level == Low)
-        m_notification->setSummary(tr("Low Battery"));
+        m_notification.setSummary("Low Battery");
     else if (level == Critical)
-        m_notification->setSummary(tr("Battery Critically Low"));
+        m_notification.setSummary("Battery Critically Low");
     else
-        m_notification->setSummary(tr("Battery Empty"));
+        m_notification.setSummary("Battery Empty");
 
-    m_notification->setBody(body(level));
-    m_notification->setUrgency(level == Low ? Cutefish::Notification::Normal
-                                            : Cutefish::Notification::Critical);
+    m_notification.setBody(body(level));
+    m_notification.setUrgency(level == Low ? Notification::Normal : Notification::Critical);
     m_shownLevel = level;
-    m_notification->show();
+    m_notification.show();
 }
 
-QString BatteryWarning::body(uint level) const
+std::string BatteryWarning::body(uint32_t level) const
 {
     if (level == Low) {
-        const int percent = qRound(m_properties.value(QStringLiteral("Percentage")).toDouble());
-        const qlonglong time = m_properties.value(QStringLiteral("TimeToEmpty")).toLongLong();
+        const auto percentage = m_properties.find("Percentage");
+        const auto timeToEmpty = m_properties.find("TimeToEmpty");
+        const int percent = percentage == m_properties.end()
+                ? 0
+                : int(std::lround(percentage->second.get<double>().value_or(0)));
+        const int64_t time = timeToEmpty == m_properties.end() ? 0 : integer(timeToEmpty->second);
 
         // UPower reports 0 until it trusts the discharge rate.
         if (time >= 60)
-            return tr("%1% of battery remaining (%2).").arg(percent).arg(Battery::formatDuration(time));
+            return std::format("{}% of battery remaining ({}).", percent, Battery::formatDuration(time));
 
-        return tr("%1% of battery remaining.").arg(percent);
+        return std::format("{}% of battery remaining.", percent);
     }
 
-    const bool powerOff = m_criticalAction == QLatin1String("PowerOff");
-    const bool hibernate = m_criticalAction == QLatin1String("Hibernate")
-            || m_criticalAction == QLatin1String("HybridSleep");
-    const bool suspend = m_criticalAction == QLatin1String("Suspend");
+    const bool powerOff = m_criticalAction == "PowerOff";
+    const bool hibernate = m_criticalAction == "Hibernate" || m_criticalAction == "HybridSleep";
+    const bool suspend = m_criticalAction == "Suspend";
 
     if (level == Critical) {
         if (powerOff)
-            return tr("Save your work and connect to power. The computer will shut down when the battery is nearly empty.");
+            return "Save your work and connect to power. The computer will shut down when the battery is nearly empty.";
         if (hibernate)
-            return tr("Connect to power. The computer will hibernate when the battery is nearly empty.");
+            return "Connect to power. The computer will hibernate when the battery is nearly empty.";
         if (suspend)
-            return tr("Save your work and connect to power. The computer will go to sleep when the battery is nearly empty.");
+            return "Save your work and connect to power. The computer will go to sleep when the battery is nearly empty.";
 
-        return tr("Connect to power soon.");
+        return "Connect to power soon.";
     }
 
     // UPower waits 20 seconds before the action and drops it once power returns.
     if (powerOff)
-        return tr("The computer is about to shut down. Connect to power to keep it running.");
+        return "The computer is about to shut down. Connect to power to keep it running.";
     if (hibernate)
-        return tr("The computer is about to hibernate. Connect to power to keep it running.");
+        return "The computer is about to hibernate. Connect to power to keep it running.";
     if (suspend)
-        return tr("The computer is about to go to sleep. Connect to power to keep it running.");
+        return "The computer is about to go to sleep. Connect to power to keep it running.";
 
-    return tr("Connect to power now.");
+    return "Connect to power now.";
 }

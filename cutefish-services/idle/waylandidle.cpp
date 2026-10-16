@@ -1,14 +1,21 @@
 #include "waylandidle.h"
 
-#include <QHash>
-#include <QSocketNotifier>
-#include <QTimer>
+#include <algorithm>
 #include <cerrno>
+#include <cstring>
+#include <map>
+#include <sys/epoll.h>
 #include <wayland-client.h>
+
+#include "base/event_loop.h"
+#include "base/timer.h"
 
 #include "ext-idle-notify-v1-client-protocol.h"
 
-class WaylandIdle::Private : public QObject
+using namespace std::chrono_literals;
+using namespace cutefish::base;
+
+class WaylandIdle::Private
 {
 public:
     struct Timeout {
@@ -20,29 +27,30 @@ public:
 
     explicit Private(WaylandIdle *owner)
         : q(owner)
+        , loop(*EventLoop::current())
     {
         retry.setSingleShot(true);
-        retry.setInterval(1000);
-        connect(&retry, &QTimer::timeout, this, [this] {
+        retry.setInterval(1000ms);
+        retry.onTimeout = [this] {
             start();
-        });
-        QTimer::singleShot(0, this, [this] {
-            start();
+        };
+        loop.post([this, alive = std::weak_ptr<bool>(alive)] {
+            if (alive.lock())
+                start();
         });
     }
 
-    ~Private() override
+    ~Private()
     {
         reset();
-        qDeleteAll(timeouts);
     }
 
     void reset()
     {
-        delete read;
-        delete write;
-        read = write = nullptr;
-        for (auto *timeout : timeouts) {
+        if (watch)
+            loop.unwatch(watch);
+        watch = 0;
+        for (auto &[id, timeout] : timeouts) {
             if (timeout->proxy)
                 ext_idle_notification_v1_destroy(timeout->proxy);
             timeout->proxy = nullptr;
@@ -67,15 +75,15 @@ public:
         if (failing)
             return;
         failing = true;
-        if (read)
-            read->setEnabled(false);
-        if (write)
-            write->setEnabled(false);
+        if (watch)
+            loop.setWatchEvents(watch, 0);
         // Protocol callbacks must finish before their listener data is freed.
-        QTimer::singleShot(0, this, [this] {
+        loop.post([this, alive = std::weak_ptr<bool>(alive)] {
+            if (!alive.lock())
+                return;
             reset();
             failing = false;
-            emit q->resumed();
+            q->resumed.emit();
             retry.start();
         });
     }
@@ -86,11 +94,11 @@ public:
             return;
         if (wl_display_flush(display) < 0) {
             if (errno == EAGAIN)
-                write->setEnabled(true);
+                loop.setWatchEvents(watch, EPOLLIN | EPOLLOUT);
             else
                 failed();
         } else {
-            write->setEnabled(false);
+            loop.setWatchEvents(watch, EPOLLIN);
         }
     }
 
@@ -103,51 +111,50 @@ public:
         static const ext_idle_notification_v1_listener listener = {
                 [](void *data, ext_idle_notification_v1 *) {
                     auto *timeout = static_cast<Timeout *>(data);
-                    emit timeout->owner->q->timeoutReached(timeout->id, timeout->milliseconds);
+                    timeout->owner->q->timeoutReached.emit(timeout->id, timeout->milliseconds);
                 },
                 [](void *data, ext_idle_notification_v1 *) {
                     auto *timeout = static_cast<Timeout *>(data);
-                    emit timeout->owner->q->resumed();
+                    timeout->owner->q->resumed.emit();
                 }};
         ext_idle_notification_v1_add_listener(timeout->proxy, &listener, timeout);
     }
 
     void start()
     {
-        const auto name = qgetenv("WAYLAND_DISPLAY");
-        display = wl_display_connect(name.isEmpty() ? "wayland-0" : name.constData());
+        // WAYLAND_DISPLAY, else wayland-0.
+        display = wl_display_connect(nullptr);
         if (!display) {
             retry.start();
             return;
         }
-        read = new QSocketNotifier(wl_display_get_fd(display), QSocketNotifier::Read, this);
-        write = new QSocketNotifier(wl_display_get_fd(display), QSocketNotifier::Write, this);
-        write->setEnabled(false);
-        connect(read, &QSocketNotifier::activated, this, [this] {
+        watch = loop.watch(wl_display_get_fd(display), EPOLLIN, [this](uint32_t events) {
+            if (events & EPOLLOUT) {
+                flush();
+                if (!(events & (EPOLLIN | EPOLLHUP | EPOLLERR)))
+                    return;
+            }
             if (wl_display_dispatch(display) < 0)
                 failed();
             else
                 flush();
-        });
-        connect(write, &QSocketNotifier::activated, this, [this] {
-            flush();
         });
         registry = wl_display_get_registry(display);
         static const wl_registry_listener listener = {
                 [](void *data, wl_registry *registry, uint32_t name, const char *interface,
                    uint32_t) {
                     auto *self = static_cast<Private *>(data);
-                    if (QByteArray(interface) == "wl_seat" && !self->seat) {
+                    if (std::strcmp(interface, "wl_seat") == 0 && !self->seat) {
                         self->seatName = name;
                         self->seat = static_cast<wl_seat *>(
                                 wl_registry_bind(registry, name, &wl_seat_interface, 1));
-                    } else if (QByteArray(interface) == "ext_idle_notifier_v1" && !self->manager) {
+                    } else if (std::strcmp(interface, "ext_idle_notifier_v1") == 0 && !self->manager) {
                         self->managerName = name;
                         self->manager = static_cast<ext_idle_notifier_v1 *>(wl_registry_bind(
                                 registry, name, &ext_idle_notifier_v1_interface, 1));
                     }
-                    for (auto *timeout : self->timeouts)
-                        self->bindTimeout(timeout);
+                    for (auto &[id, timeout] : self->timeouts)
+                        self->bindTimeout(timeout.get());
                 },
                 [](void *data, wl_registry *, uint32_t name) {
                     auto *self = static_cast<Private *>(data);
@@ -159,8 +166,9 @@ public:
     }
 
     WaylandIdle *q;
-    QTimer retry;
-    QHash<int, Timeout *> timeouts;
+    EventLoop &loop;
+    Timer retry;
+    std::map<int, std::unique_ptr<Timeout>> timeouts;
     int nextId = 0;
     wl_display *display = nullptr;
     wl_registry *registry = nullptr;
@@ -168,14 +176,13 @@ public:
     ext_idle_notifier_v1 *manager = nullptr;
     uint32_t seatName = 0;
     uint32_t managerName = 0;
-    QSocketNotifier *read = nullptr;
-    QSocketNotifier *write = nullptr;
+    int watch = 0;
     bool failing = false;
+    std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 };
 
-WaylandIdle::WaylandIdle(QObject *parent)
-    : QObject(parent)
-    , d(std::make_unique<Private>(this))
+WaylandIdle::WaylandIdle()
+    : d(std::make_unique<Private>(this))
 {
 }
 
@@ -184,20 +191,21 @@ WaylandIdle::~WaylandIdle() = default;
 int WaylandIdle::addTimeout(int milliseconds)
 {
     const int id = ++d->nextId;
-    auto *timeout = new Private::Timeout {d.get(), id, qMax(0, milliseconds)};
-    d->timeouts.insert(id, timeout);
-    d->bindTimeout(timeout);
+    auto timeout = std::make_unique<Private::Timeout>(Private::Timeout {d.get(), id, std::max(0, milliseconds)});
+    Private::Timeout *entry = timeout.get();
+    d->timeouts.emplace(id, std::move(timeout));
+    d->bindTimeout(entry);
     d->flush();
     return id;
 }
 
 void WaylandIdle::removeTimeout(int id)
 {
-    auto *timeout = d->timeouts.take(id);
-    if (!timeout)
+    auto it = d->timeouts.find(id);
+    if (it == d->timeouts.end())
         return;
-    if (timeout->proxy)
-        ext_idle_notification_v1_destroy(timeout->proxy);
-    delete timeout;
+    if (it->second->proxy)
+        ext_idle_notification_v1_destroy(it->second->proxy);
+    d->timeouts.erase(it);
     d->flush();
 }

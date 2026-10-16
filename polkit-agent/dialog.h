@@ -4,61 +4,73 @@
 #ifndef DIALOG_H
 #define DIALOG_H
 
-#include <QObject>
-#include <QString>
-#include <QQuickView>
+#include <functional>
+#include <memory>
+#include <string>
 
-class Dialog : public QObject
+namespace cutefish::ui {
+class DialogButton;
+class Label;
+class TextField;
+class Window;
+}
+
+// The password dialog of one authentication request.
+class Dialog
 {
-    Q_OBJECT
-
 public:
-    explicit Dialog(const QString &message, const QString &identity);
+    Dialog(const std::string &message, const std::string &identity);
     ~Dialog();
 
-    Q_INVOKABLE void setConfirmationResult(const QString &password = QString());
-    Q_INVOKABLE void rejected();
-    Q_INVOKABLE void show();
+    Dialog(const Dialog &) = delete;
+    Dialog &operator=(const Dialog &) = delete;
 
-    Q_INVOKABLE void authenticationFailure();
+    void show();
+    void hide();
 
-    void setRequest(const QString &prompt, bool echo);
-    void setNotice(const QString &text, bool error);
+    // PAM rejected the answer: the field empties for another try.
+    void authenticationFailure();
 
-    Q_PROPERTY(QString message READ message CONSTANT)
-    Q_PROPERTY(QString identity READ identity CONSTANT)
-    Q_PROPERTY(QString prompt READ prompt NOTIFY requestChanged)
-    Q_PROPERTY(bool echo READ echo NOTIFY requestChanged)
-    Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
-    Q_PROPERTY(bool noticeIsError READ noticeIsError NOTIFY noticeChanged)
+    // PAM asks; an empty prompt shows the dialog's own placeholder.
+    void setRequest(const std::string &prompt, bool echo);
+    void setNotice(const std::string &text, bool error);
 
-    QString message() { return m_message; }
-    QString identity() { return m_identity; }
-    QString password() { return m_password; }
-    QString prompt() { return m_prompt; }
-    bool echo() { return m_echo; }
-    QString notice() { return m_notice; }
-    bool noticeIsError() { return m_noticeIsError; }
+    const std::string &message() const { return m_message; }
+    const std::string &identity() const { return m_identity; }
+    const std::string &password() const { return m_password; }
+    const std::string &prompt() const { return m_prompt; }
+    bool echo() const { return m_echo; }
+    const std::string &notice() const { return m_notice; }
+    bool noticeIsError() const { return m_noticeIsError; }
 
-signals:
-    void failure();
-    void requested();
-    void requestChanged();
-    void noticeChanged();
+    cutefish::ui::Window *window() const { return m_window.get(); }
 
-    void cancel();
-    void accepted();
+    // Authenticate or Return with a password typed.
+    std::function<void()> onAccepted;
+    // Cancel, Escape or the compositor closed it.
+    std::function<void()> onCancel;
 
 private:
-    QString m_message;
-    QString m_identity;
-    QString m_password;
-    QString m_prompt;
-    bool m_echo;
-    QString m_notice;
-    bool m_noticeIsError;
+    class Content;
 
-    QQuickView *m_view;
+    // An empty response would still count as an attempt, and pass on an
+    // account without a password.
+    void submit();
+    void ready();
+    void updateNotice();
+
+    std::string m_message;
+    std::string m_identity;
+    std::string m_password;
+    std::string m_prompt;
+    bool m_echo = false;
+    std::string m_notice;
+    bool m_noticeIsError = false;
+
+    std::unique_ptr<cutefish::ui::Window> m_window;
+    cutefish::ui::TextField *m_passwordInput = nullptr;
+    cutefish::ui::Label *m_noticeLabel = nullptr;
+    cutefish::ui::DialogButton *m_doneButton = nullptr;
 };
 
 #endif // DIALOG_H

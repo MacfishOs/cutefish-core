@@ -5,23 +5,29 @@
 #ifndef DIMDISPLAYACTION_H
 #define DIMDISPLAYACTION_H
 
+#include <cstdint>
+#include <string>
 #include <tuple>
-
-#include <QDBusUnixFileDescriptor>
-#include <QElapsedTimer>
-#include <QTimer>
+#include <vector>
 
 #include "action.h"
-#include "displayclient.h"
+#include "base/dbus.h"
+#include "base/elapsed_timer.h"
+#include "base/signal.h"
+#include "base/timer.h"
+#include "display/displayclient.h"
 
 class BrightnessManager;
 
 class DimDisplayAction : public Action
 {
-    Q_OBJECT
-
 public:
-    explicit DimDisplayAction(BrightnessManager *brightness, QObject *parent = nullptr);
+    // The screen saver on `session`, logind on `system`; `displayService`
+    // names the compositor's display service, which tests run themselves.
+    DimDisplayAction(IdleManager *idle, BrightnessManager *brightness,
+                     cutefish::base::dbus::Connection *session, cutefish::base::dbus::Connection *system,
+                     const std::string &displayService = "com.cutefish.DisplayConfig");
+    ~DimDisplayAction() override;
 
     void onWakeupFromIdle() override;
     void onIdleTimeout(int msec) override;
@@ -30,16 +36,14 @@ public:
     void handleLidClosed();
     void handleLidOpened();
 
-private Q_SLOTS:
+private:
     void onPrepareForSleep(bool sleeping);
     void onScreenSaverActiveChanged(bool active);
-    void onLogindPropertiesChanged(const QString &interfaceName,
-                                   const QVariantMap &changedProperties,
-                                   const QStringList &invalidatedProperties);
+    void onLogindPropertiesChanged(const cutefish::base::dbus::VariantMap &changedProperties,
+                                   const std::vector<std::string> &invalidatedProperties);
     void onSuspendTimerTimeout();
     void onDisplayStateChanged();
 
-private:
     bool lockSession();
     void trySuspend();
     void turnDisplayOff();
@@ -53,10 +57,18 @@ private:
     bool hasNativeDisplayPower() const;
     bool setDisplayPower(bool on);
     void requestDockedLid(bool closed);
-    void finishDockedLid(bool closed, bool succeeded, cutefish::display::ipc::ErrorCode error);
+    void finishDockedLid(bool closed, bool succeeded, cutefish::display::ErrorCode error);
+    int screenBrightness() const;
+    void setScreenBrightness(int value);
 
     BrightnessManager *m_brightness;
-    DisplayClient m_display;
+    cutefish::base::dbus::Proxy m_screenSaver;
+    cutefish::base::dbus::Proxy m_logind;
+    cutefish::display::DisplayClient m_display;
+    std::vector<cutefish::base::dbus::Match> m_matches;
+    cutefish::base::Subscription m_displayStateChanged;
+    cutefish::base::dbus::PendingCall m_suspendCall;
+    cutefish::base::dbus::PendingCall m_inhibitCall;
     int m_dimOnIdleTime = 0;
     int m_suspendDelay = 900;
     int m_oldScreenBrightness = -1;
@@ -65,7 +77,7 @@ private:
     bool m_displayOff = false;
     bool m_suspendRequested = false;
     bool m_suspendDue = false;
-    quint64 m_suspendSerial = 0;
+    uint64_t m_suspendSerial = 0;
     bool m_lidClosed = false;
     bool m_lidPresent = false;
     bool m_lidDisplayOff = false;
@@ -75,20 +87,21 @@ private:
     // The user has been away for the locked timeout since their last input.
     bool m_lockedIdle = false;
     int m_lockedIdleTimeout = -1;
-    QList<int> m_policyIdleTimeouts;
+    std::vector<int> m_policyIdleTimeouts;
     bool m_dockedLidPending = false;
     bool m_dockedLidActive = false;
     bool m_dockedLidRecheck = false;
     int m_dockedLidRetries = 0;
-    quint64 m_dockedLidSerial = 0;
-    QTimer m_dockedLidRetryTimer;
-    std::tuple<QString, qulonglong, qulonglong> m_displayTopology;
+    uint64_t m_dockedLidSerial = 0;
+    cutefish::base::Timer m_dockedLidRetryTimer;
+    std::tuple<std::string, uint64_t, uint64_t> m_displayTopology;
 
-    QDBusUnixFileDescriptor m_lidSwitchInhibitor;
+    cutefish::base::dbus::UnixFd m_lidSwitchInhibitor;
     bool m_lidSwitchInhibiting = false;
 
-    QTimer m_suspendTimer;
-    QElapsedTimer m_displayOffTimer;
+    cutefish::base::Timer m_suspendTimer;
+    cutefish::base::Timer m_wakeTimer;
+    cutefish::base::ElapsedTimer m_displayOffTimer;
 };
 
 #endif // DIMDISPLAYACTION_H
