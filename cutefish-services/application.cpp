@@ -60,12 +60,17 @@ Application::Application()
     });
 
     // Register all service objects before publishing the well-known name.
-    m_themeManager->publish();
-    m_brightnessManager->publish();
-    m_language->publish();
-    m_powerManager->publish();
-    m_nightLight->publish(m_session);
-    m_permissionManager->publish();
+    // sd-bus rejects a whole object over one malformed member, silently.
+    const auto published = [](bool ok, const char *object) {
+        if (!ok)
+            CF_WARNING(services::log()) << "Cannot publish" << object;
+    };
+    published(m_themeManager->publish(), "Appearance");
+    published(m_brightnessManager->publish(), "Brightness");
+    published(m_language->publish(), "Language");
+    published(m_powerManager->publish(), "Power");
+    published(m_nightLight->publish(m_session), "NightLight");
+    published(m_permissionManager->publish(), "Permissions");
 
     if (!m_session || !m_session->requestName("com.cutefish.Services"))
         CF_WARNING(services::log()) << "Cannot own com.cutefish.Services";
