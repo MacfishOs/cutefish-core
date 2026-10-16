@@ -13,13 +13,13 @@ ShellProcess::ShellProcess(QObject* parent)
 {
     setProcessChannelMode(QProcess::ForwardedChannels);
     connect(this, &QProcess::started, this, [this] {
-        qInfo() << "Session started cutefish-shell, PID" << processId();
+        qInfo() << "Session started" << program() << "PID" << processId();
     });
     connect(this, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
-        qWarning() << "cutefish-shell:" << errorString();
+        qWarning() << program() << errorString();
     });
-    connect(this, &QProcess::finished, this, [](int code, QProcess::ExitStatus status) {
-        qInfo() << "cutefish-shell exited:" << code << status;
+    connect(this, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+        qInfo() << program() << "exited:" << code << status;
     });
 }
 
@@ -36,14 +36,15 @@ void ShellProcess::startForSession(const QString& program, const QString& socket
 
     auto environment = QProcessEnvironment::systemEnvironment();
     environment.insert(QStringLiteral("WAYLAND_DISPLAY"), socket);
-    environment.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("wayland"));
+    environment.remove(QStringLiteral("WAYLAND_SOCKET"));
 
+    QStringList arguments {QStringLiteral("--daemon")};
     int shellFd = -1;
     if (connection)
         shellFd = connection->createShellConnection();
 
     if (shellFd >= 0) {
-        environment.insert(QStringLiteral("WAYLAND_SOCKET"), QString::number(shellFd));
+        arguments << QStringLiteral("--desktop-socket") << QString::number(shellFd);
         // The fd is close-on-exec here so it cannot leak into anything else the
         // session starts; the child clears the flag on its own copy just before
         // exec, which is the only process that may have it.
@@ -51,15 +52,14 @@ void ShellProcess::startForSession(const QString& program, const QString& socket
             fcntl(shellFd, F_SETFD, 0);
         });
     } else {
-        environment.remove(QStringLiteral("WAYLAND_SOCKET"));
         setChildProcessModifier({});
-        qWarning() << "Starting cutefish-shell without a privileged connection; "
-                      "the private shell protocols will be unavailable";
+        qWarning() << "Starting" << program << "without a privileged connection; "
+                      "there will be no desktop";
     }
 
     setProcessEnvironment(environment);
     setProgram(program);
-    setArguments({});
+    setArguments(arguments);
     start();
     waitForStarted(5000);
 

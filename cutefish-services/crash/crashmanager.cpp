@@ -12,7 +12,6 @@
 
 // What cutefish-session starts and restarts; cutefish-services cannot report itself.
 static const QLatin1String s_sessionPrograms[] = {
-        QLatin1String("cutefish-shell"),
         QLatin1String("cutefish-appruntime"),
         QLatin1String("cutefish-filemanager"),
 };
@@ -97,8 +96,6 @@ CrashDialog *CrashManager::dialogFor(const QString &key, bool application, const
             name = data.name;
         if (!data.icon.isEmpty())
             icon = data.icon;
-    } else if (id == QLatin1String("cutefish-shell")) {
-        name = tr("Desktop Shell");
     } else if (id == QLatin1String("cutefish-appruntime")) {
         name = tr("Application Runtime");
     }

@@ -15,7 +15,7 @@
 
 static QString controlSocketPath()
 {
-    return QStringLiteral("%1/cutefish-shell-lifecycle-test.control")
+    return QStringLiteral("%1/cutefish-session-lifecycle-test.control")
         .arg(QString::fromLocal8Bit(qgetenv("XDG_RUNTIME_DIR").isEmpty()
                                         ? QByteArray("/tmp")
                                         : qgetenv("XDG_RUNTIME_DIR")));
@@ -135,7 +135,7 @@ private slots:
         process.stop();
 
         QSignalSpy failed(&process, &QProcess::errorOccurred);
-        process.startForSession("/does-not-exist/cutefish-shell", "shell-test-socket", nullptr);
+        process.startForSession("/does-not-exist/cutefish-filemanager", "shell-test-socket", nullptr);
         QTRY_COMPARE(failed.count(), 1);
         QCOMPARE(process.error(), QProcess::FailedToStart);
     }
@@ -168,9 +168,9 @@ private slots:
         ::close(compositorEnd);
     }
 
-    // The shell is started with a usable WAYLAND_SOCKET and the public
-    // WAYLAND_DISPLAY, and neither the descriptor nor the variable reaches
-    // anything the shell itself launches.
+    // The daemon is started with a usable --desktop-socket descriptor and the
+    // public WAYLAND_DISPLAY, and neither the descriptor nor WAYLAND_SOCKET
+    // reaches anything it launches.
     void thePrivilegedConnectionDoesNotLeakToChildren()
     {
         FakeCompositor compositor;
@@ -195,28 +195,30 @@ private slots:
     }
 };
 
-// Runs as the shell: verifies its own privileged environment, then starts a
-// grandchild the way ApplicationRuntime starts an application and verifies that
-// nothing privileged came along.
+// Runs as the file manager daemon: verifies its own privileged command line,
+// then starts a grandchild the way ApplicationRuntime starts an application
+// and verifies that nothing privileged came along.
 static int runPrivilegedChild(QCoreApplication& app)
 {
     if (qgetenv("WAYLAND_DISPLAY") != "shell-test-socket")
         return 3;
-    if (!qEnvironmentVariableIsSet("WAYLAND_SOCKET"))
+    if (qEnvironmentVariableIsSet("WAYLAND_SOCKET"))
         return 4;
 
+    const QStringList arguments = app.arguments().mid(1);
+    if (arguments.size() != 3 || arguments.at(0) != "--daemon" || arguments.at(1) != "--desktop-socket")
+        return 5;
     bool valid = false;
-    const int fd = qEnvironmentVariable("WAYLAND_SOCKET").toInt(&valid);
+    const int fd = arguments.at(2).toInt(&valid);
     if (!valid || fd < 0)
         return 5;
     // The descriptor really was inherited and really is a socket.
     if (fcntl(fd, F_GETFD) < 0)
         return 6;
 
-    // What the shell does once Qt Wayland has taken the connection over.
+    // What the daemon does once its trusted connection has the descriptor.
     if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)
         return 7;
-    unsetenv("WAYLAND_SOCKET");
 
     QProcess grandchild;
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
@@ -229,7 +231,6 @@ static int runPrivilegedChild(QCoreApplication& app)
     if (!grandchild.waitForFinished(10000))
         return 8;
 
-    Q_UNUSED(app)
     return grandchild.exitCode();
 }
 
@@ -261,10 +262,10 @@ int main(int argc, char** argv)
         return runPrivilegedChild(app);
 
     if (!mode.isEmpty()) {
-        if (qgetenv("WAYLAND_DISPLAY") != "shell-test-socket" ||
-            qgetenv("QT_QPA_PLATFORM") != "wayland" || qgetenv("DISPLAY") != ":99" ||
+        // Without a connection: the daemon alone, no descriptor.
+        if (qgetenv("WAYLAND_DISPLAY") != "shell-test-socket" || qgetenv("DISPLAY") != ":99" ||
             qgetenv("XAUTHORITY") != "/test-authority" ||
-            qEnvironmentVariableIsSet("WAYLAND_SOCKET"))
+            qEnvironmentVariableIsSet("WAYLAND_SOCKET") || app.arguments().mid(1) != QStringList {"--daemon"})
             return 2;
         if (mode != "hang")
             QTimer::singleShot(50, &app, &QCoreApplication::quit);
@@ -274,7 +275,6 @@ int main(int argc, char** argv)
     qputenv("DISPLAY", ":99");
     qputenv("XAUTHORITY", "/test-authority");
     qputenv("WAYLAND_SOCKET", "999");
-    qputenv("QT_QPA_PLATFORM", "xcb");
     ShellLifecycleTest test;
     return QTest::qExec(&test, argc, argv);
 }

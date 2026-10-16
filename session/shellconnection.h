@@ -10,7 +10,7 @@
  * creates a Wayland socketpair, sends one end to the compositor over
  * SCM_RIGHTS - the compositor turns it into a wl_client and treats that client,
  * and only that client, as the trusted shell - and hands the other end to the
- * new cutefish-shell process as WAYLAND_SOCKET.
+ * new file manager daemon as `--desktop-socket <fd>`.
  *
  * The channel is held open for the life of the session so a shell restart needs
  * no compositor restart.

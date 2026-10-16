@@ -23,7 +23,7 @@ make
 sudo make install
 ```
 
-Install `cutefish-compositor` and `cutefish-shell` as well, then select
+Install `cutefish-compositor` and `cutefish-filemanager` as well, then select
 `Cutefish (Wayland)` in the display manager.
 
 ## License

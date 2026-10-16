@@ -35,7 +35,7 @@ ProcessManager::ProcessManager(QObject *parent)
     , m_compositorProcess(new CompositorProcess(this))
     , m_shellConnection(new ShellConnection(this))
     , m_shellProcess(new ShellProcess(this))
-    , m_shellRestart(new RestartPolicy(QStringLiteral("cutefish-shell"), [this] { startShell(); },
+    , m_shellRestart(new RestartPolicy(QStringLiteral("cutefish-filemanager"), [this] { startShell(); },
                                        this))
 {
     connect(m_shellProcess, &QProcess::finished, this, &ProcessManager::onShellFinished);
@@ -169,9 +169,7 @@ void ProcessManager::startShell()
         return;
 
     m_shellRestart->started();
-    m_shellProcess->startForSession(qEnvironmentVariable("CUTEFISH_SHELL_BINARY",
-                                                         QStringLiteral("/usr/bin/cutefish-shell")),
-                                    m_waylandSocket,
+    m_shellProcess->startForSession(QStringLiteral("cutefish-filemanager"), m_waylandSocket,
                                     m_shellConnection->isConnected() ? m_shellConnection : nullptr);
 }
 
@@ -180,9 +178,9 @@ void ProcessManager::onShellFinished(int code, QProcess::ExitStatus status)
     if (m_loggingOut || !m_desktopStarted)
         return;
 
-    // The compositor and every application it is showing carry on; only the
-    // shell surfaces disappear, and the compositor releases the work area it
-    // had reserved for them. A new connection repopulates the dock.
+    // The compositor and every application it is showing carry on, the
+    // wallpaper included; only the desktop's icons disappear, and a new
+    // daemon on a new trusted connection brings them back.
     m_shellRestart->exited(code, status);
 }
 
@@ -342,14 +340,13 @@ void ProcessManager::startDesktopProcess()
         return;
     m_desktopStarted = true;
 
-    // Before the shell and file manager, which read the directories once.
+    // Before the file manager, which reads the directories once.
     UserDirectories::ensure(QDir::homePath(),
                             QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
-    startShell();
-
     // Resident, so every file manager window and dialog of the session, the
-    // dock's included, opens from one warm process.
-    startCoreProcess(QStringLiteral("cutefish-filemanager"), {QStringLiteral("--daemon")});
+    // dock's included, opens from one warm process; it draws the desktop on
+    // the trusted connection.
+    startShell();
 
     // For CutefishOS. An ordinary application, so the runtime starts it.
     if (QFile("/usr/bin/cutefish-welcome").exists()
@@ -437,7 +434,7 @@ void ProcessManager::loadAutoStartProcess()
             continue;
 
         const auto executable = QFileInfo(command.first()).fileName();
-        if (QStringList {"cutefish-services", "cutefish-appruntime", "cutefish-shell",
+        if (QStringList {"cutefish-services", "cutefish-appruntime", "cutefish-filemanager",
                          "cutefish-compositor", "xdg-user-dirs-update"}
                     .contains(executable))
             continue;
