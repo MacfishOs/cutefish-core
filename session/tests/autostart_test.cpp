@@ -68,3 +68,10 @@ TEST(Autostart, tryExec)
     entry(root.path(), "path", "Exec=path\nTryExec=sh\n");
     EXPECT_TRUE(contains(autostartEntries({root.path()}, {"Cutefish"}), "path"));
 }
+
+TEST(Autostart, sessionPrograms)
+{
+    EXPECT_TRUE(isStartedBySession("cutefish-polkit-agent"));
+    EXPECT_TRUE(isStartedBySession("cutefish-services"));
+    EXPECT_FALSE(isStartedBySession("cutefish-calendar-reminders"));
+}

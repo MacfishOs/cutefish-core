@@ -399,6 +399,9 @@ void ProcessManager::startDesktopProcess()
     // dock's included, opens from one warm process; it draws the desktop on
     // the trusted connection.
     startShell();
+    // Without it every administrator prompt fails, so it is restarted as the
+    // core processes are.
+    startCoreProcess("cutefish-polkit-agent");
 
     // Auto start
     m_autostartTimer.start(100ms);
@@ -478,10 +481,7 @@ void ProcessManager::loadAutoStartProcess()
         if (command.empty())
             continue;
 
-        const std::string executable = std::filesystem::path(command.front()).filename().string();
-        static const char *const skipped[] = {"cutefish-services", "cutefish-appruntime", "cutefish-filemanager",
-                                              "cutefish-compositor", "xdg-user-dirs-update"};
-        if (std::find(std::begin(skipped), std::end(skipped), executable) != std::end(skipped))
+        if (isStartedBySession(std::filesystem::path(command.front()).filename().string()))
             continue;
 
         runtime::launchCommand(command);

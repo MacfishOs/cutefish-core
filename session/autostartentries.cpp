@@ -35,6 +35,13 @@ static bool isExecutableFile(const std::string& path)
     return fs::is_regular_file(path, error) && ::access(path.c_str(), X_OK) == 0;
 }
 
+bool isStartedBySession(const std::string& executable)
+{
+    static const char* const programs[] = {"cutefish-services", "cutefish-appruntime", "cutefish-filemanager",
+                                           "cutefish-compositor", "cutefish-polkit-agent", "xdg-user-dirs-update"};
+    return std::find(std::begin(programs), std::end(programs), executable) != std::end(programs);
+}
+
 std::vector<std::string> autostartEntries(const std::vector<std::string>& directories,
                                           const std::vector<std::string>& desktops)
 {

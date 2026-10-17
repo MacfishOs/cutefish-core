@@ -20,6 +20,7 @@ using namespace cutefish::base::strings;
 static const char *const s_sessionPrograms[] = {
         "cutefish-appruntime",
         "cutefish-filemanager",
+        "cutefish-polkit-agent",
 };
 
 static bool isSessionProgram(const std::string &program)

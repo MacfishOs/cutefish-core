@@ -17,9 +17,3 @@ install(TARGETS cutefish-polkit-agent
     DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT Runtime
 )
-
-install(FILES
-cutefish-polkit-agent.desktop
-    DESTINATION "${CMAKE_INSTALL_FULL_SYSCONFDIR}/xdg/autostart"
-    COMPONENT Runtime
-)
