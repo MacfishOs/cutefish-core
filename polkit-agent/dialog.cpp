@@ -70,8 +70,6 @@ Dialog::~Dialog() = default;
 
 void Dialog::show()
 {
-    const Theme &theme = Theme::current();
-
     m_window = std::make_unique<Window>();
     m_window->setTitle("Authentication Required");
     m_window->setSkipTaskbar(true);
@@ -101,7 +99,7 @@ void Dialog::show()
     message->setFontSize(14);
     message->setWrap(true);
     message->setFixedLineHeight(20);
-    message->setColor(theme.disabledText);
+    message->setColor(ColorId::DisabledText);
 
     auto *identity = content->addChild<TextField>(m_identity);
     identity->setEnabled(false);
@@ -215,5 +213,5 @@ void Dialog::updateNotice()
         return;
     m_noticeLabel->setText(m_notice);
     m_noticeLabel->setVisible(!m_notice.empty());
-    m_noticeLabel->setColor(m_noticeIsError ? accent::red : Theme::current().disabledText);
+    m_noticeLabel->setColor(m_noticeIsError ? ColorRecipe(accent::red) : ColorRecipe(ColorId::DisabledText));
 }

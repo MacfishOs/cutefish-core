@@ -66,13 +66,13 @@ namespace {
 class RowBackground final : public View
 {
 public:
-    std::optional<Color> color;
+    std::optional<ColorRecipe> color;
 
 protected:
     void paint(Painter &painter) override
     {
         if (color)
-            painter.drawSmoothRectangle(localRect(), Theme::current().mediumRadius, *color);
+            painter.drawSmoothRectangle(localRect(), Theme::current().mediumRadius, color->resolve());
     }
 };
 
@@ -160,13 +160,12 @@ protected:
 private:
     void update()
     {
-        const Theme &theme = Theme::current();
-        m_background->color = m_selected ? std::optional<Color>(theme.highlight)
-                : m_hovered               ? std::optional<Color>(theme.text.withAlpha(0.1))
+        m_background->color = m_selected ? std::optional<ColorRecipe>(ColorId::Highlight)
+                : m_hovered               ? std::optional<ColorRecipe>(withAlpha(ColorId::Text, 0.1))
                                           : std::nullopt;
         m_background->requestPaint();
-        m_label->setColor(m_selected ? theme.highlightedText : theme.text);
-        m_detail->setColor(m_selected ? theme.highlightedText : theme.disabledText);
+        m_label->setColor(m_selected ? ColorId::HighlightedText : ColorId::Text);
+        m_detail->setColor(m_selected ? ColorId::HighlightedText : ColorId::DisabledText);
     }
 
     RowBackground *m_background;
@@ -187,7 +186,7 @@ public:
         : m_label(addChild<Label>(text))
     {
         m_label->setFontSize(11);
-        m_label->setColor(Theme::current().disabledText);
+        m_label->setColor(ColorId::DisabledText);
         m_label->setVerticallyCentered(true);
     }
 
@@ -534,14 +533,12 @@ void PermissionPrompt::watchCaller(dbus::Connection *bus)
 
 void PermissionPrompt::show()
 {
-    const Theme &theme = Theme::current();
-
     m_window = std::make_unique<Window>();
     m_window->setTitle(m_content->title());
     m_window->setSkipTaskbar(true);
     // Text lays out unhinted at every scale, so lines wrap where they always did.
     m_window->setHintedTextLayout(false);
-    m_window->setBackgroundColor(theme.secondBackground);
+    m_window->setBackgroundColor(ColorId::SecondBackground);
     m_window->onCloseRequested = [this] {
         deny();
     };
@@ -569,7 +566,7 @@ void PermissionPrompt::show()
     description->setLayoutHints({.fillWidth = true});
     description->setWrap(true);
     description->setFontSize(12);
-    description->setColor(theme.disabledText);
+    description->setColor(ColorId::DisabledText);
 
     m_ownedContent->setLayoutHints({.fillWidth = true});
     layout->addChild(std::move(m_ownedContent));

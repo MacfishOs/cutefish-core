@@ -118,7 +118,6 @@ void CrashDialog::setDump(const Coredump &dump)
 
 void CrashDialog::show()
 {
-    const Theme &theme = Theme::current();
     const bool canReopen = !sessionProcess();
     const std::string title = "“" + m_name + "” quit unexpectedly";
 
@@ -127,7 +126,7 @@ void CrashDialog::show()
     m_window->setSkipTaskbar(true);
     // Text lays out unhinted at every scale, so lines wrap where they always did.
     m_window->setHintedTextLayout(false);
-    m_window->setBackgroundColor(theme.secondBackground);
+    m_window->setBackgroundColor(ColorId::SecondBackground);
     m_window->onCloseRequested = [this] {
         close();
     };
@@ -153,7 +152,7 @@ void CrashDialog::show()
     m_text->setLayoutHints({.fillWidth = true});
     m_text->setWrap(true);
     m_text->setFontSize(12);
-    m_text->setColor(theme.disabledText);
+    m_text->setColor(ColorId::DisabledText);
 
     auto scroll = std::make_unique<ScrollView>();
     scroll->setScrollDirections(true, true);
