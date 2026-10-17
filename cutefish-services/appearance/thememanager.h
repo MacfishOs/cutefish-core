@@ -102,11 +102,11 @@ private:
     std::unique_ptr<cutefish::base::dbus::Object> m_object;
     std::vector<cutefish::base::Subscription> m_subscriptions;
 
-    bool m_continuousCorners;
-    int m_accentColor;
+    bool m_continuousCorners = true;
+    int m_accentColor = 0;
 
     std::string m_cursorTheme;
-    int m_cursorSize;
+    int m_cursorSize = 24;
 
     std::string m_iconTheme;
 };

@@ -45,20 +45,6 @@ ThemeManager::ThemeManager(Settings &settings, dbus::Connection *session)
         emitSignal("backgroundVisibleChanged");
     }));
 
-    // Ash's DarkLightModeControllerImpl: the same schedule as the night
-    // light, without custom times.
-    m_darkMode = std::make_unique<ScheduledFeature>(
-            ScheduledFeature::Keys {"Appearance", "DarkMode", "DarkModeSchedule", "DarkModeHoldUntil", {}, {}},
-            settings, ScheduleUtils::currentDateTime);
-    m_subscriptions.push_back(m_darkMode->enabledChanged.connect([this](bool darkMode) {
-        updateGtk3Config();
-        emitSignal("darkModeChanged", darkMode);
-    }));
-    m_subscriptions.push_back(m_darkMode->scheduleChanged.connect([this](int schedule) {
-        emitSignal("darkModeScheduleChanged", int32_t(schedule));
-    }));
-    m_darkMode->start();
-
     // init value
     m_continuousCorners = m_settings.boolValue("Appearance/ContinuousCorners", true);
     m_accentColor = int(m_settings.intValue("Appearance/AccentColor", 0));
@@ -75,6 +61,20 @@ ThemeManager::ThemeManager(Settings &settings, dbus::Connection *session)
         m_settings.setValue(s_systemFontName, fontName.empty() ? std::string("Noto Sans") : fontName);
     }
     m_settings.sync();
+
+    // Ash's DarkLightModeControllerImpl: the same schedule as the night
+    // light, without custom times.
+    m_darkMode = std::make_unique<ScheduledFeature>(
+            ScheduledFeature::Keys {"Appearance", "DarkMode", "DarkModeSchedule", "DarkModeHoldUntil", {}, {}},
+            settings, ScheduleUtils::currentDateTime);
+    m_subscriptions.push_back(m_darkMode->enabledChanged.connect([this](bool darkMode) {
+        updateGtk3Config();
+        emitSignal("darkModeChanged", darkMode);
+    }));
+    m_subscriptions.push_back(m_darkMode->scheduleChanged.connect([this](int schedule) {
+        emitSignal("darkModeScheduleChanged", int32_t(schedule));
+    }));
+    m_darkMode->start();
 
     // Update fontconfig after login.
     updateFontConfig();
