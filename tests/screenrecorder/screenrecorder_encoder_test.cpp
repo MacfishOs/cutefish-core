@@ -63,6 +63,7 @@ struct Probe {
     Size size;
     int sampleRate = 0;
     double duration = 0;
+    double audioDuration = 0;
     AVCodecID videoCodec = AV_CODEC_ID_NONE;
     AVCodecID audioCodec = AV_CODEC_ID_NONE;
 };
@@ -94,6 +95,7 @@ static Probe probe(const std::string &path)
             ++result.audioStreams;
             result.sampleRate = codec->sample_rate;
             result.audioCodec = codec->codec_id;
+            result.audioDuration = double(format->streams[i]->duration) * av_q2d(format->streams[i]->time_base);
         }
     }
     result.duration = double(format->duration) / AV_TIME_BASE;
@@ -270,6 +272,56 @@ TEST_F(ScreenRecorderEncoderTest, WritesVideoAndSoundUntilTheStop)
     EXPECT_EQ(file.size, Size(320, 240));
     EXPECT_EQ(file.sampleRate, Encoder::kSampleRate);
     EXPECT_LT(std::abs(file.duration - 1.5), 0.1) << file.duration;
+}
+
+TEST_F(ScreenRecorderEncoderTest, SoundAfterAGapKeepsItsPlace)
+{
+    const std::string path = filePath("gap.mp4");
+    Encoder encoder;
+    Reports reports;
+    reports.watch(encoder);
+
+    encoder.open(path, true);
+    for (int i = 0; i < 45; ++i) {
+        const Image image = frame(Size(320, 240), i);
+        encoder.encodeVideo(image, image.rect(), kOriginNs + i * kFrameNs, i);
+    }
+    // The microphone stalled for half a second in the middle.
+    for (int chunk = 0; chunk < 150; ++chunk) {
+        if (chunk < 50 || chunk >= 100)
+            encoder.encodeAudio(tone(480, chunk * 480), kOriginNs + chunk * 10'000'000);
+    }
+    encoder.finish(kOriginNs + 1'500'000'000);
+
+    ASSERT_EQ(reports.finished.size(), 1u);
+    ASSERT_TRUE(reports.finished.front().first) << reports.finished.front().second;
+    const Probe file = probe(path);
+    EXPECT_EQ(file.audioStreams, 1);
+    EXPECT_LT(std::abs(file.audioDuration - 1.5), 0.05) << file.audioDuration;
+}
+
+TEST_F(ScreenRecorderEncoderTest, SoundAheadOfItsTimesIsTrimmed)
+{
+    const std::string path = filePath("ahead.mp4");
+    Encoder encoder;
+    Reports reports;
+    reports.watch(encoder);
+
+    encoder.open(path, true);
+    for (int i = 0; i < 45; ++i) {
+        const Image image = frame(Size(320, 240), i);
+        encoder.encodeVideo(image, image.rect(), kOriginNs + i * kFrameNs, i);
+    }
+    // Two seconds of samples captured within a second and a half.
+    for (int chunk = 0; chunk < 200; ++chunk)
+        encoder.encodeAudio(tone(480, chunk * 480), kOriginNs + chunk * 7'500'000);
+    encoder.finish(kOriginNs + 1'500'000'000);
+
+    ASSERT_EQ(reports.finished.size(), 1u);
+    ASSERT_TRUE(reports.finished.front().first) << reports.finished.front().second;
+    const Probe file = probe(path);
+    EXPECT_EQ(file.audioStreams, 1);
+    EXPECT_LT(file.audioDuration, 1.5 + 0.25) << file.audioDuration;
 }
 
 TEST_F(ScreenRecorderEncoderTest, LaterSizesAreScaledIntoTheFirst)

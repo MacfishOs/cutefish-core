@@ -34,6 +34,10 @@ static constexpr AVRational kVideoTimeBase {1, 90000};
 static constexpr int kMaximumDimension = 4096;
 // No more than this is held back waiting for the first frame.
 static constexpr int64_t kEarlyAudioLimitNs = 5'000'000'000;
+// Sound this many samples away from where its capture time puts it is moved
+// back there: well above the jitter of the capture times.
+static constexpr int64_t kAudioDriftLimit = Encoder::kSampleRate / 5;
+static constexpr int kSilenceChunk = 4800;
 // Constant quality: screen text stays sharp, and a still screen costs nothing.
 static constexpr int kVaapiQp = 18;
 static constexpr char kX264Crf[] = "18";
@@ -666,8 +670,8 @@ void Encoder::queueAudio(const std::vector<float> &samples, int64_t capturedNs)
 {
     int frames = int(samples.size() / kChannels);
     int skip = 0;
+    const int64_t offset = av_rescale(capturedNs - m_originNs, kSampleRate, 1000000000);
     if (!m_audioAligned) {
-        const int64_t offset = av_rescale(capturedNs - m_originNs, kSampleRate, 1000000000);
         if (offset < 0) {
             skip = int(std::min<int64_t>(-offset, frames));
             if (skip == frames)
@@ -676,6 +680,18 @@ void Encoder::queueAudio(const std::vector<float> &samples, int64_t capturedNs)
             m_audioSamples = offset;
         }
         m_audioAligned = true;
+    } else {
+        // A stalled microphone or a lost buffer leaves a hole, which stays
+        // silent; a sample count running ahead of the clock loses the overlap.
+        const int64_t drift = offset - (m_audioSamples + av_audio_fifo_size(m_fifo));
+        if (drift > kAudioDriftLimit) {
+            if (!queueSilence(drift))
+                return;
+        } else if (drift < -kAudioDriftLimit) {
+            skip = int(std::min<int64_t>(-drift, frames));
+            if (skip == frames)
+                return;
+        }
     }
     frames -= skip;
 
@@ -693,6 +709,23 @@ void Encoder::queueAudio(const std::vector<float> &samples, int64_t capturedNs)
         return;
     }
     drainAudio(false);
+}
+
+bool Encoder::queueSilence(int64_t frames)
+{
+    static const std::vector<float> silence(kSilenceChunk);
+    void *planes[2] = {const_cast<float *>(silence.data()), const_cast<float *>(silence.data())};
+    while (frames > 0) {
+        const int count = int(std::min<int64_t>(frames, kSilenceChunk));
+        if (av_audio_fifo_write(m_fifo, planes, count) < count) {
+            fail("cannot buffer audio");
+            return false;
+        }
+        frames -= count;
+        if (!drainAudio(false))
+            return false;
+    }
+    return true;
 }
 
 bool Encoder::drainAudio(bool flush)

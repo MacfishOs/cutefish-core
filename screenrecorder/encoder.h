@@ -83,6 +83,7 @@ private:
     bool writeHeader(std::string *error);
     bool convert(const Image &image, const cutefish::base::Rect &crop);
     bool sendVideo(int64_t pts, int64_t duration);
+    bool queueSilence(int64_t frames);
     bool drainAudio(bool flush);
     bool writePackets(AVCodecContext *codec, AVStream *stream);
     void queueAudio(const std::vector<float> &samples, int64_t capturedNs);
