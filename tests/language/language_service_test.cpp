@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "appearance/fontconfigwriter.h"
 #include "base/dbus.h"
 #include "base/event_loop.h"
 #include "base/file.h"
@@ -107,4 +108,15 @@ TEST(LanguageServiceTest, NamesLocalesAsTheSessionDoes)
     EXPECT_EQ(Language::localeName("zh_TW"), "zh_TW");
     EXPECT_EQ(Language::localeName("en"), "en_US");
     EXPECT_EQ(Language::localeName("de"), "de_DE");
+}
+
+TEST(LanguageServiceTest, LanguageCodesWithAScriptPickTheirFont)
+{
+    EXPECT_EQ(fontForLocale("zh_Hans_CN"), "Noto Sans CJK SC");
+    EXPECT_EQ(fontForLocale("zh_Hant_TW"), "Noto Sans CJK TC");
+    EXPECT_EQ(fontForLocale("zh_Hant_HK"), "Noto Sans CJK HK");
+    EXPECT_EQ(fontForLocale("zh_CN"), "Noto Sans CJK SC");
+    EXPECT_EQ(fontForLocale("ja_JP"), "Noto Sans CJK JP");
+    EXPECT_EQ(fontForLocale("en_US"), "Noto Sans");
+    EXPECT_EQ(fontForLocale("de_DE"), "");
 }

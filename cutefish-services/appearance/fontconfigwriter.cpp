@@ -84,8 +84,19 @@ void writeFontConfig(const FontConfig &config)
     file::writeAtomically(paths::configHome() + "/fontconfig/conf.d/99-cutefish.conf", content);
 }
 
-std::string fontForLocale(const std::string &localeName)
+std::string fontForLocale(const std::string &code)
 {
+    char likely[ULOC_FULLNAME_CAPACITY] = {};
+    UErrorCode status = U_ZERO_ERROR;
+    uloc_addLikelySubtags(code.c_str(), likely, sizeof(likely), &status);
+    char language[ULOC_LANG_CAPACITY] = {};
+    char country[ULOC_COUNTRY_CAPACITY] = {};
+    uloc_getLanguage(likely, language, sizeof(language), &status);
+    uloc_getCountry(likely, country, sizeof(country), &status);
+    if (U_FAILURE(status))
+        return {};
+    const std::string localeName = std::string(language) + '_' + country;
+
     if (localeName == "zh_CN")
         return "Noto Sans CJK SC";
     if (startsWith(localeName, "en_"))
