@@ -14,7 +14,6 @@
 #include "base/application_registry.h"
 #include "base/event_loop.h"
 #include "base/paths.h"
-#include "base/settings.h"
 #include "base/strings.h"
 #include "common/runtime_client.h"
 
@@ -45,12 +44,6 @@ static std::string environmentValue(const char *name, const char *fallback = "")
 {
     const char *value = std::getenv(name);
     return value && *value ? std::string(value) : std::string(fallback);
-}
-
-static bool fileExists(const std::string &path)
-{
-    std::error_code error;
-    return std::filesystem::exists(path, error);
 }
 
 // A command line split at white space, double quotes grouping, as the Exec
@@ -405,17 +398,6 @@ void ProcessManager::startDesktopProcess()
     // dock's included, opens from one warm process; it draws the desktop on
     // the trusted connection.
     startShell();
-
-    // For CutefishOS. An ordinary application, so the runtime starts it.
-    if (fileExists("/usr/bin/cutefish-welcome") && !fileExists("/run/live/medium/live/filesystem.squashfs")) {
-        const base::Settings settings(base::paths::cutefishConfig("login"));
-        std::vector<std::string> command {"/usr/bin/cutefish-welcome"};
-
-        if (settings.boolValue("Finished", false))
-            command.push_back("-d");
-
-        runtime::launchCommand(command, std::string(), "cutefish-welcome");
-    }
 
     // Auto start
     m_autostartTimer.start(100ms);
