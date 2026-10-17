@@ -15,7 +15,7 @@
 #include "base/elapsed_timer.h"
 #include "base/signal.h"
 #include "base/timer.h"
-#include "display/displayclient.h"
+#include "cutefish/display/display_client.h"
 
 class BrightnessManager;
 

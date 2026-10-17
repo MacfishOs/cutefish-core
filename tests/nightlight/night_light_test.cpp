@@ -12,7 +12,7 @@
 #include "base/event_loop.h"
 #include "base/file.h"
 #include "base/settings.h"
-#include "display/displaytypes.h"
+#include "cutefish/display/display_types.h"
 #include "nightlight.h"
 #include "scheduleutils.h"
 #include "support/wait.h"

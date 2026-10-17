@@ -15,7 +15,7 @@
 
 #include "base/dbus.h"
 #include "base/event_loop.h"
-#include "display/displaytypes.h"
+#include "cutefish/display/display_types.h"
 #include "power/dimdisplayaction.h"
 #include "support/wait.h"
 

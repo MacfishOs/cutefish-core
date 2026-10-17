@@ -10,7 +10,7 @@
 
 #include "base/dbus.h"
 #include "base/signal.h"
-#include "display/displayclient.h"
+#include "cutefish/display/display_client.h"
 #include "scheduledfeature.h"
 
 // The night light's preferences and schedule; the compositor only animates the
