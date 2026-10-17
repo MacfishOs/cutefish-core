@@ -1,7 +1,8 @@
 # cutefish-screenrecorder: the shell's screen recordings, captured through the
 # compositor and encoded here, so neither the shell nor the compositor ever
-# encodes. The compositor allows it to capture by its installed path. Frames
-# come as DMA-BUFs and stay on the GPU through VA-API where it can.
+# encodes. It captures only on the Wayland connection the shell starts it with
+# (WAYLAND_SOCKET), not by its path. Frames come as DMA-BUFs and stay on the
+# GPU through VA-API where it can.
 pkg_check_modules(WaylandClient REQUIRED IMPORTED_TARGET wayland-client)
 pkg_check_modules(WaylandProtocols REQUIRED wayland-protocols>=1.39)
 pkg_check_modules(Gbm REQUIRED IMPORTED_TARGET gbm)
