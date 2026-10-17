@@ -19,6 +19,7 @@
 
 #include "autostartentries.h"
 #include "compositorprocess.h"
+#include "journalstream.h"
 #include "logs.h"
 #include "restartpolicy.h"
 #include "shellconnection.h"
@@ -433,7 +434,7 @@ void ProcessManager::startCoreProcess(const std::string &program, const std::vec
         return;
 
     restart->started();
-    if (!process->start(program, arguments)) {
+    if (!startWithOwnJournalStream(*process, program, arguments)) {
         CF_WARNING(sessionLog()) << "Failed to start" << program;
         restart->exited(-1, false);
     }

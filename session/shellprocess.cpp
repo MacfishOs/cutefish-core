@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include "common/environment.h"
+#include "journalstream.h"
 #include "logs.h"
 #include "shellconnection.h"
 
@@ -52,7 +53,7 @@ bool ShellProcess::startForSession(const std::string& program, const std::string
     m_program = program;
     m_process.setInheritedFd(shellFd);
     m_process.setEnvironment(cutefish::core::environmentEntries(environment));
-    const bool started = m_process.start(program, arguments);
+    const bool started = startWithOwnJournalStream(m_process, program, arguments);
     if (started)
         CF_INFO(sessionLog()) << "Session started" << program << "PID" << m_process.pid();
     else

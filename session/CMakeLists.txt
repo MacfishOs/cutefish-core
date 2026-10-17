@@ -6,6 +6,7 @@ pkg_check_modules(Systemd REQUIRED IMPORTED_TARGET libsystemd)
 set(SOURCES
     application.cpp
     autostartentries.cpp
+    journalstream.cpp
     main.cpp
     processmanager.cpp
     restartpolicy.cpp

@@ -1,6 +1,7 @@
 #include "compositorprocess.h"
 
 #include "base/event_loop.h"
+#include "journalstream.h"
 
 #include <fcntl.h>
 #include <sys/epoll.h>
@@ -101,7 +102,7 @@ void CompositorProcess::start(const std::string& program, const std::string& soc
         readReady();
     });
     m_process.setInheritedFd(writeFd);
-    const bool started = m_process.start(program, arguments);
+    const bool started = startWithOwnJournalStream(m_process, program, arguments);
     close(writeFd);
     if (!started) {
         fail("Cannot start " + program);

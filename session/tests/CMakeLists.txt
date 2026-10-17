@@ -20,9 +20,16 @@ function(session_test name)
     add_test(NAME ${name} COMMAND ${name}-test)
 endfunction()
 
-session_test(session-lifecycle SOURCES lifecycle_test.cpp ${SESSION_DIR}/compositorprocess.cpp)
+pkg_check_modules(Systemd REQUIRED IMPORTED_TARGET libsystemd)
+
+session_test(session-lifecycle SOURCES lifecycle_test.cpp ${SESSION_DIR}/compositorprocess.cpp
+             ${SESSION_DIR}/journalstream.cpp)
+target_link_libraries(session-lifecycle-test PRIVATE PkgConfig::Systemd)
 session_test(shell-lifecycle SOURCES shell_lifecycle_test.cpp ${SESSION_DIR}/shellprocess.cpp
-             ${SESSION_DIR}/shellconnection.cpp)
+             ${SESSION_DIR}/shellconnection.cpp ${SESSION_DIR}/journalstream.cpp)
+target_link_libraries(shell-lifecycle-test PRIVATE PkgConfig::Systemd)
+session_test(journal-stream SOURCES journal_stream_test.cpp ${SESSION_DIR}/journalstream.cpp)
+target_link_libraries(journal-stream-test PRIVATE PkgConfig::Systemd GTest::gtest_main)
 session_test(xwayland-environment SOURCES xwayland_environment_test.cpp ${SESSION_DIR}/xwaylandenvironment.cpp)
 target_link_libraries(xwayland-environment-test PRIVATE GTest::gtest_main)
 session_test(autostart SOURCES autostart_test.cpp ${SESSION_DIR}/autostartentries.cpp)
