@@ -5,9 +5,10 @@
 
 #include "base/event_loop.h"
 
+#include <cerrno>
+#include <fcntl.h>
 #include <memory>
 #include <signal.h>
-#include <spawn.h>
 #include <sys/epoll.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -15,27 +16,30 @@
 
 namespace cutefish::core {
 
+void dropOomProtection(const char* path)
+{
+    const int input = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (input < 0)
+        return;
+    char value[16];
+    const ssize_t length = ::read(input, value, sizeof(value));
+    ::close(input);
+    if (length <= 0 || value[0] != '-')
+        return;
+
+    const int output = ::open(path, O_WRONLY | O_TRUNC | O_CLOEXEC);
+    if (output < 0)
+        return;
+    if (::write(output, "0", 1) != 1) {
+    }
+    ::close(output);
+}
+
 pid_t startDetached(const std::vector<std::string>& command, const std::string& workingDirectory,
                     const Environment& environment)
 {
     if (command.empty() || command.front().empty())
         return -1;
-
-    posix_spawn_file_actions_t actions;
-    posix_spawnattr_t attributes;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawnattr_init(&attributes);
-    // The program starts with no signal blocked and default handlers, whatever
-    // this process changed.
-    sigset_t none;
-    sigemptyset(&none);
-    posix_spawnattr_setsigmask(&attributes, &none);
-    sigset_t defaults;
-    sigfillset(&defaults);
-    posix_spawnattr_setsigdefault(&attributes, &defaults);
-    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSID);
-    if (!workingDirectory.empty())
-        posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.c_str());
 
     std::vector<char*> argv;
     for (const std::string& argument : command)
@@ -47,12 +51,51 @@ pid_t startDetached(const std::vector<std::string>& command, const std::string& 
         envp.push_back(const_cast<char*>(entry.c_str()));
     envp.push_back(nullptr);
 
-    pid_t pid = -1;
-    const int result = posix_spawnp(&pid, argv.front(), &actions, &attributes, argv.data(), envp.data());
-    posix_spawn_file_actions_destroy(&actions);
-    posix_spawnattr_destroy(&attributes);
-    if (result != 0)
+    // Carries the errno of a failed start; a successful exec closes it.
+    int failure[2];
+    if (pipe2(failure, O_CLOEXEC) != 0)
         return -1;
+
+    const pid_t pid = fork();
+    if (pid == 0) {
+        ::close(failure[0]);
+
+        // Only async-signal-safe calls from here: this process may have threads.
+        // The program starts with default handlers and no signal blocked,
+        // whatever this process changed.
+        struct sigaction defaults = {};
+        defaults.sa_handler = SIG_DFL;
+        for (int signal = 1; signal < NSIG; ++signal)
+            sigaction(signal, &defaults, nullptr);
+        sigset_t none;
+        sigemptyset(&none);
+        sigprocmask(SIG_SETMASK, &none, nullptr);
+        setsid();
+        dropOomProtection("/proc/self/oom_score_adj");
+
+        if (workingDirectory.empty() || chdir(workingDirectory.c_str()) == 0)
+            execvpe(argv.front(), argv.data(), envp.data());
+        const int error = errno;
+        if (::write(failure[1], &error, sizeof(error)) != sizeof(error)) {
+        }
+        _exit(127);
+    }
+    ::close(failure[1]);
+    if (pid < 0) {
+        ::close(failure[0]);
+        return -1;
+    }
+
+    int error = 0;
+    ssize_t length;
+    while ((length = ::read(failure[0], &error, sizeof(error))) < 0 && errno == EINTR) {
+    }
+    ::close(failure[0]);
+    if (length > 0) {
+        while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {
+        }
+        return -1;
+    }
 
     // Reaped when it ends, so it never lingers as a zombie; after this
     // process, init does it.
