@@ -78,10 +78,12 @@ void ScheduledFeature::start()
     // an earlier session still waits for its turn.
     const std::string hold = key(m_keys.holdUntil);
     if (m_schedule != Never && m_settings.contains(hold)
-        && m_clock().toMSecsSinceEpoch() < m_settings.intValue(hold))
+        && m_clock().toMSecsSinceEpoch() < m_settings.intValue(hold)) {
+        updateSunTimes();
         arm(ScheduleUtils::fromMSecsSinceEpoch(m_settings.intValue(hold), m_clock().zone));
-    else
+    } else {
         refresh(Reason::SettingsChanged);
+    }
 }
 
 void ScheduledFeature::setEnabled(bool enabled)

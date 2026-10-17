@@ -532,6 +532,23 @@ TEST_F(NightLightTest, TheSunTimesAreTheScheduleTurnsToCome)
     EXPECT_LE(std::abs(nightLight->sunset() - minutesOfDay(now)), 3);
 }
 
+TEST_F(NightLightTest, ASessionStartedDuringAHoldShowsTheSunTimes)
+{
+    now = at(2, 12);
+    auto nightLight = start();
+    nightLight->setSchedule(NightLight::SunsetToSunrise);
+    nightLight->setEnabled(true);
+    const int sunset = nightLight->sunset();
+    const int sunrise = nightLight->sunrise();
+    nightLight.reset();
+
+    nightLight = start();
+    EXPECT_TRUE(nightLight->enabled());
+    EXPECT_EQ(nightLight->sunset(), sunset);
+    EXPECT_EQ(nightLight->sunrise(), sunrise);
+    EXPECT_EQ(nightLight->sunset(), minutesOfDay(nightLight->nextCheckpoint()));
+}
+
 TEST_F(NightLightTest, TheSessionStartsWhereTheScheduleIs)
 {
     write("NightLight/Schedule", std::to_string(int(NightLight::Custom)));
