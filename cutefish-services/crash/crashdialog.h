@@ -66,6 +66,7 @@ private:
     bool m_finished = false;
     bool m_detailsShown = false;
     bool m_reopening = false;
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
     std::unique_ptr<cutefish::ui::Window> m_window;
     cutefish::ui::Label *m_text = nullptr;
     cutefish::ui::View *m_reportFrame = nullptr;

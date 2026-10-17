@@ -252,14 +252,17 @@ void CrashDialog::reopen()
         return;
     m_reopening = true;
     // A single-instance application hands the token to its running instance,
-    // which can then be activated on another desk.
-    m_window->requestActivationToken([this](const std::string &token) {
+    // which can then be activated on another desk. The connection keeps the
+    // callback, and the dialog may be closed and gone before the token comes.
+    const std::weak_ptr<bool> alive = m_alive;
+    m_window->requestActivationToken([this, id = m_id, alive](const std::string &token) {
         if (base::dbus::Connection *bus = base::dbus::Connection::session()) {
             const base::dbus::Proxy runtime(bus, "com.cutefish.AppRuntime", "/AppRuntime",
                                             "com.cutefish.AppRuntime");
-            runtime.send("launchApplication", m_id, std::vector<std::string>(), token);
+            runtime.send("launchApplication", id, std::vector<std::string>(), token);
         }
-        close();
+        if (alive.lock())
+            close();
     });
 }
 
