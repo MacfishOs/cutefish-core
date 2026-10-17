@@ -28,6 +28,8 @@ TEST(Autostart, overrides)
     const auto system = root.path() + "/system";
     entry(system, "bridge", "Exec=bridge\n");
     entry(user, "bridge", "Hidden=true\n");
+    entry(system, "switched-off", "Exec=switched-off\n");
+    entry(user, "switched-off", "Exec=switched-off\nX-GNOME-Autostart-enabled=false\n");
     entry(system, "duplicate", "Exec=old\n");
     entry(user, "duplicate", "Exec=new\n");
     entry(system, "filtered", "Exec=wrong-fallback\n");
@@ -44,7 +46,10 @@ TEST(Autostart, filtering)
     entry(root.path(), "hidden", "Exec=hidden\nHidden=true\n");
     entry(root.path(), "menu-hidden", "Exec=menu-hidden\nNoDisplay=true\n");
     entry(root.path(), "visible", "Exec=visible\nHidden=false\n");
-    EXPECT_EQ(autostartEntries({root.path()}, {"Cutefish"}), (Entries {"allowed", "menu-hidden", "visible"}));
+    entry(root.path(), "disabled", "Exec=disabled\nX-GNOME-Autostart-enabled=false\n");
+    entry(root.path(), "enabled", "Exec=enabled\nX-GNOME-Autostart-enabled=true\n");
+    EXPECT_EQ(autostartEntries({root.path()}, {"Cutefish"}),
+              (Entries {"allowed", "enabled", "menu-hidden", "visible"}));
     EXPECT_TRUE(contains(autostartEntries({root.path()}, {"Other", "KDE"}), "other"));
 }
 

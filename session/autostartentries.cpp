@@ -70,7 +70,9 @@ std::vector<std::string> autostartEntries(const std::vector<std::string>& direct
                 const auto found = entry.find(key);
                 return found == entry.end() ? std::string() : found->second;
             };
-            if (value("Hidden") == "true" || value("Type") != "Application")
+            // The second key is how settings tools of other desktops switch an entry off.
+            if (value("Hidden") == "true" || value("X-GNOME-Autostart-enabled") == "false"
+                || value("Type") != "Application")
                 continue;
             const auto matches = [&value, &desktops](const std::string& key) {
                 const auto names = strings::split(value(key), ';', strings::SplitBehavior::SkipEmptyParts);
