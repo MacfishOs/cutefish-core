@@ -5,10 +5,10 @@
 #define DBUSCALL_H
 
 #include <functional>
-#include <memory>
 #include <string>
 
 #include "base/dbus.h"
+#include "common/detached_call.h"
 
 namespace services {
 
@@ -18,16 +18,13 @@ template<typename... Args>
 void callDetached(const cutefish::base::dbus::Proxy &proxy, const std::string &method,
                   std::function<void(const cutefish::base::dbus::Reply &)> done, const Args &...args)
 {
-    auto call = std::make_shared<cutefish::base::dbus::PendingCall>();
-    *call = proxy.callAsync(
-            method,
-            [call, done = std::move(done)](const cutefish::base::dbus::Reply &reply) {
-                if (done)
-                    done(reply);
-                // The bus keeps the call until this returns.
-                call->reset();
-            },
-            args...);
+    cutefish::base::dbus::Connection *connection = proxy.connection();
+    cutefish::base::dbus::Message call;
+    if (connection) {
+        call = connection->newMethodCall(proxy.service(), proxy.path(), proxy.interface(), method);
+        call.append(args...);
+    }
+    cutefish::core::callDetached(connection, call, std::move(done));
 }
 
 } // namespace services

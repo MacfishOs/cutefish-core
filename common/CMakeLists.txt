@@ -1,9 +1,12 @@
 # What the session, the runtime and the services share: the locale and proxy
 # variables every application is started with, the GSettings keyfile and the
-# runtime's client.
+# runtime's client, and calls whose pending reply nobody keeps.
 pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc)
+pkg_check_modules(CommonSystemd REQUIRED IMPORTED_TARGET libsystemd)
 
 add_library(cutefish-core-common STATIC
+    detached_call.cpp
+    detached_call.h
     detached_process.cpp
     detached_process.h
     environment.cpp
@@ -20,5 +23,5 @@ add_library(cutefish-core-common STATIC
 target_include_directories(cutefish-core-common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(cutefish-core-common
     PUBLIC Cutefish::ToolkitBase
-    PRIVATE PkgConfig::ICU
+    PRIVATE PkgConfig::ICU PkgConfig::CommonSystemd
 )

@@ -1,11 +1,10 @@
 #include "applicationscope.h"
 
 #include "base/dbus.h"
-#include "base/event_loop.h"
 #include "base/logging.h"
+#include "common/detached_call.h"
 
 #include <cstdio>
-#include <memory>
 #include <tuple>
 #include <vector>
 
@@ -63,12 +62,9 @@ void ApplicationScope::adopt(const std::string &appId, uint32_t pid)
     };
     dbus::Message call = managerCall(bus, "StartTransientUnit");
     call.append(unitName(appId, pid), std::string("fail"), properties, std::vector<AuxiliaryUnit>());
-    // Kept until the reply has been handled, then released on the loop.
-    auto pending = std::make_shared<dbus::PendingCall>();
-    *pending = bus->callAsync(call, [pending, appId, pid](const dbus::Reply &reply) mutable {
+    cutefish::core::callDetached(bus, call, [appId, pid](const dbus::Reply &reply) {
         if (reply.isError())
             CF_WARNING(kLog) << "AppRuntime: no systemd scope for" << appId << pid << reply.error().message;
-        cutefish::base::EventLoop::current()->post([released = std::move(pending)] {});
     });
 }
 

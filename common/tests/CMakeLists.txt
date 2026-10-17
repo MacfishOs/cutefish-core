@@ -11,3 +11,8 @@ add_subdirectory(.. ${CMAKE_CURRENT_BINARY_DIR}/common)
 add_executable(common-test common_test.cpp)
 target_link_libraries(common-test PRIVATE cutefish-core-common GTest::gtest_main)
 add_test(NAME common COMMAND common-test)
+
+add_executable(detached-call-test detached_call_test.cpp)
+target_link_libraries(detached-call-test PRIVATE cutefish-core-common GTest::gtest_main)
+find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
+add_test(NAME detached-call COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:detached-call-test>)

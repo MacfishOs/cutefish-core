@@ -14,6 +14,7 @@ set(SOURCES
 add_executable(${TARGET} ${SOURCES})
 target_link_libraries(${TARGET}
     Cutefish::ToolkitBase
+    cutefish-core-common
 )
 
 configure_file(com.cutefish.Privacy.service.in com.cutefish.Privacy.service @ONLY)

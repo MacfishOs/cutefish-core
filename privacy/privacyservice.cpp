@@ -3,8 +3,8 @@
 
 #include "privacyservice.h"
 
-#include "base/event_loop.h"
 #include "base/logging.h"
+#include "common/detached_call.h"
 
 #include <cerrno>
 #include <cstring>
@@ -113,12 +113,10 @@ void PrivacyService::authorize(dbus::MethodCall &call, std::function<void()> app
     // 1: AllowUserInteraction, should an administrator require a password.
     check.append(subject, std::string(kAction), std::map<std::string, std::string>(), uint32_t(1), std::string());
 
-    // Kept until the reply has been handled, then released on the loop. No
-    // timeout: an administrator may take a while over the password.
-    auto pending = std::make_shared<dbus::PendingCall>();
-    *pending = m_bus->callAsync(
-            check,
-            [request, apply, pending](const dbus::Reply &reply) mutable {
+    // No timeout: an administrator may take a while over the password.
+    cutefish::core::callDetached(
+            m_bus, check,
+            [request, apply](const dbus::Reply &reply) mutable {
                 bool authorized = false;
                 std::tuple<bool, bool, std::map<std::string, std::string>> result;
                 if (reply.read(result))
@@ -133,7 +131,6 @@ void PrivacyService::authorize(dbus::MethodCall &call, std::function<void()> app
                     apply();
                     request.reply();
                 }
-                cutefish::base::EventLoop::current()->post([released = std::move(pending)] {});
             },
             std::chrono::hours(24));
 }

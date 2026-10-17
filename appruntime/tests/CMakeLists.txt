@@ -5,11 +5,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(CutefishToolkit REQUIRED)
 find_package(GTest REQUIRED)
 include(GoogleTest)
+find_package(PkgConfig REQUIRED)
 enable_testing()
+
+add_subdirectory(../../common ${CMAKE_CURRENT_BINARY_DIR}/common)
 
 add_executable(application-scope-test application_scope_test.cpp ../applicationscope.cpp)
 target_include_directories(application-scope-test PRIVATE ..)
-target_link_libraries(application-scope-test PRIVATE Cutefish::ToolkitBase GTest::gtest_main)
+target_link_libraries(application-scope-test PRIVATE cutefish-core-common Cutefish::ToolkitBase GTest::gtest_main)
 add_test(NAME application-scope COMMAND application-scope-test)
 
 add_executable(chromium-switches-test chromium_switches_test.cpp ../chromiumswitches.cpp)
@@ -18,9 +21,7 @@ target_link_libraries(chromium-switches-test PRIVATE Cutefish::ToolkitBase GTest
 add_test(NAME chromium-switches COMMAND chromium-switches-test)
 
 # The runtime itself, on a private bus.
-find_package(PkgConfig REQUIRED)
 pkg_check_modules(Systemd REQUIRED IMPORTED_TARGET libsystemd)
-add_subdirectory(../../common ${CMAKE_CURRENT_BINARY_DIR}/common)
 add_executable(cutefish-appruntime ../main.cpp ../appruntime.cpp ../applicationscope.cpp ../chromiumswitches.cpp)
 target_include_directories(cutefish-appruntime PRIVATE ..)
 target_link_libraries(cutefish-appruntime PRIVATE cutefish-core-common Cutefish::ToolkitBase PkgConfig::Systemd)
