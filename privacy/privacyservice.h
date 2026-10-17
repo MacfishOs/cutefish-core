@@ -9,6 +9,7 @@
 #include "base/dbus.h"
 #include "base/timer.h"
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -19,7 +20,8 @@
 class PrivacyService
 {
 public:
-    explicit PrivacyService(const std::string &stateDirectory);
+    explicit PrivacyService(const std::string &stateDirectory,
+                            std::chrono::milliseconds idleTimeout = std::chrono::seconds(60));
 
     bool cameraEnabled() const;
     bool microphoneEnabled() const;
@@ -47,6 +49,7 @@ private:
     UsbCameras m_cameras;
     CaptureSwitches m_captureSwitches;
     cutefish::base::Timer m_idleTimer;
+    int m_pendingAuthorizations = 0;
     cutefish::base::dbus::Connection *m_bus = nullptr;
     std::unique_ptr<cutefish::base::dbus::Object> m_object;
 };

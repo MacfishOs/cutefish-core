@@ -15,19 +15,17 @@
 #include <unistd.h>
 
 namespace dbus = cutefish::base::dbus;
-using namespace std::chrono_literals;
 
 static const cutefish::base::LogCategory kLog("cutefish.privacy");
 
 static constexpr char kAction[] = "com.cutefish.privacy.switch-devices";
 static const char *const kCamera = "camera";
 static const char *const kMicrophone = "microphone";
-static constexpr auto kIdleTimeout = 60s;
 
 // polkit's Subject: a kind and its details.
 using PolkitSubject = std::tuple<std::string, dbus::VariantMap>;
 
-PrivacyService::PrivacyService(const std::string &stateDirectory)
+PrivacyService::PrivacyService(const std::string &stateDirectory, std::chrono::milliseconds idleTimeout)
     : m_stateDirectory(stateDirectory)
 {
     std::error_code error;
@@ -41,9 +39,10 @@ PrivacyService::PrivacyService(const std::string &stateDirectory)
         m_captureSwitches.setLocked(true);
 
     m_idleTimer.setSingleShot(true);
-    m_idleTimer.setInterval(kIdleTimeout);
+    m_idleTimer.setInterval(idleTimeout);
     m_idleTimer.onTimeout = [this] {
-        if (!m_captureSwitches.isLocked() && onIdle)
+        // An administrator may still be typing a password for a call.
+        if (!m_captureSwitches.isLocked() && !m_pendingAuthorizations && onIdle)
             onIdle();
     };
     m_idleTimer.start();
@@ -114,9 +113,13 @@ void PrivacyService::authorize(dbus::MethodCall &call, std::function<void()> app
     check.append(subject, std::string(kAction), std::map<std::string, std::string>(), uint32_t(1), std::string());
 
     // No timeout: an administrator may take a while over the password.
+    ++m_pendingAuthorizations;
     cutefish::core::callDetached(
             m_bus, check,
-            [request, apply](const dbus::Reply &reply) mutable {
+            [this, request, apply](const dbus::Reply &reply) mutable {
+                --m_pendingAuthorizations;
+                m_idleTimer.start();
+
                 bool authorized = false;
                 std::tuple<bool, bool, std::map<std::string, std::string>> result;
                 if (reply.read(result))
