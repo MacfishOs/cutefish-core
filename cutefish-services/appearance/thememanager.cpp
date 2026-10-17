@@ -4,6 +4,7 @@
 #include "thememanager.h"
 #include "fontconfigwriter.h"
 #include "gtksettings.h"
+#include "loginbackground.h"
 #include "scheduledfeature.h"
 #include "wallpapermanager.h"
 
@@ -17,10 +18,11 @@ static const std::string s_systemFontName = "Appearance/Font";
 static const std::string s_systemFixedFontName = "Appearance/FixedFont";
 static const std::string s_systemPointFontSize = "Appearance/FontSize";
 
-ThemeManager::ThemeManager(Settings &settings, dbus::Connection *session)
+ThemeManager::ThemeManager(Settings &settings, dbus::Connection *session, dbus::Connection *system)
     : m_settings(settings)
     , m_session(session)
     , m_wallpaperManager(std::make_unique<WallpaperManager>(settings))
+    , m_loginBackground(std::make_unique<LoginBackground>(*m_wallpaperManager, system))
 {
     WallpaperManager &wallpapers = *m_wallpaperManager;
     m_subscriptions.push_back(wallpapers.wallpaperChanged.connect([this](const std::string &path) {

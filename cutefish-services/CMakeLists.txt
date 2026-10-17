@@ -27,6 +27,8 @@ add_executable(${TARGET}
     appearance/fontconfigwriter.h
     appearance/gtksettings.cpp
     appearance/gtksettings.h
+    appearance/loginbackground.cpp
+    appearance/loginbackground.h
     appearance/thememanager.cpp
     appearance/thememanager.h
     appearance/wallpapermanager.cpp

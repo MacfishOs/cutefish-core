@@ -14,13 +14,15 @@
 #include "base/settings.h"
 #include "base/signal.h"
 
+class LoginBackground;
 class ScheduledFeature;
 class WallpaperManager;
 
 class ThemeManager
 {
 public:
-    ThemeManager(cutefish::base::Settings &settings, cutefish::base::dbus::Connection *session);
+    ThemeManager(cutefish::base::Settings &settings, cutefish::base::dbus::Connection *session,
+                 cutefish::base::dbus::Connection *system);
     ~ThemeManager();
 
     ThemeManager(const ThemeManager &) = delete;
@@ -98,6 +100,7 @@ private:
     cutefish::base::Settings &m_settings;
     cutefish::base::dbus::Connection *m_session;
     std::unique_ptr<WallpaperManager> m_wallpaperManager;
+    std::unique_ptr<LoginBackground> m_loginBackground;
     std::unique_ptr<ScheduledFeature> m_darkMode;
     std::unique_ptr<cutefish::base::dbus::Object> m_object;
     std::vector<cutefish::base::Subscription> m_subscriptions;

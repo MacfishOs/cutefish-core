@@ -36,7 +36,7 @@ Application::Application()
     , m_settings(paths::cutefishConfig("services"))
 {
     m_idleManager = std::make_unique<IdleManager>();
-    m_themeManager = std::make_unique<ThemeManager>(m_settings, m_session);
+    m_themeManager = std::make_unique<ThemeManager>(m_settings, m_session, m_system);
     m_brightnessManager = std::make_unique<BrightnessManager>(m_session, m_system);
     m_upowerManager = std::make_unique<UPowerManager>(m_system, m_session, m_settings);
     m_batteryWarning = std::make_unique<BatteryWarning>(m_system, m_session);
