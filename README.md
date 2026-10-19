@@ -29,4 +29,4 @@ Install `cutefish-compositor` and `cutefish-filemanager` as well, then select
 
 ## License
 
-This project has been licensed by GPLv3.
+BSD-3-Clause; see [LICENSE](LICENSE).
