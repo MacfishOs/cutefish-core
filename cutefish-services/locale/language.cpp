@@ -55,6 +55,7 @@ bool Language::publish()
                         {{"value"}, {}});
     m_object->addProperty("preferredLanguages", [this] { return preferredLanguages(); });
     m_object->addProperty("languageCode", [this] { return languageCode(); });
+    m_object->addProperty("environment", [this] { return environment(); });
     m_object->addSignal("languageChanged", "");
     return m_object->publish();
 }
@@ -73,6 +74,20 @@ std::vector<std::string> Language::preferredLanguages() const
     codes.insert(codes.begin(), primary);
     removeDuplicates(codes);
     return codes;
+}
+
+std::map<std::string, std::string> Language::environment() const
+{
+    cutefish::core::Environment environment = cutefish::core::processEnvironment();
+    language::apply(environment, preferredLanguages());
+    std::map<std::string, std::string> variables;
+    for (const auto &[name, value] : environment) {
+        if (name == "LANG" || name == "LANGUAGE" || startsWith(name, "LC_"))
+            variables[name] = value;
+    }
+    // D-Bus cannot remove variables; an empty LC_ALL lets individual categories take effect.
+    variables["LC_ALL"] = std::string();
+    return variables;
 }
 
 void Language::setLanguage(const std::string &code)
@@ -123,18 +138,12 @@ void Language::setPreferredLanguages(const std::vector<std::string> &languages)
     if (m_appearance.updateFontConfig)
         m_appearance.updateFontConfig();
 
-    cutefish::core::Environment environment = cutefish::core::processEnvironment();
-    language::apply(environment, codes);
-    std::map<std::string, std::string> activationEnvironment;
+    const std::map<std::string, std::string> activationEnvironment = environment();
     std::vector<std::string> systemdEnvironment;
-    for (const auto &[name, value] : environment) {
-        if (name == "LANG" || name == "LANGUAGE" || startsWith(name, "LC_")) {
-            activationEnvironment[name] = value;
+    for (const auto &[name, value] : activationEnvironment) {
+        if (name != "LC_ALL")
             systemdEnvironment.push_back(name + '=' + value);
-        }
     }
-    // D-Bus cannot remove variables; an empty LC_ALL lets individual categories take effect.
-    activationEnvironment["LC_ALL"] = std::string();
     if (m_session) {
         const dbus::Proxy bus(m_session, "org.freedesktop.DBus", "/org/freedesktop/DBus",
                               "org.freedesktop.DBus");

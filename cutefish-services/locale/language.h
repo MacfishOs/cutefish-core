@@ -5,6 +5,7 @@
 #define LANGUAGE_H
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -37,6 +38,9 @@ public:
     void setLanguage(const std::string &code);
     std::vector<std::string> preferredLanguages() const;
     void setPreferredLanguages(const std::vector<std::string> &codes);
+    // LANG, LANGUAGE and the LC_ variables for the preferred languages, as
+    // programs started now get them; LC_ALL is empty.
+    std::map<std::string, std::string> environment() const;
 
     // A locale's language and territory, such as "en_US" for "en", as the
     // session names it.
