@@ -18,6 +18,7 @@
 
 #include "base/dbus.h"
 #include "base/paths.h"
+#include "ui/application.h"
 #include "ui/theme.h"
 #include "log.h"
 
@@ -44,6 +45,10 @@ Application::Application()
             m_settings, m_session,
             Language::Appearance {[this](const std::string &family) { m_themeManager->setSystemFont(family); },
                                   [this] { m_themeManager->updateFontConfig(); }});
+    // The crash dialogs and permission prompts in this process follow too.
+    m_language->applyEnvironment = [](const std::map<std::string, std::string> &variables) {
+        ui::Application::instance()->setLanguageEnvironment(variables);
+    };
     m_clipboard = std::make_unique<Clipboard>();
     m_powerManager = std::make_unique<PowerManager>(m_powerSupply.get(), m_brightnessManager.get(),
                                                     m_idle.get(), m_settings, m_session, m_system);

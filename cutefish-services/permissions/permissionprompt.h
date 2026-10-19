@@ -6,10 +6,12 @@
 #include <vector>
 
 #include "base/dbus.h"
+#include "base/signal.h"
 #include "ui/view.h"
 
 namespace cutefish::ui {
 class DialogButton;
+class Label;
 class Window;
 }
 
@@ -27,6 +29,8 @@ public:
         virtual std::string accept() const = 0;
         virtual bool ready() const = 0;
         virtual cutefish::base::dbus::VariantMap details() const = 0;
+        // Sets its own text again, in the session's new language.
+        virtual void retranslate() = 0;
 
         // A double click on a choice.
         std::function<void()> onAccepted;
@@ -68,6 +72,7 @@ public:
     static Application describeApplication(const std::string &appId);
 
 private:
+    void retranslate();
     void reply(uint32_t response, const cutefish::base::dbus::VariantMap &results);
 
     cutefish::base::dbus::MethodCall m_call;
@@ -79,5 +84,9 @@ private:
     std::unique_ptr<cutefish::ui::Window> m_window;
     std::unique_ptr<Content> m_ownedContent;
     Content *m_content = nullptr;
+    cutefish::ui::Label *m_title = nullptr;
+    cutefish::ui::Label *m_description = nullptr;
+    cutefish::ui::DialogButton *m_cancel = nullptr;
     cutefish::ui::DialogButton *m_accept = nullptr;
+    cutefish::base::Subscription m_languageChanged;
 };

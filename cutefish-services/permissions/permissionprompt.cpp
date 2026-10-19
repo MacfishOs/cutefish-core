@@ -7,6 +7,8 @@
 #include "base/application_registry.h"
 #include "base/desktop_entry.h"
 #include "base/file.h"
+#include "base/i18n.h"
+#include "ui/application.h"
 #include "ui/cell_layout.h"
 #include "ui/dialog_window.h"
 #include "ui/icon.h"
@@ -20,6 +22,9 @@
 using namespace cutefish;
 using namespace cutefish::ui;
 namespace dbus = cutefish::base::dbus;
+using cutefish::i18n::format;
+using cutefish::i18n::tr;
+using cutefish::i18n::trNoop;
 
 static constexpr double kWidth = 440;
 static constexpr double kMargin = 20;
@@ -190,6 +195,8 @@ public:
         m_label->setVerticallyCentered(true);
     }
 
+    void setText(const std::string &text) { m_label->setText(text); }
+
 protected:
     void layout() override
     {
@@ -210,7 +217,7 @@ public:
     static constexpr double kSpacing = 4;
 
     struct Entry {
-        View *section = nullptr;
+        SectionHeading *section = nullptr;
         ChoiceRow *row = nullptr;
     };
 
@@ -289,7 +296,7 @@ public:
             const Choice &choice = m_choices[i];
             ChoiceListContent::Entry entry;
             if (i == 0 || m_choices[i - 1].window != choice.window)
-                entry.section = m_list->addChild<SectionHeading>(choice.window ? "Windows" : "Displays");
+                entry.section = m_list->addChild<SectionHeading>(sectionTitle(choice.window));
             entry.row = m_list->addChild<ChoiceRow>(choice.icon, choice.label, choice.detail);
             entry.row->onClicked = [this, i] {
                 select(int(i));
@@ -305,19 +312,19 @@ public:
 
     std::string title() const override
     {
-        return std::format("Share your screen with “{}”", m_application.name);
+        return format(tr("Share your screen with “{name}”"), {{"name", m_application.name}});
     }
 
     std::string description() const override
     {
         if (m_hasMonitors && m_hasWindows)
-            return "Choose a display or a window. What is shown on it will be visible to the application until it stops sharing.";
+            return tr("Choose a display or a window. What is shown on it will be visible to the application until it stops sharing.");
         if (m_hasWindows)
-            return "Choose a window. Its contents will be visible to the application until it stops sharing.";
-        return "Choose a display. Everything shown on it, including other windows, will be visible to the application until it stops sharing.";
+            return tr("Choose a window. Its contents will be visible to the application until it stops sharing.");
+        return tr("Choose a display. Everything shown on it, including other windows, will be visible to the application until it stops sharing.");
     }
 
-    std::string accept() const override { return "Share"; }
+    std::string accept() const override { return tr("Share"); }
 
     bool ready() const override { return m_current >= 0 && m_current < int(m_choices.size()); }
 
@@ -325,6 +332,14 @@ public:
     {
         const Choice &choice = m_choices[size_t(m_current)];
         return {{choice.window ? "windows" : "monitors", dbus::Variant(std::vector<std::string> {choice.name})}};
+    }
+
+    void retranslate() override
+    {
+        for (size_t i = 0; i < m_list->entries.size(); ++i) {
+            if (m_list->entries[i].section)
+                m_list->entries[i].section->setText(sectionTitle(m_choices[i].window));
+        }
     }
 
     void select(int index)
@@ -349,6 +364,8 @@ private:
         std::string icon;
     };
 
+    static std::string sectionTitle(bool window) { return window ? tr("Windows") : tr("Displays"); }
+
     double height() const
     {
         return std::min(m_list->contentHeight(), 5 * ChoiceListContent::kRowHeight + 4 * ChoiceListContent::kSpacing
@@ -372,14 +389,12 @@ public:
     explicit ComputerControlContent(const dbus::VariantMap &request)
     {
         m_agentName = stringOf(request, "agent_name");
-        if (m_agentName.empty())
-            m_agentName = "An app";
 
         m_column = addChild<ColumnLayout>();
         m_column->setSpacing(8);
         const std::pair<const char *, const char *> notes[] = {
-                {"input-mouse", "Moving the pointer or typing pauses it."},
-                {"process-stop", "Stop it at any time with the Stop button in the status bar."},
+                {"input-mouse", trNoop("Moving the pointer or typing pauses it.")},
+                {"process-stop", trNoop("Stop it at any time with the Stop button in the status bar.")},
         };
         for (const auto &[icon, text] : notes) {
             auto *row = m_column->addChild<RowLayout>();
@@ -387,23 +402,35 @@ public:
             row->setLayoutHints({.fillWidth = true, .margins = {62, 0, 0, 0}});
             auto *iconView = row->addChild<ThemeIcon>(icon, 16);
             iconView->setLayoutHints({.preferredWidth = 16, .preferredHeight = 16});
-            auto *label = row->addChild<Label>(text);
+            auto *label = row->addChild<Label>(tr(text));
             label->setLayoutHints({.fillWidth = true});
             label->setWrap(true);
             label->setFontSize(12);
+            m_notes.emplace_back(label, text);
         }
     }
 
-    std::string title() const override { return std::format("Let “{}” control this computer?", m_agentName); }
+    std::string title() const override
+    {
+        if (m_agentName.empty())
+            return tr("Let “An app” control this computer?");
+        return format(tr("Let “{name}” control this computer?"), {{"name", m_agentName}});
+    }
 
     std::string description() const override
     {
-        return "It will see your screen and use the pointer and keyboard as you would, until you stop it. It cannot answer system dialogs like this one.";
+        return tr("It will see your screen and use the pointer and keyboard as you would, until you stop it. It cannot answer system dialogs like this one.");
     }
 
-    std::string accept() const override { return "Allow"; }
+    std::string accept() const override { return tr("Allow"); }
     bool ready() const override { return true; }
     dbus::VariantMap details() const override { return {}; }
+
+    void retranslate() override
+    {
+        for (const auto &[label, text] : m_notes)
+            label->setText(tr(text));
+    }
 
     SizeF sizeHint() const override { return m_column->sizeHint(); }
     double heightForWidth(double width) const override { return m_column->heightForWidth(width); }
@@ -414,6 +441,7 @@ protected:
 private:
     std::string m_agentName;
     ColumnLayout *m_column;
+    std::vector<std::pair<Label *, const char *>> m_notes;
 };
 
 // The window's view: the layout, and any empty part of it drags the window,
@@ -557,16 +585,16 @@ void PermissionPrompt::show()
     auto *texts = header->addChild<ColumnLayout>();
     texts->setSpacing(4);
     texts->setLayoutHints({.fillWidth = true});
-    auto *title = texts->addChild<Label>(m_content->title());
-    title->setLayoutHints({.fillWidth = true});
-    title->setWrap(true);
-    title->setFontSize(14);
-    title->setWeight(600);
-    auto *description = texts->addChild<Label>(m_content->description());
-    description->setLayoutHints({.fillWidth = true});
-    description->setWrap(true);
-    description->setFontSize(12);
-    description->setColor(ColorId::DisabledText);
+    m_title = texts->addChild<Label>(m_content->title());
+    m_title->setLayoutHints({.fillWidth = true});
+    m_title->setWrap(true);
+    m_title->setFontSize(14);
+    m_title->setWeight(600);
+    m_description = texts->addChild<Label>(m_content->description());
+    m_description->setLayoutHints({.fillWidth = true});
+    m_description->setWrap(true);
+    m_description->setFontSize(12);
+    m_description->setColor(ColorId::DisabledText);
 
     m_ownedContent->setLayoutHints({.fillWidth = true});
     layout->addChild(std::move(m_ownedContent));
@@ -574,8 +602,8 @@ void PermissionPrompt::show()
     auto *buttons = layout->addChild<RowLayout>();
     buttons->setSpacing(8);
     buttons->setLayoutHints({.fillWidth = true});
-    auto *cancel = buttons->addChild<DialogButton>("Cancel");
-    cancel->onClicked = [this] {
+    m_cancel = buttons->addChild<DialogButton>(tr("Cancel"));
+    m_cancel->onClicked = [this] {
         deny();
     };
     auto *spacer = buttons->addChild<View>();
@@ -599,6 +627,20 @@ void PermissionPrompt::show()
     m_accept->setFocus();
     m_window->show();
     m_window->activate();
+
+    m_languageChanged = cutefish::ui::Application::instance()->languageChanged.connect([this] {
+        retranslate();
+    });
+}
+
+void PermissionPrompt::retranslate()
+{
+    m_window->setTitle(m_content->title());
+    m_title->setText(m_content->title());
+    m_description->setText(m_content->description());
+    m_cancel->setText(tr("Cancel"));
+    m_accept->setText(m_content->accept());
+    m_content->retranslate();
 }
 
 void PermissionPrompt::dismiss()

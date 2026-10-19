@@ -3,12 +3,14 @@
 
 #include "application.h"
 
+#include "base/i18n.h"
 #include "ui/application.h"
 
 int main(int argc, char *argv[])
 {
     cutefish::ui::Application app(argc, argv);
     app.setApplicationId("cutefish-services");
+    cutefish::i18n::setDomain("cutefish-core");
     Application services;
     return app.run();
 }

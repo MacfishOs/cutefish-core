@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/dbus.h"
+#include "base/signal.h"
 
 namespace cutefish::ui {
 class DialogButton;
@@ -20,13 +21,14 @@ class Window;
 }
 
 // One open crash window. An application dialog offers to reopen it; the
-// session restarts its own processes by itself.
+// session restarts its own processes by itself. `name` is asked again when
+// the session language changes.
 class CrashDialog
 {
 public:
     enum class Kind { Application, SessionProcess };
 
-    CrashDialog(Kind kind, const std::string &id, const std::string &name, const std::string &icon,
+    CrashDialog(Kind kind, const std::string &id, std::function<std::string()> name, const std::string &icon,
                 const std::string &fixedFont);
     ~CrashDialog();
 
@@ -52,12 +54,15 @@ public:
 private:
     class Content;
 
+    void buildContent();
+    void retranslate();
     void update();
     void setDetailsShown(bool shown);
     void accept();
 
     Kind m_kind;
     std::string m_id;
+    std::function<std::string()> m_nameLookup;
     std::string m_name;
     std::string m_icon;
     std::string m_fixedFont;
@@ -72,4 +77,5 @@ private:
     cutefish::ui::View *m_reportFrame = nullptr;
     cutefish::ui::TextArea *m_report = nullptr;
     cutefish::ui::DialogButton *m_detailsButton = nullptr;
+    cutefish::base::Subscription m_languageChanged;
 };

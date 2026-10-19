@@ -6,6 +6,8 @@
 #include <cmath>
 
 #include "base/dbus.h"
+#include "base/i18n.h"
+#include "ui/application.h"
 #include "ui/cell_layout.h"
 #include "ui/dialog_window.h"
 #include "ui/icon.h"
@@ -19,6 +21,8 @@
 
 using namespace cutefish;
 using namespace cutefish::ui;
+using cutefish::i18n::format;
+using cutefish::i18n::tr;
 
 // Wider only for the report, whose lines do not wrap.
 static constexpr double kWidth = 400;
@@ -87,11 +91,12 @@ private:
     View *m_content;
 };
 
-CrashDialog::CrashDialog(Kind kind, const std::string &id, const std::string &name, const std::string &icon,
-                         const std::string &fixedFont)
+CrashDialog::CrashDialog(Kind kind, const std::string &id, std::function<std::string()> name,
+                         const std::string &icon, const std::string &fixedFont)
     : m_kind(kind)
     , m_id(id)
-    , m_name(name)
+    , m_nameLookup(std::move(name))
+    , m_name(m_nameLookup())
     , m_icon(icon)
     , m_fixedFont(fixedFont)
 {
@@ -118,11 +123,7 @@ void CrashDialog::setDump(const Coredump &dump)
 
 void CrashDialog::show()
 {
-    const bool canReopen = !sessionProcess();
-    const std::string title = "“" + m_name + "” quit unexpectedly";
-
     m_window = std::make_unique<Window>();
-    m_window->setTitle(title);
     m_window->setSkipTaskbar(true);
     // Text lays out unhinted at every scale, so lines wrap where they always did.
     m_window->setHintedTextLayout(false);
@@ -130,6 +131,39 @@ void CrashDialog::show()
     m_window->onCloseRequested = [this] {
         close();
     };
+    m_window->addShortcut(NoModifier, key::Escape, [this] {
+        close();
+    });
+    m_window->addShortcut(NoModifier, key::Return, [this] {
+        accept();
+    });
+
+    buildContent();
+    m_window->resize({kWidth, 0});
+    m_window->setFitsContentHeight(true);
+    m_window->show();
+    m_window->activate();
+
+    m_languageChanged = ui::Application::instance()->languageChanged.connect([this] {
+        retranslate();
+    });
+}
+
+// The views are made again; the details stay shown or hidden.
+void CrashDialog::retranslate()
+{
+    if (m_finished)
+        return;
+    m_name = m_nameLookup();
+    buildContent();
+    m_window->setFitsContentHeight(true);
+}
+
+void CrashDialog::buildContent()
+{
+    const bool canReopen = !sessionProcess();
+    const std::string title = format(tr("“{name}” quit unexpectedly"), {{"name", m_name}});
+    m_window->setTitle(title);
 
     auto content = std::make_unique<Content>();
     content->setPadding(Margins::all(kMargin));
@@ -169,36 +203,25 @@ void CrashDialog::show()
     auto *buttons = content->addChild<RowLayout>();
     buttons->setSpacing(8);
     buttons->setLayoutHints({.fillWidth = true, .margins = {0, 8, 0, 0}});
-    m_detailsButton = buttons->addChild<DialogButton>("Show Details");
+    m_detailsButton = buttons->addChild<DialogButton>(m_detailsShown ? tr("Hide Details") : tr("Show Details"));
     m_detailsButton->onClicked = [this] {
         setDetailsShown(!m_detailsShown);
     };
     auto *spacer = buttons->addChild<View>();
     spacer->setLayoutHints({.fillWidth = true});
-    auto *closeButton = buttons->addChild<DialogButton>("Close");
+    auto *closeButton = buttons->addChild<DialogButton>(tr("Close"));
     closeButton->setVisible(canReopen);
     closeButton->onClicked = [this] {
         close();
     };
-    auto *acceptButton = buttons->addChild<DialogButton>(canReopen ? "Reopen" : "OK", true);
+    auto *acceptButton = buttons->addChild<DialogButton>(canReopen ? tr("Reopen") : tr("OK"), true);
     acceptButton->onClicked = [this] {
         accept();
     };
 
-    m_window->addShortcut(NoModifier, key::Escape, [this] {
-        close();
-    });
-    m_window->addShortcut(NoModifier, key::Return, [this] {
-        accept();
-    });
-
     m_window->setContentView(std::move(content));
     update();
-    m_window->resize({kWidth, 0});
-    m_window->setFitsContentHeight(true);
     acceptButton->setFocus();
-    m_window->show();
-    m_window->activate();
 }
 
 void CrashDialog::update()
@@ -206,9 +229,9 @@ void CrashDialog::update()
     if (!m_window)
         return;
 
-    std::string text = reason().empty() ? std::string() : "Reason: " + reason();
+    std::string text = reason().empty() ? std::string() : format(tr("Reason: {reason}"), {{"reason", reason()}});
     if (sessionProcess()) {
-        const std::string state = "It is restarted automatically.";
+        const std::string state = tr("It is restarted automatically.");
         text = text.empty() ? state : state + "\n" + text;
     }
     m_text->setText(text);
@@ -224,7 +247,7 @@ void CrashDialog::update()
 void CrashDialog::setDetailsShown(bool shown)
 {
     m_detailsShown = shown;
-    m_detailsButton->setText(shown ? "Hide Details" : "Show Details");
+    m_detailsButton->setText(shown ? tr("Hide Details") : tr("Show Details"));
     // The fitted size bounds the window; the new width needs room first.
     m_window->setMinimumSize({});
     m_window->setMaximumSize({16777215, 16777215});

@@ -4,8 +4,10 @@
 #include "application.h"
 
 #include "base/command_line.h"
+#include "base/i18n.h"
 #include "base/paths.h"
 #include "base/process.h"
+#include "base/session_language.h"
 #include "base/strings.h"
 #include "common/environment.h"
 #include "common/language_environment.h"
@@ -18,6 +20,7 @@
 
 // System
 #include <cerrno>
+#include <clocale>
 #include <csignal>
 #include <cstdlib>
 #include <sys/epoll.h>
@@ -106,6 +109,9 @@ Application::Application(int argc, char **argv, base::EventLoop &loop)
     // order applies LANG and LC_* in the wrong order.
     unsetenv("LC_ALL");
     importSystemdEnvironment();
+    // The language the session runs in is known only now.
+    std::setlocale(LC_ALL, "");
+    cutefish::i18n::setDomain("cutefish-core");
 
     m_startTimer.setSingleShot(true);
     m_startTimer.onTimeout = [this] {
@@ -162,6 +168,7 @@ void Application::exportSession()
     m_sessionObject->addMethod("startDesktopProcess", [this] { startDesktopProcess(); });
     m_sessionObject->publish();
     bus->requestName("org.cutefish.Session");
+    m_language = std::make_unique<base::SessionLanguage>(bus);
 }
 
 void Application::endSessionOnTerminationSignals()

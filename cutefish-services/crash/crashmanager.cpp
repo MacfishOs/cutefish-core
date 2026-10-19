@@ -11,10 +11,12 @@
 #include "base/desktop_entry.h"
 #include "base/event_loop.h"
 #include "base/file.h"
+#include "base/i18n.h"
 #include "base/strings.h"
 
 using namespace cutefish::base;
 using namespace cutefish::base::strings;
+using cutefish::i18n::tr;
 
 // What cutefish-session starts and restarts; cutefish-services cannot report itself.
 static const char *const s_sessionPrograms[] = {
@@ -40,6 +42,13 @@ static std::optional<DesktopEntry> lookupEntry(const std::string &id)
             return DesktopEntry::parse(id, path, *contents);
     }
     return std::nullopt;
+}
+
+static std::string nameOf(const std::string &id)
+{
+    if (const auto entry = lookupEntry(id))
+        return entry->name.empty() ? id : entry->name;
+    return id == "cutefish-appruntime" ? std::string(tr("Application Runtime")) : id;
 }
 
 // A helper process of the application may crash while its windows live on.
@@ -87,20 +96,15 @@ CrashDialog *CrashManager::dialogFor(const std::string &key, bool application, c
     if (const auto it = m_dialogs.find(key); it != m_dialogs.end())
         return it->second.get();
 
-    std::string name = id;
     std::string icon = "application-x-executable";
     if (const auto entry = lookupEntry(id)) {
-        if (!entry->name.empty())
-            name = entry->name;
         if (!entry->icon.empty())
             icon = entry->icon;
-    } else if (id == "cutefish-appruntime") {
-        name = "Application Runtime";
     }
 
     auto dialog = std::make_unique<CrashDialog>(
-            application ? CrashDialog::Kind::Application : CrashDialog::Kind::SessionProcess, id, name, icon,
-            m_fixedFont());
+            application ? CrashDialog::Kind::Application : CrashDialog::Kind::SessionProcess, id,
+            [id] { return nameOf(id); }, icon, m_fixedFont());
     CrashDialog *shown = dialog.get();
     dialog->onFinished = [this, key] {
         const auto it = m_dialogs.find(key);

@@ -13,6 +13,7 @@
 
 #include "base/application_registry.h"
 #include "base/event_loop.h"
+#include "base/i18n.h"
 #include "base/paths.h"
 #include "base/strings.h"
 #include "common/runtime_client.h"
@@ -32,6 +33,8 @@ namespace strings = cutefish::base::strings;
 namespace dbus = cutefish::base::dbus;
 namespace runtime = cutefish::core::runtime;
 using namespace std::chrono_literals;
+using cutefish::i18n::format;
+using cutefish::i18n::tr;
 
 static constexpr char kCompositor[] = "/usr/bin/cutefish-compositor";
 
@@ -286,21 +289,26 @@ void ProcessManager::notifyEndingStopped(Ending ending, const std::string &outco
     const auto entry = registry.byId(applicationId);
     std::string name = entry ? entry->name : std::string();
     if (name.empty())
-        name = applicationId.empty() ? "An application" : applicationId;
+        name = applicationId;
 
     std::string summary;
     switch (ending) {
     case Ending::Logout:
-        summary = "Log out cancelled";
+        summary = tr("Log out cancelled");
         break;
     case Ending::Restart:
-        summary = "Restart cancelled";
+        summary = tr("Restart cancelled");
         break;
     case Ending::Shutdown:
-        summary = "Shutdown cancelled";
+        summary = tr("Shutdown cancelled");
         break;
     }
-    const std::string body = outcome == "cancelled" ? name + " cancelled it." : name + " did not quit.";
+    const bool cancelled = outcome == "cancelled";
+    std::string body;
+    if (name.empty())
+        body = cancelled ? tr("An application cancelled it.") : tr("An application did not quit.");
+    else
+        body = format(cancelled ? tr("{name} cancelled it.") : tr("{name} did not quit."), {{"name", name}});
 
     dbus::Connection *bus = dbus::Connection::session();
     if (!bus)
@@ -310,7 +318,8 @@ void ProcessManager::notifyEndingStopped(Ending ending, const std::string &outco
     // Only a running notification server shows it; none is started for it.
     sd_bus_message_set_auto_start(notify.get(), 0);
     // The session has no desktop entry to title it.
-    notify.append(std::string("System"), uint32_t(0),
+    // TRANSLATORS: the sender of a notification from the session itself.
+    notify.append(std::string(tr("System")), uint32_t(0),
                   entry && !entry->icon.empty() ? entry->icon : std::string("system-log-out"), summary, body,
                   std::vector<std::string>(), dbus::VariantMap{{"urgency", dbus::Variant(uint8_t(1))}},
                   int32_t(-1));

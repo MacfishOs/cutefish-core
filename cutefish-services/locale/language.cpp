@@ -10,12 +10,15 @@
 #include <systemd/sd-bus.h>
 #include <unicode/uloc.h>
 
+#include "base/i18n.h"
+#include "base/session_language.h"
 #include "base/strings.h"
 #include "common/environment.h"
 #include "common/language_environment.h"
 
 using namespace cutefish::base;
 using namespace cutefish::base::strings;
+using cutefish::i18n::tr;
 namespace language = cutefish::core::language;
 
 static void removeAll(std::vector<std::string> &list, const std::string &value)
@@ -156,6 +159,12 @@ void Language::setPreferredLanguages(const std::vector<std::string> &languages)
         systemd.append(std::vector<std::string> {"LC_ALL"}, systemdEnvironment);
         m_session->send(systemd);
     }
+    // This process takes the new language itself, before its own text below;
+    // the signal reaches it only later, if at all.
+    if (applyEnvironment)
+        applyEnvironment(activationEnvironment);
+    else
+        SessionLanguage::apply(activationEnvironment);
     emitLanguageChanged();
 
     if (!primaryChanged)
@@ -164,7 +173,7 @@ void Language::setPreferredLanguages(const std::vector<std::string> &languages)
     m_notification = std::make_unique<Notification>(m_session);
     m_notification->setDesktopEntry("cutefish-settings");
     m_notification->setIconName("preferences-system");
-    m_notification->setBody("Some applications may need to be restarted for the change to take effect.");
+    m_notification->setBody(tr("Some applications may need to be restarted for the change to take effect."));
     m_notification->setTimeout(10);
     m_notification->show();
 }

@@ -10,6 +10,7 @@
 
 #include "base/dbus.h"
 #include "base/event_loop.h"
+#include "base/session_language.h"
 #include "base/timer.h"
 
 #include "processmanager.h"
@@ -42,6 +43,7 @@ private:
     cutefish::base::EventLoop& m_loop;
     std::unique_ptr<ProcessManager> m_processManager;
     std::unique_ptr<cutefish::base::dbus::Object> m_sessionObject;
+    std::unique_ptr<cutefish::base::SessionLanguage> m_language;
     cutefish::base::Timer m_startTimer;
     int m_terminationWatch = 0;
 };

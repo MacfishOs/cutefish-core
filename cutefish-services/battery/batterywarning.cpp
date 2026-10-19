@@ -6,9 +6,12 @@
 #include "upower.h"
 
 #include <cmath>
-#include <format>
+
+#include "base/i18n.h"
 
 using namespace cutefish::base;
+using cutefish::i18n::format;
+using cutefish::i18n::tr;
 
 static const char displayDevice[] = "/org/freedesktop/UPower/devices/DisplayDevice";
 
@@ -118,11 +121,11 @@ void BatteryWarning::update()
 void BatteryWarning::notify(uint32_t level)
 {
     if (level == Low)
-        m_notification.setSummary("Low Battery");
+        m_notification.setSummary(tr("Low Battery"));
     else if (level == Critical)
-        m_notification.setSummary("Battery Critically Low");
+        m_notification.setSummary(tr("Battery Critically Low"));
     else
-        m_notification.setSummary("Battery Empty");
+        m_notification.setSummary(tr("Battery Empty"));
 
     m_notification.setBody(body(level));
     m_notification.setUrgency(level == Low ? Notification::Normal : Notification::Critical);
@@ -142,9 +145,10 @@ std::string BatteryWarning::body(uint32_t level) const
 
         // UPower reports 0 until it trusts the discharge rate.
         if (time >= 60)
-            return std::format("{}% of battery remaining ({}).", percent, Battery::formatDuration(time));
+            return format(tr("{percent}% of battery remaining ({time})."),
+                          {{"percent", std::to_string(percent)}, {"time", Battery::formatDuration(time)}});
 
-        return std::format("{}% of battery remaining.", percent);
+        return format(tr("{percent}% of battery remaining."), {{"percent", std::to_string(percent)}});
     }
 
     const bool powerOff = m_criticalAction == "PowerOff";
@@ -153,22 +157,22 @@ std::string BatteryWarning::body(uint32_t level) const
 
     if (level == Critical) {
         if (powerOff)
-            return "Save your work and connect to power. The computer will shut down when the battery is nearly empty.";
+            return tr("Save your work and connect to power. The computer will shut down when the battery is nearly empty.");
         if (hibernate)
-            return "Connect to power. The computer will hibernate when the battery is nearly empty.";
+            return tr("Connect to power. The computer will hibernate when the battery is nearly empty.");
         if (suspend)
-            return "Save your work and connect to power. The computer will go to sleep when the battery is nearly empty.";
+            return tr("Save your work and connect to power. The computer will go to sleep when the battery is nearly empty.");
 
-        return "Connect to power soon.";
+        return tr("Connect to power soon.");
     }
 
     // UPower waits 20 seconds before the action and drops it once power returns.
     if (powerOff)
-        return "The computer is about to shut down. Connect to power to keep it running.";
+        return tr("The computer is about to shut down. Connect to power to keep it running.");
     if (hibernate)
-        return "The computer is about to hibernate. Connect to power to keep it running.";
+        return tr("The computer is about to hibernate. Connect to power to keep it running.");
     if (suspend)
-        return "The computer is about to go to sleep. Connect to power to keep it running.";
+        return tr("The computer is about to go to sleep. Connect to power to keep it running.");
 
-    return "Connect to power now.";
+    return tr("Connect to power now.");
 }

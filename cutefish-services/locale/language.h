@@ -46,6 +46,10 @@ public:
     // session names it.
     static std::string localeName(const std::string &code);
 
+    // Gives this process the new language variables, before its own text
+    // follows; base::SessionLanguage::apply() unless set.
+    std::function<void(const std::map<std::string, std::string> &variables)> applyEnvironment;
+
 private:
     void emitLanguageChanged();
 

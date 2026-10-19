@@ -6,10 +6,14 @@
 
 #include <chrono>
 #include <cmath>
-#include <format>
 #include <vector>
 
+#include "base/i18n.h"
+
 using namespace cutefish::base;
+using cutefish::i18n::format;
+using cutefish::i18n::tr;
+using cutefish::i18n::trNoop;
 
 static constexpr auto s_lastChargedPercentKey = "Battery/LastChargedPercent";
 static constexpr auto s_lastChargedSecsKey = "Battery/LastChargedSecs";
@@ -112,20 +116,21 @@ std::string Battery::Reading::status() const
         // until it trusts the battery's rate again.
         const int64_t time = remainingTime();
         if (time < 60)
-            return "Calculating…";
+            return tr("Calculating…");
         if (chargeState() == Charging)
-            return std::format("{} until fully charged", formatDuration(time));
-        return std::format("{} remaining", formatDuration(time));
+            return format(tr("{time} until fully charged"), {{"time", formatDuration(time)}});
+        return format(tr("{time} remaining"), {{"time", formatDuration(time)}});
     }
     case FullyCharged:
-        return "Fully charged.";
+        return tr("Fully charged.");
     case NoCharge:
         break;
     }
 
     // Plugged in, but a charge limit holds the battery where it is.
     if (upower::State(state) == upower::State::PendingCharge)
-        return thresholdEnabled ? std::format("Charging paused at {}%", percent) : "Not charging";
+        return thresholdEnabled ? format(tr("Charging paused at {percent}%"), {{"percent", std::to_string(percent)}})
+                                : tr("Not charging");
 
     return {};
 }
@@ -138,8 +143,15 @@ std::string Battery::formatDuration(int64_t seconds)
     const int64_t minutes = seconds / 60;
     const struct {
         int64_t value;
-        char unit;
-    } parts[] = {{minutes / (60 * 24), 'd'}, {minutes / 60 % 24, 'h'}, {minutes % 60, 'm'}};
+        const char *pattern;
+    } parts[] = {
+            // TRANSLATORS: days in a short battery time such as "1d 2h 5m".
+            {minutes / (60 * 24), trNoop("{n}d")},
+            // TRANSLATORS: hours in a short battery time such as "2h 5m".
+            {minutes / 60 % 24, trNoop("{n}h")},
+            // TRANSLATORS: minutes in a short battery time such as "2h 5m".
+            {minutes % 60, trNoop("{n}m")},
+    };
 
     std::string text;
     for (const auto &part : parts) {
@@ -147,7 +159,7 @@ std::string Battery::formatDuration(int64_t seconds)
             continue;
         if (!text.empty())
             text += ' ';
-        text += std::format("{}{}", part.value, part.unit);
+        text += format(tr(part.pattern), {{"n", std::to_string(part.value)}});
     }
     return text;
 }
@@ -157,9 +169,10 @@ std::string Battery::lastChargedTime() const
     // A clock set back also lands under a minute.
     const int64_t elapsed = secondsSinceEpoch() - int64_t(m_lastChargedSecs);
     if (elapsed < 60)
-        return "now";
+        // TRANSLATORS: when the battery was last fully charged, under a minute ago.
+        return tr("now");
 
-    return std::format("{} ago", formatDuration(elapsed));
+    return format(tr("{time} ago"), {{"time", formatDuration(elapsed)}});
 }
 
 bool Battery::publish(dbus::Connection *session)
