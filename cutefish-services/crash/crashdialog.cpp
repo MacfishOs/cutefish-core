@@ -256,8 +256,8 @@ void CrashDialog::reopen()
     const std::weak_ptr<bool> alive = m_alive;
     m_window->requestActivationToken([this, id = m_id, alive](const std::string &token) {
         if (base::dbus::Connection *bus = base::dbus::Connection::session()) {
-            const base::dbus::Proxy runtime(bus, "com.cutefish.AppRuntime", "/AppRuntime",
-                                            "com.cutefish.AppRuntime");
+            const base::dbus::Proxy runtime(bus, "org.cutefish.AppRuntime", "/AppRuntime",
+                                            "org.cutefish.AppRuntime");
             runtime.send("launchApplication", id, std::vector<std::string>(), token);
         }
         if (alive.lock())

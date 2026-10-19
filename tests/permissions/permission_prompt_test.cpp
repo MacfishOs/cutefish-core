@@ -63,8 +63,8 @@ protected:
     void prompt(dbus::Connection &from, const std::string &token, const std::string &kind,
                 const dbus::VariantMap &options, std::optional<Answer> &answer)
     {
-        dbus::Message call = from.newMethodCall(service->uniqueName(), "/com/cutefish/Services/Permissions",
-                                                "com.cutefish.Services.Permissions", "Prompt");
+        dbus::Message call = from.newMethodCall(service->uniqueName(), "/org/cutefish/Services/Permissions",
+                                                "org.cutefish.Services.Permissions", "Prompt");
         call.append(token, kind, std::string("cutefish-system-monitor"), std::string(), options);
         calls.push_back(from.callAsync(call, [&answer](const dbus::Reply &reply) {
             Answer result;
@@ -89,8 +89,8 @@ protected:
 
     dbus::Reply dismiss(dbus::Connection &from, const std::string &token)
     {
-        dbus::Message call = from.newMethodCall(service->uniqueName(), "/com/cutefish/Services/Permissions",
-                                                "com.cutefish.Services.Permissions", "Dismiss");
+        dbus::Message call = from.newMethodCall(service->uniqueName(), "/org/cutefish/Services/Permissions",
+                                                "org.cutefish.Services.Permissions", "Dismiss");
         call.append(token);
         std::optional<dbus::Reply> result;
         calls.push_back(from.callAsync(call, [&result](const dbus::Reply &reply) { result = reply; }));

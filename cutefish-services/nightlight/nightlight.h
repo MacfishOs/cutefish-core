@@ -23,10 +23,10 @@ public:
     // of their own.
     explicit NightLight(cutefish::base::Settings &settings,
                         Clock clock = ScheduleUtils::currentDateTime,
-                        const std::string &displayService = "com.cutefish.DisplayConfig");
+                        const std::string &displayService = "org.cutefish.DisplayConfig");
     ~NightLight() override;
 
-    // com.cutefish.Services.NightLight at /com/cutefish/Services/NightLight.
+    // org.cutefish.Services.NightLight at /org/cutefish/Services/NightLight.
     bool publish(cutefish::base::dbus::Connection *bus);
 
     // The strength, from 0 to 1.

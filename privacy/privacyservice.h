@@ -30,7 +30,7 @@ public:
     void setCameraEnabled(bool enabled);
     void setMicrophoneEnabled(bool enabled);
 
-    // Exports com.cutefish.Privacy at /com/cutefish/Privacy on the bus; false
+    // Exports org.cutefish.Privacy at /org/cutefish/Privacy on the bus; false
     // when the object cannot be added.
     bool exportTo(cutefish::base::dbus::Connection *bus);
 

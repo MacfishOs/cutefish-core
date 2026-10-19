@@ -76,7 +76,7 @@ TEST(PrivacyServiceTest, StaysUpUntilAPendingAuthorizationIsAnswered)
     // Turning the camera on while it is on changes no device.
     PrivacyService service(state.path(), 200ms);
     ASSERT_TRUE(service.exportTo(bus));
-    ASSERT_TRUE(bus->requestName("com.cutefish.Privacy"));
+    ASSERT_TRUE(bus->requestName("org.cutefish.Privacy"));
 
     bool replied = false;
     bool idleBeforeReply = false;
@@ -93,7 +93,7 @@ TEST(PrivacyServiceTest, StaysUpUntilAPendingAuthorizationIsAnswered)
     };
     deadline.start(10s);
 
-    const dbus::Proxy privacy(bus, "com.cutefish.Privacy", "/com/cutefish/Privacy", "com.cutefish.Privacy");
+    const dbus::Proxy privacy(bus, "org.cutefish.Privacy", "/org/cutefish/Privacy", "org.cutefish.Privacy");
     const dbus::PendingCall call = privacy.callAsync(
             "setCameraEnabled",
             [&](const dbus::Reply &reply) {

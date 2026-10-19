@@ -6,7 +6,7 @@
   <vendor>Cutefish</vendor>
   <vendor_url>https://github.com/cutefishos/cutefish-core</vendor_url>
 
-  <action id="com.cutefish.privacy.switch-devices">
+  <action id="org.cutefish.privacy.switch-devices">
     <description>Turn the camera or microphone on or off</description>
     <message>Authentication is required to turn the camera or microphone on or off</message>
     <defaults>

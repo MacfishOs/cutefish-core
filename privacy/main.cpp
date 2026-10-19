@@ -21,7 +21,7 @@ int main(int argc, char *argv[])
     PrivacyService service(kStateDirectory);
 
     cutefish::base::dbus::Connection *bus = cutefish::base::dbus::Connection::system(&loop);
-    if (!bus || !service.exportTo(bus) || !bus->requestName("com.cutefish.Privacy")) {
+    if (!bus || !service.exportTo(bus) || !bus->requestName("org.cutefish.Privacy")) {
         CF_WARNING(log) << "cutefish-privacy: cannot register on the system bus";
         return 1;
     }

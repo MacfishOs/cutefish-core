@@ -8,7 +8,7 @@
 
 class PermissionPrompt;
 
-// com.cutefish.Services.Permissions: shows permission prompts on behalf of
+// org.cutefish.Services.Permissions: shows permission prompts on behalf of
 // portals and services, which only speak D-Bus and never draw. One prompt per
 // token; the answer is the delayed reply to Prompt.
 class PermissionManager
@@ -20,7 +20,7 @@ public:
     PermissionManager(const PermissionManager &) = delete;
     PermissionManager &operator=(const PermissionManager &) = delete;
 
-    // /com/cutefish/Services/Permissions.
+    // /org/cutefish/Services/Permissions.
     bool publish();
 
     // The prompt a token opened, for tests; null when none is open.

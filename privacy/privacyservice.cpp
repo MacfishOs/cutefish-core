@@ -18,7 +18,7 @@ namespace dbus = cutefish::base::dbus;
 
 static const cutefish::base::LogCategory kLog("cutefish.privacy");
 
-static constexpr char kAction[] = "com.cutefish.privacy.switch-devices";
+static constexpr char kAction[] = "org.cutefish.privacy.switch-devices";
 static const char *const kCamera = "camera";
 static const char *const kMicrophone = "microphone";
 
@@ -51,7 +51,7 @@ PrivacyService::PrivacyService(const std::string &stateDirectory, std::chrono::m
 bool PrivacyService::exportTo(dbus::Connection *bus)
 {
     m_bus = bus;
-    m_object = std::make_unique<dbus::Object>(bus, "/com/cutefish/Privacy", "com.cutefish.Privacy");
+    m_object = std::make_unique<dbus::Object>(bus, "/org/cutefish/Privacy", "org.cutefish.Privacy");
     m_object->addProperty("cameraEnabled", [this] { return cameraEnabled(); });
     m_object->addProperty("microphoneEnabled", [this] { return microphoneEnabled(); });
     m_object->addMethod(

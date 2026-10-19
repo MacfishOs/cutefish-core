@@ -13,7 +13,7 @@
 
 namespace cutefish::core::runtime {
 
-static constexpr char kService[] = "com.cutefish.AppRuntime";
+static constexpr char kService[] = "org.cutefish.AppRuntime";
 static constexpr char kPath[] = "/AppRuntime";
 
 static base::dbus::Proxy appRuntime()

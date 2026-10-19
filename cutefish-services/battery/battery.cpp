@@ -167,8 +167,8 @@ bool Battery::publish(dbus::Connection *session)
     if (!powersComputer() || !session)
         return false;
 
-    auto object = std::make_unique<dbus::Object>(session, "/com/cutefish/Services/Battery",
-                                                 "com.cutefish.Services.Battery");
+    auto object = std::make_unique<dbus::Object>(session, "/org/cutefish/Services/Battery",
+                                                 "org.cutefish.Services.Battery");
     object->addMethod("refresh", [this] { m_device.send("Refresh"); });
     object->addProperty("chargeState", [this] { return int32_t(m_reading.chargeState()); });
     object->addProperty("chargePercent", [this] { return int32_t(m_reading.percent); });

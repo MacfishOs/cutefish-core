@@ -26,7 +26,7 @@ namespace cutefish::base::dbus {
 class Connection;
 }
 
-// The session's services, on the session bus as com.cutefish.Services.
+// The session's services, on the session bus as org.cutefish.Services.
 class Application
 {
 public:

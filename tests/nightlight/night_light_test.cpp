@@ -23,7 +23,7 @@ using namespace ScheduleUtils;
 using namespace std::chrono;
 using namespace std::chrono_literals;
 
-static const char displayService[] = "com.cutefish.DisplayConfig.NightLightTest";
+static const char displayService[] = "org.cutefish.DisplayConfig.NightLightTest";
 
 static Date october(int day)
 {
@@ -66,7 +66,7 @@ class FakeDisplayConfig
 public:
     explicit FakeDisplayConfig(bool tintable)
         : m_bus(dbus::Connection::open(dbus::Connection::Bus::Session))
-        , m_object(m_bus.get(), "/com/cutefish/DisplayConfig1", "com.cutefish.DisplayConfig1")
+        , m_object(m_bus.get(), "/org/cutefish/DisplayConfig1", "org.cutefish.DisplayConfig1")
     {
         m_object.addMethod("GetState", [tintable] {
             PhysicalDisplay display;
@@ -400,8 +400,8 @@ TEST_F(NightLightTest, APreviewEndsWhenItsCallerLeaves)
     ASSERT_TRUE(nightLight->publish(service));
 
     auto client = dbus::Connection::open(dbus::Connection::Bus::Session);
-    dbus::Message call = client->newMethodCall(service->uniqueName(), "/com/cutefish/Services/NightLight",
-                                                 "com.cutefish.Services.NightLight", "setPreview");
+    dbus::Message call = client->newMethodCall(service->uniqueName(), "/org/cutefish/Services/NightLight",
+                                                 "org.cutefish.Services.NightLight", "setPreview");
     call.append(true);
     client->send(call);
     ASSERT_TRUE(testsupport::waitFor(loop, [&] { return nightLight->previewing(); }));

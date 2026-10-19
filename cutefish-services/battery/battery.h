@@ -15,7 +15,7 @@
 class Battery
 {
 public:
-    // The chargeState values of com.cutefish.Services.Battery.
+    // The chargeState values of org.cutefish.Services.Battery.
     enum ChargeState { NoCharge, Charging, Discharging, FullyCharged };
 
     Battery(cutefish::base::dbus::Connection *system, const std::string &path,
@@ -28,7 +28,7 @@ public:
     // A battery of the computer, not of a mouse, a phone or a UPS.
     bool powersComputer() const;
 
-    // com.cutefish.Services.Battery at /com/cutefish/Services/Battery; one
+    // org.cutefish.Services.Battery at /org/cutefish/Services/Battery; one
     // battery at a time holds the path.
     bool publish(cutefish::base::dbus::Connection *session);
 

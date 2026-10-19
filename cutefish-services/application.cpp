@@ -72,8 +72,8 @@ Application::Application()
     published(m_nightLight->publish(m_session), "NightLight");
     published(m_permissionManager->publish(), "Permissions");
 
-    if (!m_session || !m_session->requestName("com.cutefish.Services"))
-        CF_WARNING(services::log()) << "Cannot own com.cutefish.Services";
+    if (!m_session || !m_session->requestName("org.cutefish.Services"))
+        CF_WARNING(services::log()) << "Cannot own org.cutefish.Services";
 }
 
 Application::~Application()

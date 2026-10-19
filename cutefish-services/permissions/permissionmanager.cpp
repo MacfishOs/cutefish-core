@@ -21,8 +21,8 @@ bool PermissionManager::publish()
 {
     if (!m_session)
         return false;
-    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Permissions",
-                                              "com.cutefish.Services.Permissions");
+    m_object = std::make_unique<dbus::Object>(m_session, "/org/cutefish/Services/Permissions",
+                                              "org.cutefish.Services.Permissions");
     m_object->addMethod("Prompt", "ssssa{sv}", "ua{sv}",
                         [this](dbus::MethodCall &call) {
                             prompt(call);

@@ -1,6 +1,6 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
-  <interface name="com.cutefish.AppRuntime">
+  <interface name="org.cutefish.AppRuntime">
     <!-- Launch the application with this desktop entry id. Returns 0 when the
          entry is unknown or could not be started. -->
     <method name="launchApplication">

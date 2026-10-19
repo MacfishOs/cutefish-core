@@ -154,14 +154,14 @@ void Application::exportSession()
     if (!bus)
         return;
 
-    m_sessionObject = std::make_unique<dbus::Object>(bus, "/Session", "com.cutefish.Session");
+    m_sessionObject = std::make_unique<dbus::Object>(bus, "/Session", "org.cutefish.Session");
     m_sessionObject->addMethod("logout", [this] { logout(); });
     m_sessionObject->addMethod("reboot", [this] { reboot(); });
     m_sessionObject->addMethod("powerOff", [this] { powerOff(); });
     m_sessionObject->addMethod("suspend", [this] { return suspend(); }, {{}, {"result"}});
     m_sessionObject->addMethod("startDesktopProcess", [this] { startDesktopProcess(); });
     m_sessionObject->publish();
-    bus->requestName("com.cutefish.Session");
+    bus->requestName("org.cutefish.Session");
 }
 
 void Application::endSessionOnTerminationSignals()

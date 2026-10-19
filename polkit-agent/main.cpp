@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
 
     PolKitAgentListener listener(cutefish::base::dbus::Connection::system());
 
-    if (!listener.registerAgent("/com/cutefish/PolicyKit1/AuthenticationAgent"))
+    if (!listener.registerAgent("/org/cutefish/PolicyKit1/AuthenticationAgent"))
         return -1;
 
     return app.run();

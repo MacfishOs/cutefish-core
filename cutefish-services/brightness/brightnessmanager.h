@@ -22,7 +22,7 @@ public:
     BrightnessManager(const BrightnessManager &) = delete;
     BrightnessManager &operator=(const BrightnessManager &) = delete;
 
-    // com.cutefish.Services.Brightness at /com/cutefish/Services/Brightness.
+    // org.cutefish.Services.Brightness at /org/cutefish/Services/Brightness.
     bool publish();
 
     // Legacy single-display API; acts on the internal panel, else the first adjustable display.

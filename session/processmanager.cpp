@@ -199,7 +199,7 @@ void ProcessManager::startAfterCompositorReady()
 
     // Application autostart waits for the existing external services daemon.
     if (dbus::Connection *bus = dbus::Connection::session()) {
-        m_servicesWatch = bus->watchName("com.cutefish.Services", [this](const std::string &owner) {
+        m_servicesWatch = bus->watchName("org.cutefish.Services", [this](const std::string &owner) {
             if (owner.empty())
                 return;
             m_servicesWatch = {};
@@ -250,8 +250,8 @@ void ProcessManager::endAfterApplications(Ending ending, std::function<bool()> t
         m_ending = then();
         return;
     }
-    const dbus::Message quitAll = bus->newMethodCall("com.cutefish.Applications1", "/com/cutefish/Applications1",
-                                                     "com.cutefish.Applications1", "QuitAll");
+    const dbus::Message quitAll = bus->newMethodCall("org.cutefish.Applications1", "/org/cutefish/Applications1",
+                                                     "org.cutefish.Applications1", "QuitAll");
     // No timeout: the user may take as long as they like over an unsaved document.
     m_quitAllCall = bus->callAsync(
             quitAll,
@@ -328,8 +328,8 @@ void ProcessManager::leave()
     bool switched = false;
     if (dbus::Connection *system = dbus::Connection::system()) {
         const dbus::Message switchToGreeter =
-                system->newMethodCall("com.cutefish.DisplayManager", "/com/cutefish/DisplayManager",
-                                      "com.cutefish.DisplayManager", "SwitchToGreeter");
+                system->newMethodCall("org.cutefish.DisplayManager", "/org/cutefish/DisplayManager",
+                                      "org.cutefish.DisplayManager", "SwitchToGreeter");
         const dbus::Reply reply = system->call(switchToGreeter, 15s);
         switched = !reply.isError();
         if (reply.isError() && reply.error().name != "org.freedesktop.DBus.Error.ServiceUnknown")

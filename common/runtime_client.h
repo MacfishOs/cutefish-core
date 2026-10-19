@@ -8,7 +8,7 @@
 
 #include "common/environment.h"
 
-// The session's application runtime, com.cutefish.AppRuntime, as the other
+// The session's application runtime, org.cutefish.AppRuntime, as the other
 // core processes use it. Calls block for at most five seconds.
 namespace cutefish::core::runtime {
 

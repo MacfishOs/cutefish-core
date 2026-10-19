@@ -15,7 +15,7 @@
 
 using namespace cutefish::base;
 
-static constexpr char kService[] = "com.cutefish.AppRuntime";
+static constexpr char kService[] = "org.cutefish.AppRuntime";
 static constexpr char kPath[] = "/AppRuntime";
 
 namespace {

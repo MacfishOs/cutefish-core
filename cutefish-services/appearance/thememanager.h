@@ -28,7 +28,7 @@ public:
     ThemeManager(const ThemeManager &) = delete;
     ThemeManager &operator=(const ThemeManager &) = delete;
 
-    // com.cutefish.Services.Appearance at /com/cutefish/Services/Appearance.
+    // org.cutefish.Services.Appearance at /org/cutefish/Services/Appearance.
     bool publish();
 
     bool isDarkMode();

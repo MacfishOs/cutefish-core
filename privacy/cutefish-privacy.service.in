@@ -3,7 +3,7 @@ Description=Cutefish camera and microphone switches
 
 [Service]
 Type=dbus
-BusName=com.cutefish.Privacy
+BusName=org.cutefish.Privacy
 ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/cutefish-privacy
 StateDirectory=cutefish-privacy
 Restart=on-failure

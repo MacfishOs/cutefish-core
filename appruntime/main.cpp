@@ -10,7 +10,7 @@
 
 namespace dbus = cutefish::base::dbus;
 
-static constexpr char kService[] = "com.cutefish.AppRuntime";
+static constexpr char kService[] = "org.cutefish.AppRuntime";
 static constexpr char kPath[] = "/AppRuntime";
 
 // launchApplication and launchCommand also come without an activation token,

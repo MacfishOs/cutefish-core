@@ -46,8 +46,8 @@ bool Language::publish()
 {
     if (!m_session)
         return false;
-    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Language",
-                                              "com.cutefish.Services.Language");
+    m_object = std::make_unique<dbus::Object>(m_session, "/org/cutefish/Services/Language",
+                                              "org.cutefish.Services.Language");
     m_object->addMethod("setLanguage", [this](const std::string &value) { setLanguage(value); },
                         {{"value"}, {}});
     m_object->addMethod("setPreferredLanguages",

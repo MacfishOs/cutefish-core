@@ -32,8 +32,8 @@ LoginBackground::LoginBackground(WallpaperManager &wallpapers, dbus::Connection 
 
 void LoginBackground::send()
 {
-    const dbus::Proxy manager(m_system, "com.cutefish.DisplayManager", "/com/cutefish/DisplayManager",
-                              "com.cutefish.DisplayManager");
+    const dbus::Proxy manager(m_system, "org.cutefish.DisplayManager", "/org/cutefish/DisplayManager",
+                              "org.cutefish.DisplayManager");
     // Under another display manager there is no one to answer.
     const auto done = [](const dbus::Reply &reply) {
         if (reply.isError() && reply.error().name != "org.freedesktop.DBus.Error.ServiceUnknown")

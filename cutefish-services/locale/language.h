@@ -30,7 +30,7 @@ public:
     Language(const Language &) = delete;
     Language &operator=(const Language &) = delete;
 
-    // com.cutefish.Services.Language at /com/cutefish/Services/Language.
+    // org.cutefish.Services.Language at /org/cutefish/Services/Language.
     bool publish();
 
     std::string languageCode() const;

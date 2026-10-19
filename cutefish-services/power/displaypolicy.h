@@ -28,7 +28,7 @@ public:
     // Without `idle`, as in tests, the caller reports idleness itself.
     DisplayPolicy(WaylandIdle *idle, BrightnessManager *brightness,
                   cutefish::base::dbus::Connection *session, cutefish::base::dbus::Connection *system,
-                  const std::string &displayService = "com.cutefish.DisplayConfig");
+                  const std::string &displayService = "org.cutefish.DisplayConfig");
     ~DisplayPolicy();
 
     DisplayPolicy(const DisplayPolicy &) = delete;

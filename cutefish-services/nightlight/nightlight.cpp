@@ -43,8 +43,8 @@ bool NightLight::publish(dbus::Connection *bus)
     if (!bus)
         return false;
     m_bus = bus;
-    m_object = std::make_unique<dbus::Object>(bus, "/com/cutefish/Services/NightLight",
-                                              "com.cutefish.Services.NightLight");
+    m_object = std::make_unique<dbus::Object>(bus, "/org/cutefish/Services/NightLight",
+                                              "org.cutefish.Services.NightLight");
     dbus::Object &object = *m_object;
     object.addProperty("enabled", [this] { return enabled(); });
     object.addProperty("temperature", [this] { return m_temperature; });

@@ -53,8 +53,8 @@ bool PowerManager::publish()
 {
     if (!m_session)
         return false;
-    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Power",
-                                              "com.cutefish.Services.Power");
+    m_object = std::make_unique<dbus::Object>(m_session, "/org/cutefish/Services/Power",
+                                              "org.cutefish.Services.Power");
     m_object->addMethod("setBatteryScreenOff", [this](int32_t value) { setBatteryScreenOff(value); },
                         {{"value"}, {}});
     m_object->addMethod("setACScreenOff", [this](int32_t value) { setACScreenOff(value); }, {{"value"}, {}});

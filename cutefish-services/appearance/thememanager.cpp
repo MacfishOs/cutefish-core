@@ -89,8 +89,8 @@ bool ThemeManager::publish()
 {
     if (!m_session)
         return false;
-    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Appearance",
-                                              "com.cutefish.Services.Appearance");
+    m_object = std::make_unique<dbus::Object>(m_session, "/org/cutefish/Services/Appearance",
+                                              "org.cutefish.Services.Appearance");
     dbus::Object &o = *m_object;
     o.addMethod("setDarkMode", [this](bool value) { setDarkMode(value); }, {{"darkMode"}, {}});
     o.addMethod("setDarkModeSchedule", [this](int32_t value) { setDarkModeSchedule(value); }, {{"schedule"}, {}});

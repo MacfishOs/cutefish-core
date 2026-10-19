@@ -27,7 +27,7 @@ protected:
         service = dbus::Connection::open(dbus::Connection::Bus::Session, &loop);
         client = dbus::Connection::open(dbus::Connection::Bus::Session, &loop);
         ASSERT_TRUE(service && client);
-        object = std::make_unique<dbus::Object>(service.get(), "/test", "com.cutefish.Test");
+        object = std::make_unique<dbus::Object>(service.get(), "/test", "org.cutefish.Test");
         object->addMethod("Echo", [](const std::string &text) { return text; });
         object->addMethod("Hold", "", "", [this](dbus::MethodCall &call) {
             held.push_back(call);
@@ -37,7 +37,7 @@ protected:
 
     dbus::Message call(const std::string &method) const
     {
-        return client->newMethodCall(service->uniqueName(), "/test", "com.cutefish.Test", method);
+        return client->newMethodCall(service->uniqueName(), "/test", "org.cutefish.Test", method);
     }
 
     bool runUntil(const std::function<bool()> &condition)

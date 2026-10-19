@@ -25,7 +25,7 @@ public:
     PowerManager(const PowerManager &) = delete;
     PowerManager &operator=(const PowerManager &) = delete;
 
-    // com.cutefish.Services.Power at /com/cutefish/Services/Power.
+    // org.cutefish.Services.Power at /org/cutefish/Services/Power.
     bool publish();
 
     void setBatteryScreenOff(int timeout);

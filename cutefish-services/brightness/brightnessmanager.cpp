@@ -123,8 +123,8 @@ BrightnessManager::BrightnessManager(dbus::Connection *session, dbus::Connection
     };
     if (m_session) {
         dbus::MatchRule rule;
-        rule.path = "/com/cutefish/DisplayConfig1";
-        rule.interface = "com.cutefish.DisplayConfig1";
+        rule.path = "/org/cutefish/DisplayConfig1";
+        rule.interface = "org.cutefish.DisplayConfig1";
         rule.member = "StateChanged";
         m_displayStateChanged = m_session->subscribe(rule, [this](const dbus::Message &) {
             m_rescanTimer.start();
@@ -146,8 +146,8 @@ bool BrightnessManager::publish()
 {
     if (!m_session)
         return false;
-    m_object = std::make_unique<dbus::Object>(m_session, "/com/cutefish/Services/Brightness",
-                                              "com.cutefish.Services.Brightness");
+    m_object = std::make_unique<dbus::Object>(m_session, "/org/cutefish/Services/Brightness",
+                                              "org.cutefish.Services.Brightness");
     dbus::Object &object = *m_object;
     object.addMethod("setValue", [this](int32_t value) { setValue(value); }, {{"value"}, {}});
     object.addMethod("displays", [this] { return displays(); });
