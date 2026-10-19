@@ -49,8 +49,16 @@ public:
     // Gives this process the new language variables, before its own text
     // follows; base::SessionLanguage::apply() unless set.
     std::function<void(const std::map<std::string, std::string> &variables)> applyEnvironment;
+    // Asks cutefish-locales for a locale the system lacks; `done` tells
+    // whether it is there now.
+    std::function<cutefish::base::dbus::PendingCall(const std::string &locale, std::function<void(bool)> done)>
+            generateLocale;
 
 private:
+    void publishEnvironment();
+    // A primary language whose locale is missing has it generated, then
+    // programs get the variables again, now with its dates and numbers.
+    void prepareLocale();
     void emitLanguageChanged();
 
     cutefish::base::Settings &m_settings;
@@ -58,6 +66,7 @@ private:
     Appearance m_appearance;
     std::unique_ptr<cutefish::base::dbus::Object> m_object;
     std::unique_ptr<Notification> m_notification;
+    cutefish::base::dbus::PendingCall m_localeCall;
 };
 
 #endif

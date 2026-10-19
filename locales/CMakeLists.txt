@@ -1,0 +1,24 @@
+project(cutefish-locales)
+set(TARGET cutefish-locales)
+
+set(SOURCES
+    localesservice.cpp
+    localesservice.h
+    main.cpp
+)
+
+add_executable(${TARGET} ${SOURCES})
+target_link_libraries(${TARGET}
+    Cutefish::ToolkitBase
+    cutefish-core-common
+)
+
+configure_file(org.cutefish.Locales.service.in org.cutefish.Locales.service @ONLY)
+configure_file(cutefish-locales.service.in cutefish-locales.service @ONLY)
+
+install(TARGETS ${TARGET} DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
+install(FILES org.cutefish.Locales.conf DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/system.d)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.cutefish.Locales.service
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/dbus-1/system-services)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/cutefish-locales.service DESTINATION lib/systemd/system)
+install(FILES org.cutefish.locales.policy DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/polkit-1/actions)

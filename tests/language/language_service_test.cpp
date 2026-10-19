@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -99,6 +101,37 @@ TEST(LanguageServiceTest, NotificationsOnlyForPrimaryChanges)
     Settings saved(directory.path() + "/services.conf");
     EXPECT_EQ(saved.stringValue("Language/language"), "de_DE");
     EXPECT_EQ(saved.stringListValue("Language/preferredLanguages"), std::vector<std::string> {"de_DE"});
+}
+
+TEST(LanguageServiceTest, MissingLocaleIsGeneratedThenPublishedAgain)
+{
+    file::TemporaryDirectory directory("/tmp", "language-test");
+    ASSERT_TRUE(directory.isValid());
+
+    Settings settings(directory.path() + "/services.conf");
+    settings.setValue("Language/language", "en_US");
+    settings.sync();
+
+    Language language(settings, nullptr, {});
+    int published = 0;
+    language.applyEnvironment = [&published](const std::map<std::string, std::string> &) { ++published; };
+    std::vector<std::string> requested;
+    std::function<void(bool)> finish;
+    language.generateLocale = [&](const std::string &locale, std::function<void(bool)> done) {
+        requested.push_back(locale);
+        finish = std::move(done);
+        return dbus::PendingCall();
+    };
+
+    // Kalaallisut: a locale no test system has generated.
+    language.setPreferredLanguages({"kl_GL", "en_US"});
+    EXPECT_EQ(published, 1);
+    ASSERT_EQ(requested, std::vector<std::string> {"kl_GL.UTF-8"});
+
+    finish(false);
+    EXPECT_EQ(published, 1);
+    finish(true);
+    EXPECT_EQ(published, 2);
 }
 
 TEST(LanguageServiceTest, NamesLocalesAsTheSessionDoes)

@@ -3,7 +3,7 @@
 
 #include "common/language_environment.h"
 
-#include "base/file.h"
+#include "base/locale.h"
 #include "base/paths.h"
 #include "base/settings.h"
 #include "base/strings.h"
@@ -15,7 +15,7 @@
 #include <cstring>
 #include <langinfo.h>
 #include <locale.h>
-#include <sstream>
+#include <unistd.h>
 
 namespace cutefish::core::language {
 
@@ -68,13 +68,18 @@ static std::string utf8Locale(std::string name)
     return name;
 }
 
-static bool isAvailable(const std::string& name)
+// A locale generated while this process runs is not in the archive it mapped,
+// and the C library remembers a failed lookup; cutefish-locales generates
+// directories, which name it either way.
+bool isAvailable(const std::string& name)
 {
     locale_t locale = newlocale(LC_ALL_MASK, name.c_str(), nullptr);
-    if (!locale)
-        return false;
-    freelocale(locale);
-    return true;
+    if (locale) {
+        freelocale(locale);
+        return true;
+    }
+    const std::string directory = strings::replaceAll(name, ".UTF-8", ".utf8");
+    return ::access(("/usr/lib/locale/" + directory + "/LC_CTYPE").c_str(), F_OK) == 0;
 }
 
 static bool isUtf8Locale(const std::string& name)
@@ -125,18 +130,7 @@ static std::string valueOf(const Environment& environment, const std::string& na
 
 std::string systemLanguage()
 {
-    std::string language;
-    if (const auto contents = base::file::read("/etc/locale.gen")) {
-        std::istringstream lines(*contents);
-        std::string line;
-        while (std::getline(lines, line)) {
-            if (line.starts_with('#') || strings::trimmed(line).empty())
-                continue;
-            const std::string first = line.substr(0, line.find(' '));
-            language = first.substr(0, first.find('.'));
-        }
-    }
-    return language.empty() ? "en_US" : language;
+    return base::Locale::systemLanguage();
 }
 
 std::vector<std::string> preferredLanguages()
@@ -153,6 +147,11 @@ std::vector<std::string> preferredLanguages()
     }
     removeDuplicates(codes);
     return codes;
+}
+
+std::string localeFor(const std::string& code)
+{
+    return utf8Locale(posixLanguage(code));
 }
 
 std::vector<std::string> translationLanguages(const std::vector<std::string>& codes)

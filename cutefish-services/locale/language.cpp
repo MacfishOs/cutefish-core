@@ -60,7 +60,11 @@ bool Language::publish()
     m_object->addProperty("languageCode", [this] { return languageCode(); });
     m_object->addProperty("environment", [this] { return environment(); });
     m_object->addSignal("languageChanged", "");
-    return m_object->publish();
+    if (!m_object->publish())
+        return false;
+    // A language picked before its locale was there, or on another system.
+    prepareLocale();
+    return true;
 }
 
 std::string Language::languageCode() const
@@ -141,6 +145,22 @@ void Language::setPreferredLanguages(const std::vector<std::string> &languages)
     if (m_appearance.updateFontConfig)
         m_appearance.updateFontConfig();
 
+    publishEnvironment();
+    prepareLocale();
+
+    if (!primaryChanged)
+        return;
+
+    m_notification = std::make_unique<Notification>(m_session);
+    m_notification->setDesktopEntry("cutefish-settings");
+    m_notification->setIconName("preferences-system");
+    m_notification->setBody(tr("Some applications may need to be restarted for the change to take effect."));
+    m_notification->setTimeout(10);
+    m_notification->show();
+}
+
+void Language::publishEnvironment()
+{
     const std::map<std::string, std::string> activationEnvironment = environment();
     std::vector<std::string> systemdEnvironment;
     for (const auto &[name, value] : activationEnvironment) {
@@ -166,16 +186,18 @@ void Language::setPreferredLanguages(const std::vector<std::string> &languages)
     else
         SessionLanguage::apply(activationEnvironment);
     emitLanguageChanged();
+}
 
-    if (!primaryChanged)
+void Language::prepareLocale()
+{
+    const std::string code = languageCode();
+    const std::string locale = language::localeFor(code);
+    if (!generateLocale || language::isAvailable(locale))
         return;
-
-    m_notification = std::make_unique<Notification>(m_session);
-    m_notification->setDesktopEntry("cutefish-settings");
-    m_notification->setIconName("preferences-system");
-    m_notification->setBody(tr("Some applications may need to be restarted for the change to take effect."));
-    m_notification->setTimeout(10);
-    m_notification->show();
+    m_localeCall = generateLocale(locale, [this, code](bool generated) {
+        if (generated && code == languageCode())
+            publishEnvironment();
+    });
 }
 
 void Language::emitLanguageChanged()

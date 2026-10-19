@@ -22,6 +22,7 @@
 #include "ui/theme.h"
 #include "log.h"
 
+#include <chrono>
 #include <iterator>
 #include <string>
 #include <sys/stat.h>
@@ -48,6 +49,19 @@ Application::Application()
     // The crash dialogs and permission prompts in this process follow too.
     m_language->applyEnvironment = [](const std::map<std::string, std::string> &variables) {
         ui::Application::instance()->setLanguageEnvironment(variables);
+    };
+    m_language->generateLocale = [this](const std::string &locale, std::function<void(bool)> done) {
+        dbus::Proxy locales(m_system, "org.cutefish.Locales", "/org/cutefish/Locales", "org.cutefish.Locales");
+        // Generating takes a second or two per locale.
+        locales.setTimeout(std::chrono::minutes(2));
+        return locales.callAsync(
+                "generate",
+                [done = std::move(done)](const dbus::Reply &reply) {
+                    if (reply.isError())
+                        CF_WARNING(services::log()) << "Cannot generate the locale:" << reply.error().message;
+                    done(!reply.isError());
+                },
+                std::vector<std::string> {locale});
     };
     m_clipboard = std::make_unique<Clipboard>();
     m_powerManager = std::make_unique<PowerManager>(m_powerSupply.get(), m_brightnessManager.get(),
