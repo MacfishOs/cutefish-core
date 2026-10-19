@@ -4,10 +4,10 @@ The Cutefish session, system services and their helpers.
 
 ## Dependencies
 
-cutefish-toolkit, Qt 6, libsystemd, ICU, Wayland development libraries,
-wayland-protocols (>= 1.39), Polkit, Fontconfig and FreeType. The screen
-recorder also needs FFmpeg, libva, libdrm, GBM and PipeWire; the tests need
-GoogleTest.
+cutefish-toolkit, the display client of cutefish-framework, libsystemd, ICU,
+Fontconfig, Wayland development libraries and wayland-protocols (>= 1.39).
+The screen recorder also needs FFmpeg, libva, libdrm, GBM and PipeWire; the
+tests need GoogleTest.
 
 ## Build
 
