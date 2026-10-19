@@ -16,7 +16,7 @@ static const char s_message[] =
         "#0  0x00007fe7192a069c n/a (libc.so.6 + 0x9469c)\n"
         "#1  0x00007fe71924bc42 raise (libc.so.6 + 0x3fc42)\n"
         "#4  0x00007fe7198dcd32 _ZNK14QMessageLogger5fatalEPKcz (libQt6Core.so.6 + 0xdcd32)\n"
-        "#10 0x00005650c8d33206 main (/home/reion/align/svgrender/build/svgrender + 0x1206)\n"
+        "#10 0x00005650c8d33206 main (/usr/local/bin/svgrender + 0x1206)\n"
         "#11 0x0000000000000000 n/a (n/a + 0x0)\n"
         "\n"
         "Stack trace of thread 2112056:\n"
@@ -34,7 +34,7 @@ TEST(CoredumpTest, ParsesThreadsAndFrames)
     EXPECT_EQ(threads[0].frames[0].module, "libc.so.6");
     EXPECT_EQ(threads[0].frames[1].function, "raise");
     EXPECT_EQ(threads[0].frames[2].function, "QMessageLogger::fatal(char const*, ...) const");
-    EXPECT_EQ(threads[0].frames[3].module, "/home/reion/align/svgrender/build/svgrender");
+    EXPECT_EQ(threads[0].frames[3].module, "/usr/local/bin/svgrender");
     EXPECT_EQ(threads[0].frames[4].module, "");
     EXPECT_EQ(threads[1].frames.size(), 2u);
 }
