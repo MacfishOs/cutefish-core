@@ -43,8 +43,6 @@ public:
     void setContinuousCorners(bool value);
 
     std::string systemFont();
-    bool backgroundVisible() const;
-    void setBackgroundVisible(bool value);
     void setSystemFont(const std::string &fontFamily);
 
     std::string systemFixedFont();

@@ -43,16 +43,12 @@ public:
     std::string backgroundColor() const;
     void setBackgroundColor(const std::string &color);
 
-    bool backgroundVisible() const;
-    void setBackgroundVisible(bool visible);
-
     cutefish::base::Signal<std::string> wallpaperChanged;
     cutefish::base::Signal<> userWallpapersChanged;
     cutefish::base::Signal<> wallpaperFoldersChanged;
     cutefish::base::Signal<std::string> wallpaperFolderImagesChanged;
     cutefish::base::Signal<> backgroundTypeChanged;
     cutefish::base::Signal<> backgroundColorChanged;
-    cutefish::base::Signal<> backgroundVisibleChanged;
 
 private:
     template<typename T>
@@ -68,7 +64,6 @@ private:
     // The copies being made, by folder.
     std::map<std::string, cutefish::base::Job> m_syncingFolders;
 
-    bool m_backgroundVisible = true;
     int m_backgroundType = 0;
     std::string m_backgroundColor;
 };

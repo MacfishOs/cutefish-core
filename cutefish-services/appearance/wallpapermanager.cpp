@@ -181,7 +181,6 @@ static std::string importUserWallpaper(const std::string &path)
 WallpaperManager::WallpaperManager(Settings &settings)
     : m_settings(settings)
 {
-    m_backgroundVisible = true;
     m_wallpaperPath = m_settings.stringValue("Appearance/Wallpaper", "/usr/share/backgrounds/cutefishos/default.jpg");
     // A folder stays in the list even when its source is gone: what the list
     // shows is the copy taken when the folder was added.
@@ -228,20 +227,6 @@ void WallpaperManager::write(const std::string &key, const T &value)
 {
     m_settings.setValue("Appearance/" + key, value);
     m_settings.sync();
-}
-
-bool WallpaperManager::backgroundVisible() const
-{
-    return m_backgroundVisible;
-}
-
-void WallpaperManager::setBackgroundVisible(bool value)
-{
-    if (m_backgroundVisible == value)
-        return;
-
-    m_backgroundVisible = value;
-    backgroundVisibleChanged.emit();
 }
 
 std::string WallpaperManager::wallpaper() const

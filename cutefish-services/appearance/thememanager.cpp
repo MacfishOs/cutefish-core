@@ -43,9 +43,6 @@ ThemeManager::ThemeManager(Settings &settings, dbus::Connection *session, dbus::
     m_subscriptions.push_back(wallpapers.backgroundColorChanged.connect([this] {
         emitSignal("backgroundColorChanged");
     }));
-    m_subscriptions.push_back(wallpapers.backgroundVisibleChanged.connect([this] {
-        emitSignal("backgroundVisibleChanged");
-    }));
 
     // init value
     m_continuousCorners = m_settings.boolValue("Appearance/ContinuousCorners", true);
@@ -99,8 +96,6 @@ bool ThemeManager::publish()
     o.addMethod("setDarkModeSchedule", [this](int32_t value) { setDarkModeSchedule(value); }, {{"schedule"}, {}});
     o.addMethod("setContinuousCorners", [this](bool value) { setContinuousCorners(value); },
                 {{"continuousCorners"}, {}});
-    o.addMethod("setBackgroundVisible", [this](bool value) { setBackgroundVisible(value); },
-                {{"BackgroundVisible"}, {}});
     o.addMethod("setSystemFont", [this](const std::string &value) { setSystemFont(value); }, {{"fontFamily"}, {}});
     o.addMethod("setSystemFixedFont", [this](const std::string &value) { setSystemFixedFont(value); },
                 {{"fontFamily"}, {}});
@@ -130,7 +125,6 @@ bool ThemeManager::publish()
     o.addProperty("isDarkMode", [this] { return isDarkMode(); });
     o.addProperty("darkModeSchedule", [this] { return int32_t(darkModeSchedule()); });
     o.addProperty("continuousCorners", [this] { return continuousCorners(); });
-    o.addProperty("backgroundVisible", [this] { return backgroundVisible(); });
     o.addProperty("systemFont", [this] { return systemFont(); });
     o.addProperty("systemFixedFont", [this] { return systemFixedFont(); });
     o.addProperty("systemFontPointSize", [this] { return systemFontPointSize(); });
@@ -151,7 +145,6 @@ bool ThemeManager::publish()
     o.addSignal("wallpaperFoldersChanged", "");
     o.addSignal("wallpaperFolderImagesChanged", "s");
     o.addSignal("continuousCornersChanged", "b");
-    o.addSignal("backgroundVisibleChanged", "");
     o.addSignal("accentColorChanged", "i");
     o.addSignal("backgroundTypeChanged", "");
     o.addSignal("backgroundColorChanged", "");
@@ -212,16 +205,6 @@ void ThemeManager::setContinuousCorners(bool value)
     write("ContinuousCorners", m_continuousCorners);
 
     emitSignal("continuousCornersChanged", m_continuousCorners);
-}
-
-bool ThemeManager::backgroundVisible() const
-{
-    return m_wallpaperManager->backgroundVisible();
-}
-
-void ThemeManager::setBackgroundVisible(bool value)
-{
-    m_wallpaperManager->setBackgroundVisible(value);
 }
 
 int ThemeManager::accentColor()
