@@ -13,14 +13,14 @@ class BatteryWarning;
 class BrightnessManager;
 class Clipboard;
 class CrashManager;
-class IdleManager;
 class Language;
 class NightLight;
 class PermissionManager;
 class PowerManager;
+class PowerSupply;
 class ProxyService;
 class ThemeManager;
-class UPowerManager;
+class WaylandIdle;
 
 namespace cutefish::base::dbus {
 class Connection;
@@ -46,10 +46,10 @@ private:
     cutefish::base::dbus::Connection *m_system;
     // ~/.config/cutefish/services.conf, which every part shares.
     cutefish::base::Settings m_settings;
-    std::unique_ptr<IdleManager> m_idleManager;
+    std::unique_ptr<WaylandIdle> m_idle;
     std::unique_ptr<ThemeManager> m_themeManager;
     std::unique_ptr<BrightnessManager> m_brightnessManager;
-    std::unique_ptr<UPowerManager> m_upowerManager;
+    std::unique_ptr<PowerSupply> m_powerSupply;
     std::unique_ptr<BatteryWarning> m_batteryWarning;
     std::unique_ptr<Language> m_language;
     std::unique_ptr<Clipboard> m_clipboard;

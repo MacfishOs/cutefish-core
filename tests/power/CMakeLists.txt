@@ -14,9 +14,7 @@ add_executable(power_policy_test power_policy_test.cpp
     ${SERVICE_DIR}/log.cpp
     ${SERVICE_DIR}/brightness/brightnessmanager.cpp
     ${SERVICE_DIR}/brightness/ddcworker.cpp
-    ${SERVICE_DIR}/power/action.cpp
-    ${SERVICE_DIR}/power/dimdisplayaction.cpp
-    ${SERVICE_DIR}/power/idlemanager.cpp)
+    ${SERVICE_DIR}/power/displaypolicy.cpp)
 target_include_directories(power_policy_test PRIVATE ${SERVICE_DIR} ${SERVICE_DIR}/power
     ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(power_policy_test PRIVATE Cutefish::DisplayClient cutefish-idle-backend cutefish-core-common

@@ -37,11 +37,9 @@ add_executable(${TARGET}
     battery/battery.h
     battery/batterywarning.cpp
     battery/batterywarning.h
-    battery/power.h
-    battery/upowerdevice.cpp
-    battery/upowerdevice.h
-    battery/upowermanager.cpp
-    battery/upowermanager.h
+    battery/powersupply.cpp
+    battery/powersupply.h
+    battery/upower.h
     brightness/brightnessmanager.cpp
     brightness/brightnessmanager.h
     brightness/ddcworker.cpp
@@ -62,12 +60,8 @@ add_executable(${TARGET}
     permissions/permissionmanager.h
     permissions/permissionprompt.cpp
     permissions/permissionprompt.h
-    power/action.cpp
-    power/action.h
-    power/dimdisplayaction.cpp
-    power/dimdisplayaction.h
-    power/idlemanager.cpp
-    power/idlemanager.h
+    power/displaypolicy.cpp
+    power/displaypolicy.h
     power/powermanager.cpp
     power/powermanager.h
     proxy/proxyservice.cpp

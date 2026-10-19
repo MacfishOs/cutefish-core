@@ -3,7 +3,7 @@
 
 #include "batterywarning.h"
 #include "battery.h"
-#include "power.h"
+#include "upower.h"
 
 #include <cmath>
 #include <format>
@@ -22,8 +22,8 @@ static int64_t integer(const dbus::Variant &value)
 }
 
 BatteryWarning::BatteryWarning(dbus::Connection *system, dbus::Connection *session)
-    : m_upower(system, UP_DBUS_SERVICE, UP_DBUS_PATH, UP_DBUS_INTERFACE)
-    , m_device(system, UP_DBUS_SERVICE, displayDevice, UP_DBUS_INTERFACE_DEVICE)
+    : m_upower(system, upower::service, upower::path, upower::interface)
+    , m_device(system, upower::service, displayDevice, upower::deviceInterface)
     , m_notification(session)
 {
     m_notification.setDesktopEntry("cutefish-settings");

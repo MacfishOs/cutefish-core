@@ -1,7 +1,7 @@
 #include "powermanager.h"
 
-#include "../battery/upowermanager.h"
-#include "dimdisplayaction.h"
+#include "../battery/powersupply.h"
+#include "displaypolicy.h"
 
 #include <algorithm>
 
@@ -19,32 +19,32 @@ static int readTimeout(const Settings &settings, const std::string &key, int fal
     return settings.contains(key) ? normalizedTimeout(int(settings.intValue(key))) : fallback;
 }
 
-PowerManager::PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness, IdleManager *idle,
+PowerManager::PowerManager(PowerSupply *powerSupply, BrightnessManager *brightness, WaylandIdle *idle,
                            Settings &settings, dbus::Connection *session, dbus::Connection *system)
     : m_settings(settings)
     , m_session(session)
-    , m_upowerManager(upowerManager)
-    , m_dimDisplayAction(std::make_unique<DimDisplayAction>(idle, brightness, session, system))
+    , m_powerSupply(powerSupply)
+    , m_displayPolicy(std::make_unique<DisplayPolicy>(idle, brightness, session, system))
 {
     loadSettings();
 
-    m_onBattery = m_upowerManager && m_upowerManager->onBattery();
+    m_onBattery = m_powerSupply && m_powerSupply->onBattery();
 
-    if (m_upowerManager) {
-        m_subscriptions.push_back(m_upowerManager->onBatteryChanged.connect([this] {
-            onBatteryChanged();
+    if (m_powerSupply) {
+        m_subscriptions.push_back(m_powerSupply->powerSourceChanged.connect([this] {
+            onPowerSourceChanged();
         }));
-        m_subscriptions.push_back(m_upowerManager->lidClosedChanged.connect([this] {
-            onLidClosedChanged();
+        m_subscriptions.push_back(m_powerSupply->lidChanged.connect([this] {
+            onLidChanged();
         }));
 
-        m_dimDisplayAction->setLidPresent(m_upowerManager->lidIsPresent());
+        m_displayPolicy->setLidPresent(m_powerSupply->hasLid());
     }
 
     applyPolicy();
 
-    if (m_upowerManager && m_upowerManager->lidIsClosed())
-        m_dimDisplayAction->handleLidClosed();
+    if (m_powerSupply && m_powerSupply->lidClosed())
+        m_displayPolicy->handleLidClosed();
 }
 
 PowerManager::~PowerManager() = default;
@@ -78,7 +78,7 @@ void PowerManager::applyPolicy()
     // A delay of zero keeps the system awake while the display is off.
     const int suspendDelay = m_onBattery ? 300 : (m_acPreventSleep ? 0 : 900);
 
-    m_dimDisplayAction->setPolicy(timeout, suspendDelay);
+    m_displayPolicy->setPolicy(timeout, suspendDelay);
 }
 
 template<typename T>
@@ -115,19 +115,19 @@ void PowerManager::setDimDisplayTimeout(int timeout)
     setACScreenOff(timeout);
 }
 
-void PowerManager::onBatteryChanged()
+void PowerManager::onPowerSourceChanged()
 {
-    m_onBattery = m_upowerManager && m_upowerManager->onBattery();
+    m_onBattery = m_powerSupply && m_powerSupply->onBattery();
     applyPolicy();
 }
 
-void PowerManager::onLidClosedChanged()
+void PowerManager::onLidChanged()
 {
-    if (!m_upowerManager)
+    if (!m_powerSupply)
         return;
 
-    if (m_upowerManager->lidIsClosed())
-        m_dimDisplayAction->handleLidClosed();
+    if (m_powerSupply->lidClosed())
+        m_displayPolicy->handleLidClosed();
     else
-        m_dimDisplayAction->handleLidOpened();
+        m_displayPolicy->handleLidOpened();
 }

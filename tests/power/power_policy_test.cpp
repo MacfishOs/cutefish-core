@@ -16,7 +16,7 @@
 #include "base/dbus.h"
 #include "base/event_loop.h"
 #include "cutefish/display/display_types.h"
-#include "power/dimdisplayaction.h"
+#include "power/displaypolicy.h"
 #include "support/wait.h"
 
 using namespace cutefish::base;
@@ -57,7 +57,7 @@ private:
     Log m_log;
 };
 
-// The screen saver, logind and the compositor's display service. The action
+// The screen saver, logind and the compositor's display service. The policy
 // blocks on Lock, so they answer from a thread of their own, on a connection
 // of their own. logind is on the same bus, which stands in for the system bus.
 class Services
@@ -281,14 +281,14 @@ protected:
     EventLoop loop;
     Services services;
 
-    std::unique_ptr<DimDisplayAction> start()
+    std::unique_ptr<DisplayPolicy> start()
     {
-        // No idle manager: the tests deliver the idle timeouts.
+        // No idle notifier: the tests report idleness themselves.
         dbus::Connection *bus = dbus::Connection::session();
-        auto action = std::make_unique<DimDisplayAction>(nullptr, nullptr, bus, bus, displayService);
-        // Lets the action's display client load the compositor's state first.
+        auto policy = std::make_unique<DisplayPolicy>(nullptr, nullptr, bus, bus, displayService);
+        // Lets the policy's display client load the compositor's state first.
         testsupport::wait(loop, 100ms);
-        return action;
+        return policy;
     }
 
     void setLocked(bool locked)
@@ -310,12 +310,12 @@ protected:
 
 TEST_F(PowerPolicyTest, SingleDisplayLidLocksAndSuspends)
 {
-    auto action = start();
-    action->setLidPresent(true);
+    auto policy = start();
+    policy->setLidPresent(true);
 
     EXPECT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
 
-    action->handleLidClosed();
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().suspends == 1; }));
     EXPECT_EQ(log().interactive, std::vector<bool> {false});
     EXPECT_EQ(log().docked, std::vector<bool> {true});
@@ -323,7 +323,7 @@ TEST_F(PowerPolicyTest, SingleDisplayLidLocksAndSuspends)
     EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
     EXPECT_TRUE(until([&] { return !services.holdsLidInhibitor(); }));
 
-    action->handleLidOpened();
+    policy->handleLidOpened();
     EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0}; }));
     EXPECT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
 }
@@ -333,10 +333,10 @@ TEST_F(PowerPolicyTest, FailedLockStillSuspends)
     services.run([&] {
         services.lockFails = true;
     });
-    auto action = start();
-    action->setLidPresent(true);
+    auto policy = start();
+    policy->setLidPresent(true);
 
-    action->handleLidClosed();
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().suspends == 1; }));
     EXPECT_EQ(log().locks, 1);
     EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
@@ -347,17 +347,17 @@ TEST_F(PowerPolicyTest, DockedLidKeepsTheSessionAwake)
     services.run([&] {
         services.external = true;
     });
-    auto action = start();
-    action->setLidPresent(true);
+    auto policy = start();
+    policy->setLidPresent(true);
 
-    action->handleLidClosed();
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
     testsupport::wait(loop, 200ms);
     EXPECT_EQ(log().locks, 0);
     EXPECT_EQ(log().suspends, 0);
     EXPECT_TRUE(log().power.empty());
 
-    action->handleLidOpened();
+    policy->handleLidOpened();
     ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true, false}; }));
     EXPECT_EQ(log().suspends, 0);
     EXPECT_TRUE(log().power.empty());
@@ -368,9 +368,9 @@ TEST_F(PowerPolicyTest, LosingTheExternalDisplaySuspends)
     services.run([&] {
         services.external = true;
     });
-    auto action = start();
-    action->setLidPresent(true);
-    action->handleLidClosed();
+    auto policy = start();
+    policy->setLidPresent(true);
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
     testsupport::wait(loop, 100ms);
 
@@ -384,7 +384,7 @@ TEST_F(PowerPolicyTest, LosingTheExternalDisplaySuspends)
     EXPECT_EQ(log().locks, 0);
     EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
 
-    action->handleLidOpened();
+    policy->handleLidOpened();
     EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0}; }));
 }
 
@@ -393,9 +393,9 @@ TEST_F(PowerPolicyTest, KeepingAnotherExternalDisplayStaysDocked)
     services.run([&] {
         services.external = true;
     });
-    auto action = start();
-    action->setLidPresent(true);
-    action->handleLidClosed();
+    auto policy = start();
+    policy->setLidPresent(true);
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
     testsupport::wait(loop, 100ms);
 
@@ -411,10 +411,10 @@ TEST_F(PowerPolicyTest, ADisplayChangeInProgressIsWaitedOut)
         services.external = true;
         services.busyAnswers = 2;
     });
-    auto action = start();
-    action->setLidPresent(true);
+    auto policy = start();
+    policy->setLidPresent(true);
 
-    action->handleLidClosed();
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true, true, true}; }, 3s));
     testsupport::wait(loop, 200ms);
     EXPECT_EQ(log().suspends, 0);
@@ -427,40 +427,40 @@ TEST_F(PowerPolicyTest, ADisplayChangeThatNeverSettlesStillSuspends)
         services.external = true;
         services.busyAnswers = 1000;
     });
-    auto action = start();
-    action->setLidPresent(true);
+    auto policy = start();
+    policy->setLidPresent(true);
 
-    action->handleLidClosed();
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().suspends == 1; }, 10s));
     EXPECT_EQ(log().docked.size(), 11u);
 }
 
 TEST_F(PowerPolicyTest, ALockedScreenGoesDarkSoonAndSleepsEvenWithNever)
 {
-    auto action = start();
-    action->setPolicy(-1, 1);
+    auto policy = start();
+    policy->setPolicy(-1, 1);
     setLocked(true);
 
-    action->onIdleTimeout(30000);
+    policy->idleFor(30);
     EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
     EXPECT_TRUE(until([&] { return log().suspends == 1; }));
 }
 
 TEST_F(PowerPolicyTest, AnUnlockedScreenKeepsTheUsersTimeout)
 {
-    auto action = start();
-    action->setPolicy(1200, 1);
+    auto policy = start();
+    policy->setPolicy(1200, 1);
 
-    action->onIdleTimeout(30000);
+    policy->idleFor(30);
     testsupport::wait(loop, 200ms);
     EXPECT_TRUE(log().power.empty());
 }
 
 TEST_F(PowerPolicyTest, LockingAfterTheUserLeftGoesDarkAtOnce)
 {
-    auto action = start();
-    action->setPolicy(1200, 900);
-    action->onIdleTimeout(30000);
+    auto policy = start();
+    policy->setPolicy(1200, 900);
+    policy->idleFor(30);
     testsupport::wait(loop, 100ms);
     EXPECT_TRUE(log().power.empty());
 
@@ -470,15 +470,15 @@ TEST_F(PowerPolicyTest, LockingAfterTheUserLeftGoesDarkAtOnce)
 
 TEST_F(PowerPolicyTest, WakingTheLockScreenLightsItAgain)
 {
-    auto action = start();
-    action->setPolicy(1200, 900);
+    auto policy = start();
+    policy->setPolicy(1200, 900);
     setLocked(true);
-    action->onIdleTimeout(30000);
+    policy->idleFor(30);
     ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
 
-    action->onWakeupFromIdle();
+    policy->userReturned();
     ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0}; }));
-    action->onIdleTimeout(30000);
+    policy->idleFor(30);
     EXPECT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 0, 1}; }));
 }
 
@@ -487,19 +487,19 @@ TEST_F(PowerPolicyTest, WakingWhileDockedLetsTheDisplayGoDarkAgain)
     services.run([&] {
         services.external = true;
     });
-    auto action = start();
-    action->setLidPresent(true);
-    action->handleLidClosed();
+    auto policy = start();
+    policy->setLidPresent(true);
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
     testsupport::wait(loop, 100ms);
 
-    action->setPolicy(1200, 900);
-    action->onIdleTimeout(1200000);
+    policy->setPolicy(1200, 900);
+    policy->idleFor(1200);
     ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
 
-    action->onWakeupFromIdle();
+    policy->userReturned();
     testsupport::wait(loop, 100ms);
-    action->onIdleTimeout(1200000);
+    policy->idleFor(1200);
     ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1, 1}; }));
     // Powering every display on would light the closed panel.
     const std::vector<uint32_t> power = log().power;
@@ -508,11 +508,11 @@ TEST_F(PowerPolicyTest, WakingWhileDockedLetsTheDisplayGoDarkAgain)
 
 TEST_F(PowerPolicyTest, PreventingSleepKeepsTheSystemAwake)
 {
-    auto action = start();
-    action->setPolicy(-1, 0);
+    auto policy = start();
+    policy->setPolicy(-1, 0);
     setLocked(true);
 
-    action->onIdleTimeout(30000);
+    policy->idleFor(30);
     ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
     testsupport::wait(loop, 1500ms);
     EXPECT_EQ(log().suspends, 0);
@@ -523,10 +523,10 @@ TEST_F(PowerPolicyTest, AnInhibitedSleepWaitsWithoutAPrompt)
     services.run([&] {
         services.inhibited = true;
     });
-    auto action = start();
-    action->setPolicy(60, 1);
+    auto policy = start();
+    policy->setPolicy(60, 1);
 
-    action->onIdleTimeout(60000);
+    policy->idleFor(60);
     ASSERT_TRUE(until([&] { return log().suspends == 1; }));
     EXPECT_EQ(log().interactive, std::vector<bool> {false});
     testsupport::wait(loop, 1500ms);
@@ -542,12 +542,12 @@ TEST_F(PowerPolicyTest, AnInhibitedClosedLidIsLeftToLogind)
     services.run([&] {
         services.inhibited = true;
     });
-    auto action = start();
-    action->setLidPresent(true);
+    auto policy = start();
+    policy->setLidPresent(true);
     ASSERT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
 
     // logind's own lid handling sleeps through the inhibitor that refused this.
-    action->handleLidClosed();
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().suspends == 1; }));
     EXPECT_TRUE(until([&] { return !services.holdsLidInhibitor(); }));
 
@@ -556,7 +556,7 @@ TEST_F(PowerPolicyTest, AnInhibitedClosedLidIsLeftToLogind)
     testsupport::wait(loop, 200ms);
     EXPECT_FALSE(services.holdsLidInhibitor());
 
-    action->handleLidOpened();
+    policy->handleLidOpened();
     EXPECT_TRUE(until([&] { return services.holdsLidInhibitor(); }));
 }
 
@@ -565,14 +565,14 @@ TEST_F(PowerPolicyTest, DockedLidStillSleepsWhenIdle)
     services.run([&] {
         services.external = true;
     });
-    auto action = start();
-    action->setLidPresent(true);
-    action->handleLidClosed();
+    auto policy = start();
+    policy->setLidPresent(true);
+    policy->handleLidClosed();
     ASSERT_TRUE(until([&] { return log().docked == std::vector<bool> {true}; }));
     testsupport::wait(loop, 100ms);
 
-    action->setPolicy(1200, 1);
-    action->onIdleTimeout(1200000);
+    policy->setPolicy(1200, 1);
+    policy->idleFor(1200);
     ASSERT_TRUE(until([&] { return log().power == std::vector<uint32_t> {1}; }));
     ASSERT_TRUE(until([&] { return log().suspends == 1; }));
     // An external display is in use, so the lid stays Cutefish's.
@@ -581,9 +581,9 @@ TEST_F(PowerPolicyTest, DockedLidStillSleepsWhenIdle)
 
 TEST_F(PowerPolicyTest, AWakeWithoutInputSleepsAgain)
 {
-    auto action = start();
-    action->setPolicy(60, 1);
-    action->onIdleTimeout(60000);
+    auto policy = start();
+    policy->setPolicy(60, 1);
+    policy->idleFor(60);
     ASSERT_TRUE(until([&] { return log().suspends == 1; }));
 
     services.sleepAndWake();
@@ -591,7 +591,7 @@ TEST_F(PowerPolicyTest, AWakeWithoutInputSleepsAgain)
 
     services.sleepAndWake();
     testsupport::wait(loop, 200ms);
-    action->onWakeupFromIdle();
+    policy->userReturned();
     testsupport::wait(loop, 1500ms);
     EXPECT_EQ(log().suspends, 2);
 }

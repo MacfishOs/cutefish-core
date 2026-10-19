@@ -11,7 +11,6 @@ set(SERVICE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../cutefish-services)
 add_executable(battery_warning_test battery_warning_test.cpp
     ${SERVICE_DIR}/battery/battery.cpp
     ${SERVICE_DIR}/battery/batterywarning.cpp
-    ${SERVICE_DIR}/battery/upowerdevice.cpp
     ${SERVICE_DIR}/notification.cpp)
 target_include_directories(battery_warning_test PRIVATE ${SERVICE_DIR} ${SERVICE_DIR}/battery
     ${CMAKE_CURRENT_SOURCE_DIR}/..)

@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Reion Wong <reionwong@gmail.com>
-// SPDX-FileCopyrightText: 2010 Dario Freddi <drf@kde.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "dimdisplayaction.h"
+#include "displaypolicy.h"
 #include "brightness/brightnessmanager.h"
+#include "idle/waylandidle.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <utility>
 
@@ -21,13 +22,14 @@ static constexpr auto s_logindService = "org.freedesktop.login1";
 static constexpr auto s_logindPath = "/org/freedesktop/login1";
 static constexpr auto s_logindInterface = "org.freedesktop.login1.Manager";
 
-// Without native display power the screen dims at these steps before it goes off.
-static int halfDimTimeout(int timeout)
+// Without native display power the panel fades to a half, then to an eighth of
+// its brightness, before it goes dark at the full timeout.
+static int firstFadeAt(int timeout)
 {
     return timeout / 2;
 }
 
-static int finalDimTimeout(int timeout)
+static int secondFadeAt(int timeout)
 {
     return timeout * 3 / 4;
 }
@@ -42,15 +44,29 @@ static constexpr int s_dockedLidRetries = 10;
 using cutefish::display::DisplayClient;
 using cutefish::display::ErrorCode;
 
-DimDisplayAction::DimDisplayAction(IdleManager *idle, BrightnessManager *brightness,
-                                   dbus::Connection *session, dbus::Connection *system,
-                                   const std::string &displayService)
-    : Action(idle)
+DisplayPolicy::DisplayPolicy(WaylandIdle *idle, BrightnessManager *brightness,
+                             dbus::Connection *session, dbus::Connection *system,
+                             const std::string &displayService)
+    : m_idle(idle)
     , m_brightness(brightness)
     , m_screenSaver(session, s_screenSaverService, s_screenSaverPath, s_screenSaverInterface)
     , m_logind(system, s_logindService, s_logindPath, s_logindInterface)
     , m_display(displayService)
 {
+    if (m_idle) {
+        m_idleSubscriptions.push_back(m_idle->timeoutReached.connect([this](int identifier, int milliseconds) {
+            if (!m_idleIds.contains(identifier))
+                return;
+
+            m_away = true;
+            idleFor(milliseconds / 1000);
+        }));
+        // Every notification that fired reports the same return.
+        m_idleSubscriptions.push_back(m_idle->resumed.connect([this] {
+            if (std::exchange(m_away, false))
+                userReturned();
+        }));
+    }
     if (session) {
         m_matches.push_back(m_screenSaver.onSignal("ActiveChanged", [this](const dbus::Message &message) {
             if (const auto active = message.argument<bool>())
@@ -94,9 +110,29 @@ DimDisplayAction::DimDisplayAction(IdleManager *idle, BrightnessManager *brightn
     });
 }
 
-DimDisplayAction::~DimDisplayAction() = default;
+DisplayPolicy::~DisplayPolicy()
+{
+    for (int identifier : std::exchange(m_idleIds, {}))
+        m_idle->removeTimeout(identifier);
+}
 
-void DimDisplayAction::setLidPresent(bool present)
+int DisplayPolicy::watchIdle(int seconds)
+{
+    if (!m_idle || seconds < 0 || seconds > INT_MAX / 1000)
+        return -1;
+
+    const int identifier = m_idle->addTimeout(seconds * 1000);
+    m_idleIds.insert(identifier);
+    return identifier;
+}
+
+void DisplayPolicy::unwatchIdle(int identifier)
+{
+    if (m_idleIds.erase(identifier))
+        m_idle->removeTimeout(identifier);
+}
+
+void DisplayPolicy::setLidPresent(bool present)
 {
     if (m_lidPresent == present)
         return;
@@ -105,44 +141,43 @@ void DimDisplayAction::setLidPresent(bool present)
     updateLidSwitchInhibitor();
 }
 
-bool DimDisplayAction::hasNativeDisplayPower() const
+bool DisplayPolicy::hasNativeDisplayPower() const
 {
     return m_display.available();
 }
 
-bool DimDisplayAction::setDisplayPower(bool on)
+bool DisplayPolicy::setDisplayPower(bool on)
 {
     return m_display.setDisplayPower(on);
 }
 
-int DimDisplayAction::screenBrightness() const
+int DisplayPolicy::screenBrightness() const
 {
     return m_brightness ? m_brightness->brightness() : -1;
 }
 
-void DimDisplayAction::setScreenBrightness(int value)
+void DisplayPolicy::setScreenBrightness(int value)
 {
     if (m_brightness)
         m_brightness->setValue(value);
 }
 
-void DimDisplayAction::onWakeupFromIdle()
+void DisplayPolicy::userReturned()
 {
     m_lockedIdle = false;
-    if (!m_dimmed) {
+    if (!m_dimmed)
         return;
-    }
 
     m_dimmed = false;
     m_suspendRequested = false;
     if (idleSleepApplies())
         stopSuspendCountdown();
 
-    // Wait one event loop turn for the screen to wake up before restoring it.
+    // The compositor wakes the outputs on the same input; restore after it.
     m_wakeTimer.start();
 }
 
-void DimDisplayAction::onPrepareForSleep(bool sleeping)
+void DisplayPolicy::onPrepareForSleep(bool sleeping)
 {
     if (sleeping) {
         // Whoever asked for it, this sleep is the one that was due.
@@ -160,46 +195,40 @@ void DimDisplayAction::onPrepareForSleep(bool sleeping)
         startSuspendCountdown();
 }
 
-void DimDisplayAction::onIdleTimeout(int msec)
+void DisplayPolicy::idleFor(int seconds)
 {
-    int sec = msec / 1000;
-
-    if (sec == s_lockedDisplayOffTimeout) {
+    if (seconds == s_lockedDisplayOffTimeout) {
         m_lockedIdle = true;
         if (m_locked)
             turnDisplayOffWhenIdle();
     }
 
-    // Policy changes can invalidate an already queued notification.
-    if (m_dimOnIdleTime < 0)
+    // A notification queued before a policy change can still arrive.
+    if (m_timeout < 0)
         return;
 
-    if (sec == m_dimOnIdleTime) {
+    if (seconds == m_timeout) {
         turnDisplayOffWhenIdle();
-        return;
-    }
-
-    if (hasNativeDisplayPower())
-        return;
-
-    if (sec == finalDimTimeout(m_dimOnIdleTime)) {
-        if (m_oldScreenBrightness > 0) {
-            const int newBrightness = int(std::lround(m_oldScreenBrightness / 8.0));
-            setScreenBrightness(newBrightness);
-        }
-        m_dimmed = true;
-    } else if (sec == halfDimTimeout(m_dimOnIdleTime)) {
-        m_oldScreenBrightness = screenBrightness();
-
-        if (m_oldScreenBrightness > 0) {
-            const int newBrightness = int(std::lround(m_oldScreenBrightness / 2.0));
-            setScreenBrightness(newBrightness);
-        }
-        m_dimmed = true;
+    } else if (!hasNativeDisplayPower()) {
+        if (seconds == secondFadeAt(m_timeout))
+            fade(8);
+        else if (seconds == firstFadeAt(m_timeout))
+            fade(2);
     }
 }
 
-void DimDisplayAction::turnDisplayOffWhenIdle()
+void DisplayPolicy::fade(int divisor)
+{
+    if (m_savedBrightness < 0)
+        m_savedBrightness = screenBrightness();
+
+    if (m_savedBrightness > 0)
+        setScreenBrightness(int(std::lround(double(m_savedBrightness) / divisor)));
+
+    m_dimmed = true;
+}
+
+void DisplayPolicy::turnDisplayOffWhenIdle()
 {
     if (m_displayOff)
         return;
@@ -210,35 +239,35 @@ void DimDisplayAction::turnDisplayOffWhenIdle()
     trySuspend();
 }
 
-void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
+void DisplayPolicy::setPolicy(int timeout, int suspendDelay)
 {
     for (int identifier : std::exchange(m_policyIdleTimeouts, {}))
-        unregisterIdleTimeout(identifier);
+        unwatchIdle(identifier);
 
-    m_dimOnIdleTime = timeout;
+    m_timeout = timeout;
     m_suspendDelay = std::max(0, suspendDelay);
     m_suspendTimer.stop();
     if (idleSleepApplies())
         m_suspendDue = false;
 
-    // Registered even for "never": the lock screen still goes dark.
-    // Recreating restarts its countdown, but a fired one must stay to report the wake.
+    // Watched even for "never": the lock screen still goes dark. Watching anew
+    // restarts its countdown, but only a fired notification reports the return.
     if (m_lockedIdleTimeout >= 0 && !m_lockedIdle) {
-        unregisterIdleTimeout(m_lockedIdleTimeout);
+        unwatchIdle(m_lockedIdleTimeout);
         m_lockedIdleTimeout = -1;
     }
     if (m_lockedIdleTimeout < 0)
-        m_lockedIdleTimeout = registerIdleTimeout(s_lockedDisplayOffTimeout);
+        m_lockedIdleTimeout = watchIdle(s_lockedDisplayOffTimeout);
 
     if (timeout >= 0) {
-        const int halfTimeout = halfDimTimeout(timeout);
-        const int finalTimeout = finalDimTimeout(timeout);
+        const int firstFade = firstFadeAt(timeout);
+        const int secondFade = secondFadeAt(timeout);
 
-        if (halfTimeout > 0)
-            m_policyIdleTimeouts.push_back(registerIdleTimeout(halfTimeout));
-        if (finalTimeout > halfTimeout && finalTimeout < timeout)
-            m_policyIdleTimeouts.push_back(registerIdleTimeout(finalTimeout));
-        m_policyIdleTimeouts.push_back(registerIdleTimeout(timeout));
+        if (firstFade > 0)
+            m_policyIdleTimeouts.push_back(watchIdle(firstFade));
+        if (secondFade > firstFade && secondFade < timeout)
+            m_policyIdleTimeouts.push_back(watchIdle(secondFade));
+        m_policyIdleTimeouts.push_back(watchIdle(timeout));
     }
 
     if (m_displayOff && idleSleepApplies() && m_displayOffTimer.isValid() && m_suspendDelay > 0) {
@@ -252,7 +281,7 @@ void DimDisplayAction::setPolicy(int timeout, int suspendDelay)
     }
 }
 
-void DimDisplayAction::onScreenSaverActiveChanged(bool active)
+void DisplayPolicy::onScreenSaverActiveChanged(bool active)
 {
     m_locked = active;
     if (active) {
@@ -268,8 +297,8 @@ void DimDisplayAction::onScreenSaverActiveChanged(bool active)
         restoreDisplay();
 }
 
-void DimDisplayAction::onLogindPropertiesChanged(const dbus::VariantMap &changedProperties,
-                                                 const std::vector<std::string> &invalidatedProperties)
+void DisplayPolicy::onLogindPropertiesChanged(const dbus::VariantMap &changedProperties,
+                                              const std::vector<std::string> &invalidatedProperties)
 {
     static const char *const names[] = {"BlockInhibited", "BlockWeakInhibited", "DelayInhibited"};
     const bool inhibitorsChanged = std::any_of(std::begin(names), std::end(names), [&](const char *name) {
@@ -283,7 +312,7 @@ void DimDisplayAction::onLogindPropertiesChanged(const dbus::VariantMap &changed
     trySuspend();
 }
 
-void DimDisplayAction::onSuspendTimerTimeout()
+void DisplayPolicy::onSuspendTimerTimeout()
 {
     if (!m_displayOff)
         return;
@@ -292,7 +321,7 @@ void DimDisplayAction::onSuspendTimerTimeout()
     trySuspend();
 }
 
-bool DimDisplayAction::lockSession()
+bool DisplayPolicy::lockSession()
 {
     if (!m_screenSaver.isValid())
         return false;
@@ -307,7 +336,7 @@ bool DimDisplayAction::lockSession()
     return true;
 }
 
-void DimDisplayAction::trySuspend()
+void DisplayPolicy::trySuspend()
 {
     if (!m_suspendDue || !m_displayOff || m_suspendRequested)
         return;
@@ -333,7 +362,7 @@ void DimDisplayAction::trySuspend()
             false);
 }
 
-void DimDisplayAction::startSuspendCountdown()
+void DisplayPolicy::startSuspendCountdown()
 {
     m_suspendTimer.stop();
     m_suspendDue = false;
@@ -346,47 +375,43 @@ void DimDisplayAction::startSuspendCountdown()
         m_suspendTimer.start(std::chrono::seconds(m_suspendDelay));
 }
 
-void DimDisplayAction::stopSuspendCountdown()
+void DisplayPolicy::stopSuspendCountdown()
 {
     m_suspendTimer.stop();
     m_suspendDue = false;
     m_displayOffTimer.invalidate();
 }
 
-void DimDisplayAction::turnDisplayOff()
+void DisplayPolicy::turnDisplayOff()
 {
     if (m_displayOff)
         return;
 
     m_displayPoweredOff = setDisplayPower(false);
-
     if (!m_displayPoweredOff) {
-        if (m_oldScreenBrightness < 0)
-            m_oldScreenBrightness = screenBrightness();
-
-        if (m_oldScreenBrightness > 0)
+        if (m_savedBrightness < 0)
+            m_savedBrightness = screenBrightness();
+        if (m_savedBrightness > 0)
             setScreenBrightness(0);
     }
 
     m_displayOff = true;
 }
 
-void DimDisplayAction::restoreDisplay()
+void DisplayPolicy::restoreDisplay()
 {
-    if (m_displayPoweredOff) {
+    if (std::exchange(m_displayPoweredOff, false))
         setDisplayPower(true);
-        m_displayPoweredOff = false;
-    }
 
-    if (m_oldScreenBrightness > 0)
-        setScreenBrightness(m_oldScreenBrightness);
+    if (m_savedBrightness > 0)
+        setScreenBrightness(m_savedBrightness);
 
-    m_oldScreenBrightness = -1;
+    m_savedBrightness = -1;
     m_displayOff = false;
     m_displayOffTimer.invalidate();
 }
 
-void DimDisplayAction::handleLidClosed()
+void DisplayPolicy::handleLidClosed()
 {
     m_lidClosed = true;
 
@@ -398,7 +423,7 @@ void DimDisplayAction::handleLidClosed()
     requestDockedLid(true);
 }
 
-void DimDisplayAction::sleepWithLidClosed(bool waitForLock)
+void DisplayPolicy::sleepWithLidClosed(bool waitForLock)
 {
     if (!m_displayOff) {
         // Suspend even without the lock: the compositor locks as the displays go
@@ -425,12 +450,12 @@ void DimDisplayAction::sleepWithLidClosed(bool waitForLock)
     }
 }
 
-bool DimDisplayAction::idleSleepApplies() const
+bool DisplayPolicy::idleSleepApplies() const
 {
     return !m_lidClosed || m_dockedLidActive;
 }
 
-void DimDisplayAction::handleLidOpened()
+void DisplayPolicy::handleLidOpened()
 {
     m_lidClosed = false;
     m_lidSleeping = false;
@@ -456,7 +481,7 @@ void DimDisplayAction::handleLidOpened()
     restoreDisplay();
 }
 
-void DimDisplayAction::requestDockedLid(bool closed)
+void DisplayPolicy::requestDockedLid(bool closed)
 {
     m_dockedLidRetryTimer.stop();
     const uint64_t serial = ++m_dockedLidSerial;
@@ -472,7 +497,7 @@ void DimDisplayAction::requestDockedLid(bool closed)
         finishDockedLid(true, false, ErrorCode::Unavailable);
 }
 
-void DimDisplayAction::finishDockedLid(bool closed, bool succeeded, ErrorCode error)
+void DisplayPolicy::finishDockedLid(bool closed, bool succeeded, ErrorCode error)
 {
     const bool recheck = std::exchange(m_dockedLidRecheck, false);
     m_dockedLidPending = false;
@@ -502,7 +527,7 @@ void DimDisplayAction::finishDockedLid(bool closed, bool succeeded, ErrorCode er
     sleepWithLidClosed(!wasDocked);
 }
 
-void DimDisplayAction::onDisplayStateChanged()
+void DisplayPolicy::onDisplayStateChanged()
 {
     const DisplayClient::State &state = m_display.state();
 
@@ -526,7 +551,7 @@ void DimDisplayAction::onDisplayStateChanged()
         requestDockedLid(true);
 }
 
-void DimDisplayAction::updateLidSwitchInhibitor()
+void DisplayPolicy::updateLidSwitchInhibitor()
 {
     if (!m_lidPresent || m_lidSleeping) {
         m_lidSwitchInhibitor = dbus::UnixFd();

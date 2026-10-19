@@ -5,14 +5,14 @@
 
 #include "appearance/thememanager.h"
 #include "battery/batterywarning.h"
-#include "battery/upowermanager.h"
+#include "battery/powersupply.h"
 #include "brightness/brightnessmanager.h"
 #include "clipboard/clipboard.h"
 #include "crash/crashmanager.h"
 #include "locale/language.h"
 #include "nightlight/nightlight.h"
 #include "permissions/permissionmanager.h"
-#include "power/idlemanager.h"
+#include "idle/waylandidle.h"
 #include "power/powermanager.h"
 #include "proxy/proxyservice.h"
 
@@ -35,18 +35,18 @@ Application::Application()
     , m_system(dbus::Connection::system())
     , m_settings(paths::cutefishConfig("services"))
 {
-    m_idleManager = std::make_unique<IdleManager>();
+    m_idle = std::make_unique<WaylandIdle>();
     m_themeManager = std::make_unique<ThemeManager>(m_settings, m_session, m_system);
     m_brightnessManager = std::make_unique<BrightnessManager>(m_session, m_system);
-    m_upowerManager = std::make_unique<UPowerManager>(m_system, m_session, m_settings);
+    m_powerSupply = std::make_unique<PowerSupply>(m_system, m_session, m_settings);
     m_batteryWarning = std::make_unique<BatteryWarning>(m_system, m_session);
     m_language = std::make_unique<Language>(
             m_settings, m_session,
             Language::Appearance {[this](const std::string &family) { m_themeManager->setSystemFont(family); },
                                   [this] { m_themeManager->updateFontConfig(); }});
     m_clipboard = std::make_unique<Clipboard>();
-    m_powerManager = std::make_unique<PowerManager>(m_upowerManager.get(), m_brightnessManager.get(),
-                                                    m_idleManager.get(), m_settings, m_session, m_system);
+    m_powerManager = std::make_unique<PowerManager>(m_powerSupply.get(), m_brightnessManager.get(),
+                                                    m_idle.get(), m_settings, m_session, m_system);
     m_nightLight = std::make_unique<NightLight>(m_settings);
     m_permissionManager = std::make_unique<PermissionManager>(m_session);
     m_crashManager = std::make_unique<CrashManager>([this] { return m_themeManager->systemFixedFont(); });

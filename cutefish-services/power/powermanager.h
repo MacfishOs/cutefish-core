@@ -10,14 +10,14 @@
 #include "base/signal.h"
 
 class BrightnessManager;
-class DimDisplayAction;
-class IdleManager;
-class UPowerManager;
+class DisplayPolicy;
+class PowerSupply;
+class WaylandIdle;
 
 class PowerManager
 {
 public:
-    PowerManager(UPowerManager *upowerManager, BrightnessManager *brightness, IdleManager *idle,
+    PowerManager(PowerSupply *powerSupply, BrightnessManager *brightness, WaylandIdle *idle,
                  cutefish::base::Settings &settings, cutefish::base::dbus::Connection *session,
                  cutefish::base::dbus::Connection *system);
     ~PowerManager();
@@ -34,8 +34,8 @@ public:
     void setDimDisplayTimeout(int timeout);
 
 private:
-    void onBatteryChanged();
-    void onLidClosedChanged();
+    void onPowerSourceChanged();
+    void onLidChanged();
     void loadSettings();
     void applyPolicy();
     template<typename T>
@@ -43,8 +43,8 @@ private:
 
     cutefish::base::Settings &m_settings;
     cutefish::base::dbus::Connection *m_session;
-    UPowerManager *m_upowerManager;
-    std::unique_ptr<DimDisplayAction> m_dimDisplayAction;
+    PowerSupply *m_powerSupply;
+    std::unique_ptr<DisplayPolicy> m_displayPolicy;
     std::unique_ptr<cutefish::base::dbus::Object> m_object;
     std::vector<cutefish::base::Subscription> m_subscriptions;
 
