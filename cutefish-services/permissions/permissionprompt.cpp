@@ -10,6 +10,7 @@
 #include "base/i18n.h"
 #include "ui/application.h"
 #include "ui/cell_layout.h"
+#include "ui/check_box.h"
 #include "ui/dialog_window.h"
 #include "ui/icon.h"
 #include "ui/keys.h"
@@ -24,7 +25,6 @@ using namespace cutefish::ui;
 namespace dbus = cutefish::base::dbus;
 using cutefish::i18n::format;
 using cutefish::i18n::tr;
-using cutefish::i18n::trNoop;
 
 static constexpr double kWidth = 440;
 static constexpr double kMargin = 20;
@@ -381,8 +381,18 @@ private:
     int m_current = -1;
 };
 
+// A check box that tells how far its box sits inside it.
+class InsetCheckBox final : public CheckBox
+{
+public:
+    using CheckBox::CheckBox;
+    using CheckBox::padding;
+};
+
 // The computer-control kind. The request carries `agent_name`, the agent's own
-// name for itself; the compositor asks, so there is no app id to show.
+// name for itself; the compositor asks, so there is no app id to show. With
+// `rememberable` the user may allow the agent's application from now on, and
+// the answer says so in `remember`.
 class ComputerControlContent final : public PermissionPrompt::Content
 {
 public:
@@ -390,24 +400,12 @@ public:
     {
         m_agentName = stringOf(request, "agent_name");
 
-        m_column = addChild<ColumnLayout>();
-        m_column->setSpacing(8);
-        const std::pair<const char *, const char *> notes[] = {
-                {"input-mouse", trNoop("Moving the pointer or typing pauses it.")},
-                {"process-stop", trNoop("Stop it at any time with the Stop button in the status bar.")},
-        };
-        for (const auto &[icon, text] : notes) {
-            auto *row = m_column->addChild<RowLayout>();
-            row->setSpacing(10);
-            row->setLayoutHints({.fillWidth = true, .margins = {62, 0, 0, 0}});
-            auto *iconView = row->addChild<ThemeIcon>(icon, 16);
-            iconView->setLayoutHints({.preferredWidth = 16, .preferredHeight = 16});
-            auto *label = row->addChild<Label>(tr(text));
-            label->setLayoutHints({.fillWidth = true});
-            label->setWrap(true);
-            label->setFontSize(12);
-            m_notes.emplace_back(label, text);
+        const auto rememberable = request.find("rememberable");
+        if (rememberable == request.end() || !rememberable->second.value<bool>()) {
+            setVisible(false);
+            return;
         }
+        m_remember = addChild<InsetCheckBox>(tr("Always allow this app"));
     }
 
     std::string title() const override
@@ -419,29 +417,43 @@ public:
 
     std::string description() const override
     {
-        return tr("It will see your screen and use the pointer and keyboard as you would, until you stop it. It cannot answer system dialogs like this one.");
+        return tr("It will see your screen and use the pointer and keyboard until you stop it with the Stop button in the status bar. Using the pointer or keyboard yourself pauses it, and it cannot answer system dialogs like this one.");
     }
 
     std::string accept() const override { return tr("Allow"); }
     bool ready() const override { return true; }
-    dbus::VariantMap details() const override { return {}; }
+
+    dbus::VariantMap details() const override
+    {
+        if (!m_remember)
+            return {};
+        return {{"remember", dbus::Variant(m_remember->isChecked())}};
+    }
 
     void retranslate() override
     {
-        for (const auto &[label, text] : m_notes)
-            label->setText(tr(text));
+        if (m_remember)
+            m_remember->setText(tr("Always allow this app"));
     }
 
-    SizeF sizeHint() const override { return m_column->sizeHint(); }
-    double heightForWidth(double width) const override { return m_column->heightForWidth(width); }
+    SizeF sizeHint() const override { return m_remember ? m_remember->sizeHint() : SizeF(); }
+    double heightForWidth(double) const override { return sizeHint().height; }
 
 protected:
-    void layout() override { m_column->setGeometry(localRect()); }
+    // The box lines up with the header's text, past its icon.
+    void layout() override
+    {
+        if (!m_remember)
+            return;
+        const double x = kTextInset - m_remember->padding().left;
+        m_remember->setGeometry({x, 0, std::max(0.0, geometry().width - x), geometry().height});
+    }
 
 private:
+    static constexpr double kTextInset = 48 + 14;
+
     std::string m_agentName;
-    ColumnLayout *m_column;
-    std::vector<std::pair<Label *, const char *>> m_notes;
+    InsetCheckBox *m_remember = nullptr;
 };
 
 // The window's view: the layout, and any empty part of it drags the window,
@@ -483,7 +495,7 @@ struct Kind {
 
 const Kind kinds[] = {
         {"screen-recording", "video-display"},
-        {"computer-control", "preferences-desktop-remote-desktop"},
+        {"computer-control", "computer"},
 };
 
 const Kind *findKind(const std::string &name)
@@ -601,13 +613,11 @@ void PermissionPrompt::show()
 
     auto *buttons = layout->addChild<RowLayout>();
     buttons->setSpacing(8);
-    buttons->setLayoutHints({.fillWidth = true});
+    buttons->setLayoutHints({.horizontalAlignment = Alignment::End});
     m_cancel = buttons->addChild<DialogButton>(tr("Cancel"));
     m_cancel->onClicked = [this] {
         deny();
     };
-    auto *spacer = buttons->addChild<View>();
-    spacer->setLayoutHints({.fillWidth = true});
     m_accept = buttons->addChild<DialogButton>(m_content->accept(), true);
     m_accept->setEnabled(m_content->ready());
     m_accept->onClicked = [this] {

@@ -3,7 +3,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: cutefish-core\n"
 "Report-Msgid-Bugs-To: https://github.com/cutefishos\n"
-"POT-Creation-Date: 2026-10-20 01:27+0800\n"
+"POT-Creation-Date: 2026-10-20 09:33+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: \n"
 "Language-Team: \n"
@@ -193,11 +193,7 @@ msgid "Displays"
 msgstr ""
 
 #: cutefish-services/permissions/permissionprompt.cpp
-msgid "Moving the pointer or typing pauses it."
-msgstr ""
-
-#: cutefish-services/permissions/permissionprompt.cpp
-msgid "Stop it at any time with the Stop button in the status bar."
+msgid "Always allow this app"
 msgstr ""
 
 #: cutefish-services/permissions/permissionprompt.cpp
@@ -210,7 +206,7 @@ msgid "Let “{name}” control this computer?"
 msgstr ""
 
 #: cutefish-services/permissions/permissionprompt.cpp
-msgid "It will see your screen and use the pointer and keyboard as you would, until you stop it. It cannot answer system dialogs like this one."
+msgid "It will see your screen and use the pointer and keyboard until you stop it with the Stop button in the status bar. Using the pointer or keyboard yourself pauses it, and it cannot answer system dialogs like this one."
 msgstr ""
 
 #: cutefish-services/permissions/permissionprompt.cpp
