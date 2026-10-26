@@ -5,6 +5,7 @@
 
 #include "base/command_line.h"
 #include "base/i18n.h"
+#include "base/locale.h"
 #include "base/paths.h"
 #include "base/process.h"
 #include "base/session_language.h"
@@ -20,7 +21,6 @@
 
 // System
 #include <cerrno>
-#include <clocale>
 #include <csignal>
 #include <cstdlib>
 #include <sys/epoll.h>
@@ -110,7 +110,7 @@ Application::Application(int argc, char **argv, base::EventLoop &loop)
     unsetenv("LC_ALL");
     importSystemdEnvironment();
     // The language the session runs in is known only now.
-    std::setlocale(LC_ALL, "");
+    base::Locale::setProcessLocale();
     cutefish::i18n::setDomain("cutefish-core");
 
     m_startTimer.setSingleShot(true);

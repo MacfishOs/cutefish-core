@@ -176,7 +176,8 @@ void CrashDialog::buildContent()
     icon->setLayoutHints({.preferredWidth = 48, .preferredHeight = 48, .verticalAlignment = Alignment::Start});
     auto *texts = header->addChild<ColumnLayout>();
     texts->setSpacing(4);
-    texts->setLayoutHints({.fillWidth = true});
+    // At the top whether the text is shorter than the icon or not.
+    texts->setLayoutHints({.fillWidth = true, .verticalAlignment = Alignment::Start});
     auto *titleLabel = texts->addChild<Label>(title);
     titleLabel->setLayoutHints({.fillWidth = true});
     titleLabel->setWrap(true);
@@ -202,7 +203,7 @@ void CrashDialog::buildContent()
 
     auto *buttons = content->addChild<RowLayout>();
     buttons->setSpacing(8);
-    buttons->setLayoutHints({.fillWidth = true, .margins = {0, 8, 0, 0}});
+    buttons->setLayoutHints({.fillWidth = true});
     m_detailsButton = buttons->addChild<DialogButton>(m_detailsShown ? tr("Hide Details") : tr("Show Details"));
     m_detailsButton->onClicked = [this] {
         setDetailsShown(!m_detailsShown);
