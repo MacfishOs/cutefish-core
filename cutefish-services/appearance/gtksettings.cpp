@@ -68,7 +68,7 @@ void writeGtkSettings(const GtkSettings &gtk)
             {"enable-animations", false},
     });
     gsettings::writeGroup("org/gnome/desktop/wm/preferences", {
-            {"button-layout", std::string("menu:minimize,maximize,close")},
+            {"button-layout", std::string("close,minimize,maximize:")},
     });
 }
 
