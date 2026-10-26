@@ -60,6 +60,8 @@ uint32_t AppRuntime::launchApplication(const std::string &appId, const std::vect
     auto entry = registry.byId(appId);
     if (!entry && appId.find('/') != std::string::npos) {
         entry = registry.byPath(appId);
+        if (!entry)
+            entry = registry.readBundle(appId);
 
         if (!entry) {
             // The file name up to its last dot.
