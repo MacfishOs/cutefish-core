@@ -11,7 +11,6 @@ headerbar button {
   margin-bottom: 6px;
 }
 
-/* User CSS outranks theme specificity, so undo the margin on nested spin buttons */
 headerbar spinbutton button {
   margin-top: 0;
   margin-bottom: 0;
@@ -35,21 +34,99 @@ headerbar switch {
   margin-bottom: 7px;
 }
 
-/* A 26px circle, 7px from the next one and centred 20px from the top and right edges */
-headerbar button.titlebutton:not(.appmenu),
-.titlebar button.titlebutton:not(.appmenu) {
-  padding: 4px;
-  margin: 7px 1px 7px 0;
-  transition: none;
+/* 14px macOS Traffic Light Buttons for GTK3 */
+headerbar button.titlebutton,
+headerbar.titlebar button.titlebutton,
+window.csd headerbar button.titlebutton,
+windowcontrols button,
+headerbar windowcontrols button,
+windowcontrols > button {
+    padding: 0 !important;
+    margin: 0 4px !important;
+    min-width: 14px !important;
+    min-height: 14px !important;
+    max-width: 14px !important;
+    max-height: 14px !important;
+    width: 14px !important;
+    height: 14px !important;
+    border-radius: 50% !important;
+    border: none !important;
+    -gtk-icon-source: none !important;
+    color: transparent !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+    background-size: 14px 14px !important;
+    box-shadow: none !important;
 }
 
-headerbar.default-decoration,
-.default-decoration.titlebar:not(headerbar) {
-  padding: 0 6px;
+headerbar button.titlebutton.close,
+headerbar.titlebar button.titlebutton.close,
+window.csd headerbar button.titlebutton.close,
+button.close.titlebutton,
+button.titlebutton.close,
+windowcontrols button.close,
+headerbar windowcontrols button.close {
+    background-color: #FF5F56 !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'><circle cx='7' cy='7' r='6' fill='%23FF5F56' stroke='%23E0443E' stroke-width='1'/></svg>") !important;
 }
 
-headerbar.default-decoration button.titlebutton,
-.default-decoration.titlebar:not(headerbar) button.titlebutton {
-  min-height: 0;
-  min-width: 0;
+headerbar button.titlebutton.close:hover,
+headerbar.titlebar button.titlebutton.close:hover,
+window.csd headerbar button.titlebutton.close:hover,
+button.close.titlebutton:hover,
+button.titlebutton.close:hover,
+windowcontrols button.close:hover {
+    background-color: #FF5F56 !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'><circle cx='7' cy='7' r='6' fill='%23FF5F56' stroke='%23E0443E' stroke-width='1'/><path d='M4.5 4.5 L9.5 9.5 M9.5 4.5 L4.5 9.5' stroke='%234D0000' stroke-width='1.2' stroke-linecap='round' opacity='0.85'/></svg>") !important;
+}
+
+headerbar button.titlebutton.minimize,
+headerbar.titlebar button.titlebutton.minimize,
+window.csd headerbar button.titlebutton.minimize,
+button.minimize.titlebutton,
+button.titlebutton.minimize,
+windowcontrols button.minimize,
+headerbar windowcontrols button.minimize {
+    background-color: #FFBD2E !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'><circle cx='7' cy='7' r='6' fill='%23FFBD2E' stroke='%23DEA123' stroke-width='1'/></svg>") !important;
+}
+
+headerbar button.titlebutton.minimize:hover,
+headerbar.titlebar button.titlebutton.minimize:hover,
+window.csd headerbar button.titlebutton.minimize:hover,
+button.minimize.titlebutton:hover,
+button.titlebutton.minimize:hover,
+windowcontrols button.minimize:hover {
+    background-color: #FFBD2E !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'><circle cx='7' cy='7' r='6' fill='%23FFBD2E' stroke='%23DEA123' stroke-width='1'/><line x1='3.75' y1='7' x2='10.25' y2='7' stroke='%23663B00' stroke-width='1.3' stroke-linecap='round' opacity='0.85'/></svg>") !important;
+}
+
+headerbar button.titlebutton.maximize,
+headerbar.titlebar button.titlebutton.maximize,
+window.csd headerbar button.titlebutton.maximize,
+button.maximize.titlebutton,
+button.titlebutton.maximize,
+windowcontrols button.maximize,
+headerbar windowcontrols button.maximize {
+    background-color: #27C93F !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'><circle cx='7' cy='7' r='6' fill='%2327C93F' stroke='%231AAB29' stroke-width='1'/></svg>") !important;
+}
+
+headerbar button.titlebutton.maximize:hover,
+headerbar.titlebar button.titlebutton.maximize:hover,
+window.csd headerbar button.titlebutton.maximize:hover,
+button.maximize.titlebutton:hover,
+button.titlebutton.maximize:hover,
+windowcontrols button.maximize:hover {
+    background-color: #27C93F !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'><circle cx='7' cy='7' r='6' fill='%2327C93F' stroke='%231AAB29' stroke-width='1'/><path d='M7 3.75 L7 10.25 M3.75 7 L10.25 7' stroke='%230B4D16' stroke-width='1.2' stroke-linecap='round' opacity='0.85'/></svg>") !important;
+}
+
+headerbar button.titlebutton image,
+headerbar button.titlebutton label,
+button.titlebutton image,
+button.titlebutton label,
+windowcontrols button image,
+windowcontrols button label {
+    opacity: 0 !important;
 }
